@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# SQLite / local DB
+*.db
+*.sqlite3
+
+# Environment secrets — never commit these
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+web/node_modules/
+web/dist/
+
+# Vite build cache
+.vite/
+web/.vite/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+
+# Claude Code internal
+.claude/projects/
+
+# Vercel
+.vercel/
+web/.env.local

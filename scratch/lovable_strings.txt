@@ -1,0 +1,358 @@
+Application received.
+See creator results ↓
+User Testimonial Clip
+access private method
+We bring the product.
+Absolute route path "
+Weekend Challenge CTA
+Product Launch Teaser
+Quick App Walkthrough
+text-sm font-semibold
+This is not an agency.
+write to private field
+The Automated Pipeline
+bg-primary shadow-glow
+rgba(200,200,200, 0.5)
+Behind-the-Scenes Reel
+flex items-start gap-6
+User Results Spotlight
+Portfolio on Autopilot
+Course platform mockup
+Built-In Growth Engine
+Advanced Tips & Tricks
+Live product in 30 days
+flex items-center gap-1
+AI that runs businesses
+read from private field
+flex items-center gap-4
+We don't just build it.
+Sentiment + transcripts
+flex items-center gap-2
+flex items-center gap-3
+for the creator economy.
+Live Q&A: Your Questions
+This Week's Content Plan
+Our team has worked with
+Turn your followers into
+grid md:grid-cols-3 gap-6
+grid md:grid-cols-2 gap-5
+Product idea + pitch deck
+Only High-Signal Creators
+Your audience is waiting.
+grid md:grid-cols-2 gap-6
+One-person businesses are
+w-8 h-8 text-primary mb-4
+Fully Automated Deal Flow
+w-full h-full object-cover
+bg-red-500/20 text-red-400
+Personalized to Your Niche
+When creators win, we win.
+bg-background min-h-screen
+Automated creator outreach
+Storytime: Why I Built This
+From discovery to outreach.
+Viral Hook + Feature Reveal
+replacing entire companies.
+Creators have the audience.
+An automated venture studio
+From creator to co-founder.
+flex items-center md:flex-1
+22 7 13.5 15.5 8.5 10.5 2 17
+bg-cyan-500/20 text-cyan-400
+bg-pink-500/20 text-pink-400
+The full pipeline, animated.
+Day-in-the-Life Story Series
+Web Apps, Mobile Apps & More
+from-primary/20 to-primary/5
+bg-blue-500/20 text-blue-400
+(prefers-color-scheme: dark)
+Community Poll: Feature Vote
+flex items-center gap-3 mb-4
+Unexpected Application Error!
+Duet a Fan Using Your Product
+e.g. Fitness, Tech, Education
+text-foreground font-semibold
+Trending Sound + Product Plug
+Before vs After Using Product
+60s Tutorial: Getting Started
+from-primary/25 to-primary/10
+Invite Only · 100K+ Followers
+from-primary/30 to-primary/10
+from-primary/35 to-primary/15
+from-primary/40 to-primary/20
+Built from your audience data
+w-5 h-5 text-primary rotate-90
+bg-muted text-muted-foreground
+h-64 md:h-full overflow-hidden
+grid md:grid-cols-3 gap-5 mt-8
+We only make money when you do
+bg-amber-500/20 text-amber-400
+" will be treated as if it were
+border-foreground/5 bg-muted/30
+flex justify-center gap-3 mb-10
+bg-purple-500/20 text-purple-400
+" because the `*` character must
+From idea to revenue in 30 days.
+w-full h-48 md:h-64 object-cover
+w-full h-56 md:h-80 object-cover
+bg-violet-500/20 text-violet-400
+bg-yellow-500/20 text-yellow-400
+bg-orange-500/20 text-orange-400
+How it works with Davie Fogarty.
+bg-indigo-500/20 text-indigo-400
+w-8 h-8 text-primary mx-auto mb-4
+Find 100K+ Creators Automatically
+please change the route path to "
+w-5 h-5 text-primary animate-spin
+all child routes from route path "
+Creators already building with us.
+bg-emerald-500/20 text-emerald-400
+flex justify-center my-2 md:hidden
+Scrape Engagement Metrics via Apify
+Scrape Contact Info & Auto-Outreach
+w-12 h-12 text-primary mx-auto mb-4
+absolute inset-0 pointer-events-none
+CreatorCofounder analytics dashboard
+absolute bottom-0 left-0 right-0 p-4
+font-display text-foreground text-sm
+border bg-background text-foreground
+w-44 md:w-64 opacity-30 md:opacity-40
+w-full h-full object-cover object-top
+w-48 md:w-60 opacity-25 md:opacity-35
+Stop relying on ads and sponsorships.
+grid grid-cols-1 md:grid-cols-3 gap-6
+w-52 md:w-72 opacity-30 md:opacity-40
+flex items-center justify-between mb-6
+flex items-center justify-center gap-4
+absolute inset-0 gradient-hero-overlay
+The entire pipeline runs on autopilot.
+aspect-[4/3] overflow-hidden rounded-xl
+font-body text-foreground font-semibold
+cancel close invalid load scroll toggle
+font-body text-muted-foreground text-sm
+font-body text-muted-foreground text-xs
+rounded-2xl overflow-hidden aspect-[4/3]
+border border-foreground/5 gradient-card
+p-8 md:p-10 flex flex-col justify-center
+Limited spots. 100K+ followers required.
+w-full h-full object-cover object-center
+Automated creator pipeline visualization
+Spring duration must be 10 seconds or less
+Creators discovered and analyzed per month
+Durable - The complete AI business builder
+A history only accepts one active listener
+Generate a Product / App Idea + Pitch Deck
+relative z-10 text-center max-w-4xl mx-auto
+font-display text-primary text-xl font-bold
+border-t border-foreground/5 pt-4 space-y-2
+From discovery to pitch deck in their inbox
+Real creators. Real products. Real revenue.
+text-primary-foreground/70 font-body text-xs
+font-body text-primary font-semibold text-sm
+" is not valid. An absolute child route path
+font-body text-muted-foreground text-sm mb-4
+font-body text-muted-foreground text-lg mb-4
+Deep-Dive: Comments, Sentiment & Transcripts
+font-display text-primary text-2xl font-bold
+Average monthly revenue of launched products
+The General Intelligence Company of New York
+relative z-10 mt-16 max-w-5xl mx-auto w-full
+font-body text-primary font-semibold text-xs
+flex items-center gap-1 text-muted-foreground
+© 2026 CreatorCofounder. All rights reserved.
+absolute inset-0 gradient-red-glow opacity-60
+font-body text-foreground text-sm font-medium
+bg-gradient-to-br from-purple-600 to-pink-500
+Objects are not valid as a React child (found:
+translateY(50%) rotate(-90deg) translateX(50%)
+Auto-generated pitch deck for productivity app
+Automated creator outreach & product discovery
+translateY(50%) rotate(90deg) translateX(-50%)
+WalkOS, a mindfulness and fitness tracking app
+font-body text-foreground font-semibold text-sm
+Auto-generated based on your niche and audience
+font-body text-foreground text-sm font-semibold
+font-display text-5xl font-bold text-primary/30
+font-body text-muted-foreground leading-relaxed
+font-body text-muted-foreground/60 text-sm mb-10
+border border-primary/30 bg-primary/5 shadow-glow
+Cannot add the same private member more than once
+font-display text-xl font-semibold text-foreground
+grid grid-cols-3 gap-3 rounded-2xl overflow-hidden
+font-display text-lg font-semibold text-foreground
+font-display text-2xl font-semibold text-foreground
+absolute top-8 -left-4 md:left-12 animate-float-bob
+font-body text-sm text-foreground leading-snug mb-2
+$29/mo brand analytics & supplier discovery platform
+absolute w-2 h-2 rounded-full bg-primary shadow-glow
+Davie Fogarty, e-commerce and brand building creator
+grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-16
+Both input and output ranges must be the same length
+flex-1 bg-muted/30 rounded-full h-10 overflow-hidden
+grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3
+absolute top-24 -right-8 md:right-8 animate-float-bob
+React Router caught the following error during render
+font-body text-foreground text-sm leading-relaxed mb-4
+CreatorCofounder, an automated venture studio platform
+flex flex-wrap items-center justify-center gap-3 mt-16
+absolute inset-0 gradient-red-glow pointer-events-none
+flex min-h-screen items-center justify-center bg-muted
+font-display text-lg font-semibold text-foreground mb-1
+404 Error: User attempted to access non-existent route:
+font-display text-lg font-semibold text-foreground mb-2
+font-body text-muted-foreground text-sm leading-relaxed
+font-body text-muted-foreground text-xs leading-relaxed
+Cubic bezier arrays must contain four numerical values.
+font-display text-xl font-semibold text-foreground mb-3
+font-display text-xl font-semibold text-foreground mb-2
+act(...) is not supported in production builds of React.
+font-display text-2xl font-semibold text-foreground mb-3
+font-body text-muted-foreground text-lg text-center mb-4
+gradient-card border border-foreground/5 rounded-2xl p-8
+compositionend focusout keydown keypress keyup mousedown
+font-body text-foreground text-sm font-medium block mb-2
+hidden md:flex items-center justify-center flex-shrink-0
+grid grid-cols-3 gap-4 pt-4 border-t border-foreground/5
+font-body text-muted-foreground text-center text-sm mt-10
+compositionstart focusout keydown keypress keyup mousedown
+font-body text-muted-foreground/60 text-xs text-center mt-6
+compositionupdate focusout keydown keypress keyup mousedown
+flex flex-col sm:flex-row items-center justify-center gap-4
+border-primary/50 bg-primary/10 text-foreground shadow-glow
+flex flex-col md:flex-row items-center md:items-start gap-0
+font-body text-muted-foreground/60 text-sm text-center mb-10
+flex flex-col items-center justify-center gap-3 py-4 md:py-0
+font-body text-muted-foreground text-sm leading-relaxed mb-4
+group-[.toast]:bg-muted group-[.toast]:text-muted-foreground
+grid grid-cols-1 md:grid-cols-5 gap-6 md:gap-4 relative z-10
+grid md:grid-cols-[1fr_auto_1fr] gap-4 md:gap-6 items-center
+grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6
+font-body text-foreground/60 text-xs uppercase tracking-wider
+absolute bottom-12 left-1/2 -translate-x-1/2 animate-float-bob
+w-14 h-14 rounded-full object-cover border-2 border-primary/30
+w-12 h-12 rounded-full object-cover border-2 border-primary/30
+Paperclip - Open-source orchestration for zero-human companies
+w-12 h-12 rounded-full object-cover border border-foreground/10
+gradient-card border border-foreground/5 rounded-2xl p-6 md:p-8
+always follow a `/` in the pattern. To get rid of this warning,
+hidden md:flex items-center gap-2 text-xs font-body text-primary
+group-[.toast]:bg-primary group-[.toast]:text-primary-foreground
+font-display text-foreground italic text-lg leading-relaxed mb-6
+gradient-card border border-foreground/5 rounded-2xl p-8 md:p-10
+font-display text-5xl md:text-6xl font-bold text-foreground mb-3
+font-display text-foreground text-xl font-semibold tracking-tight
+change click focusin focusout input keydown keyup selectionchange
+absolute inset-0 gradient-red-glow pointer-events-none opacity-40
+font-display text-3xl md:text-4xl font-semibold text-primary mb-2
+flex flex-col sm:flex-row items-center justify-center gap-4 mb-16
+absolute inset-0 gradient-red-glow pointer-events-none opacity-30
+absolute inset-0 gradient-red-glow pointer-events-none opacity-20
+font-display text-4xl md:text-6xl font-medium text-foreground mb-6
+No window.location.(origin|href) available to create URL for href:
+w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center
+gradient-card border border-foreground/5 rounded-2xl p-8 text-center
+gradient-card border border-foreground/5 rounded-2xl overflow-hidden
+font-body text-muted-foreground text-xs uppercase tracking-wider mb-1
+font-body text-xs text-muted-foreground mb-2 uppercase tracking-wider
+gradient-card border border-foreground/5 rounded-2xl p-10 text-center
+React.Children.only expected to receive a single React element child.
+xlink:actuate xlink:arcrole xlink:role xlink:show xlink:title xlink:type
+font-body text-muted-foreground text-sm leading-relaxed max-w-xs mx-auto
+w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-5
+Apply now and we will send you a personalized pitch deck within 48 hours.
+). If you meant to render a collection of children, use an array instead.
+font-body text-muted-foreground text-lg md:text-xl max-w-3xl mx-auto mb-10
+gradient-card border border-foreground/5 rounded-2xl p-8 md:p-10 space-y-5
+font-display text-lg md:text-xl text-foreground italic leading-relaxed mb-6
+font-body text-foreground font-medium text-sm uppercase tracking-wider mb-3
+font-body text-muted-foreground text-lg text-center max-w-2xl mx-auto mb-16
+font-body text-primary text-xs uppercase tracking-[0.2em] font-semibold mb-3
+React.cloneElement(...): The argument must be a React element, but you passed
+border border-primary/20 bg-primary/5 rounded-2xl overflow-hidden shadow-glow
+font-display text-4xl md:text-6xl font-medium text-foreground text-center mb-4
+font-display text-3xl md:text-5xl font-medium text-foreground text-center mb-14
+relative min-h-screen flex flex-col items-center justify-center overflow-hidden
+gradient-card border border-foreground/5 rounded-2xl p-8 flex items-start gap-5
+font-display text-4xl md:text-5xl font-medium text-foreground text-center mb-14
+destructive group border-destructive bg-destructive text-destructive-foreground
+text-primary-foreground font-body text-sm font-semibold tracking-wide uppercase
+radial-gradient(circle at 60% 30%, hsla(4, 100%, 60%, 0.35) 0%, transparent 40%)
+w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0
+888K subscribers · E-commerce, brand building & entrepreneurship · High engagement
+The entire pipeline runs automatically. From discovery to inbox in under 48 hours.
+Average creator earnings before and after launching a product with CreatorCofounder
+We will review your profile and send you a personalized pitch deck within 48 hours.
+focusout contextmenu dragend focusin keydown keyup mousedown mouseup selectionchange
+relative rounded-2xl overflow-hidden bg-card border border-foreground/5 aspect-[3/4]
+absolute inset-0 bg-gradient-to-t from-background/90 via-background/20 to-transparent
+font-body text-muted-foreground text-lg md:text-xl text-center max-w-3xl mx-auto mb-16
+Open-source orchestration that lets businesses run entirely on AI. No employees needed.
+hidden md:block absolute top-1/2 left-0 right-0 -translate-y-1/2 z-5 pointer-events-none
+font-body text-primary text-sm uppercase tracking-[0.25em] font-semibold text-center mb-4
+font-body text-muted-foreground text-lg md:text-xl max-w-2xl mx-auto mb-10 leading-relaxed
+font-display text-4xl md:text-5xl lg:text-6xl font-medium text-foreground text-center mb-6
+font-display text-4xl md:text-5xl lg:text-6xl font-medium text-foreground text-center mb-16
+font-body text-muted-foreground text-center max-w-2xl mx-auto mb-14 text-lg leading-relaxed
+We find the creators, analyze the demand, build the pitch, and send it. You focus on closing.
+The General Intelligence Company builds AI that operates businesses autonomously, end to end.
+They turned my comment section into a product roadmap. The revenue started on day one of launch.
+w-10 h-10 rounded-full border-2 border-primary/30 border-t-primary flex items-center justify-center
+font-display text-3xl md:text-5xl lg:text-6xl font-medium text-foreground italic leading-tight mb-8
+I built this because I saw the gap. Creators have massive distribution but no products. We fix that.
+If `dragConstraints` is set as a React ref, that ref must be passed to another component's `ref` prop.
+" could not be decoded because it is is a malformed URL segment. This is probably due to a bad percent
+font-display text-3xl md:text-5xl lg:text-6xl font-medium text-foreground text-center mb-6 tracking-tight
+font-display text-4xl md:text-5xl lg:text-6xl font-medium text-foreground text-center mb-6 tracking-tight
+w-14 h-14 mx-auto mb-4 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center
+font-display text-4xl md:text-5xl lg:text-6xl font-medium text-foreground text-center mb-5 tracking-tight
+font-display text-3xl md:text-5xl lg:text-6xl font-medium text-foreground text-center mb-16 tracking-tight
+We filter for 100K+ followers with strong engagement ratios. No vanity metrics, only real audience demand.
+We run the entire pipeline: discovery, analysis, pitch deck generation, and outreach. You just close deals.
+Post timing, format, and hooks are calibrated to maximize reach and drive traffic directly to your product.
+w-16 h-16 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-5
+I had no idea my comment section was a goldmine. They showed me exactly what my audience wanted to pay for.
+font-display text-5xl sm:text-7xl md:text-8xl font-medium text-foreground leading-[0.95] tracking-tight mb-8
+for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+Apify scrapes engagement data, our AI analyzes sentiment and transcripts, and outreach goes out automatically.
+Approve a post and it goes into your queue. No switching between five different tools. Everything in one place.
+forceFrameRate takes a positive int between 0 and 125, forcing frame rates higher than 125 fps is not supported
+Launch to your community and watch the signups come in. Recurring revenue, every month, whether you post or not.
+Revenue share model, not hourly billing. Our incentives are 100% aligned with yours. We're partners, not vendors.
+inline-flex items-center gap-4 bg-card/60 border border-foreground/10 rounded-full pl-2 pr-6 py-2 backdrop-blur-sm
+They sent me a pitch deck with a product my audience was already begging for. I didn't even know they were watching.
+Content ideas pulled from your existing audience data, trending topics, and what your followers actually engage with.
+setState(...): takes an object of state variables to update or a function which returns an object of state variables.
+font-display text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-medium text-foreground leading-[0.95] tracking-tight mb-8
+From concept to paying customers in under a month. We've done this dozens of times. No bloated timelines, no scope creep.
+Our team designs, develops, and ships the product. You give feedback and stay in the loop. No technical knowledge needed.
+Launch a website, get customers, grow your business. 3 million owners already use it. But none of them solve distribution.
+You receive a pitch deck with a product idea tailored to your audience. Based on real data from your comments and content.
+We take on the financial risk. You pay nothing until your product is generating revenue. If it doesn't work, you owe us nothing.
+CreatorCofounder reached out with a fully validated SaaS idea and a pitch deck. We launched it in 30 days, $40K MRR in month two.
+We don't just find ideas. We generate full product concepts (SaaS tools, mobile apps, communities) with pitch decks ready to send.
+children dangerouslySetInnerHTML defaultValue defaultChecked innerHTML suppressContentEditableWarning suppressHydrationWarning style
+group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg
+We continuously scan platforms to discover creators with 100K+ followers across YouTube, TikTok, X, and more. No manual sourcing needed.
+We analyze thousands of comments, engagement patterns, and audience questions to find the product your followers are already asking for.
+Agencies charge you $50K+ upfront and don't understand your audience. We invest our own time and money because we only win when you win.
+For high-engagement creators, we scrape comment sentiment, YouTube transcripts, and recurring audience questions to surface unmet demand.
+Using Apify, we pull real engagement data (likes, comments, shares, view-to-sub ratios) to filter for creators with genuinely active audiences.
+We find their email, business inquiries, or socials and send a personalized outreach with the pitch deck attached. Fully automated, end to end.
+Ad revenue fluctuates. Sponsorships dry up. The smartest creators are building products that generate predictable, recurring income every single month.
+Our system generates a tailored web app, mobile app, or digital product concept, complete with value prop, pricing model, and an auto-built pitch deck.
+absolute -top-3 -right-3 w-7 h-7 rounded-full bg-primary text-primary-foreground font-body text-xs font-bold flex items-center justify-center shadow-lg
+We already know what your audience wants to buy. We build the product, you promote it to your community, and we split the revenue. No upfront cost. No risk.
+Every creator gets a personalized content calendar with ready-to-post ideas tailored to their audience, niche, and platform. Just pick your channels and go.
+When a creator says yes, we handle everything. Design, development, launch. SaaS tools, mobile apps, community platforms. They bring their audience, we bring the product.
+We find creators with 100K+ followers, figure out what their audience wants to pay for, build the product, and take equity. The pipeline runs itself. We collect royalties.
+No hourly billing. No retainers. We take an equity stake in every product we launch. We only make money when the product makes money. Aligned incentives, compounding returns.
+Every successful launch adds another revenue stream to the portfolio. The pipeline never stops sourcing deals. Think of it as a venture fund where the deal flow is fully automated.
+Our pipeline scrapes creators with 100K+ followers, analyzes what their audience is begging for, generates a product idea with a pitch deck, and sends outreach. All without you lifting a finger.
+AI can build websites, write code, run operations. But the one thing it still can not do? Get people to care. Distribution is the last human moat, and creators own it. We connect that moat to real products.
+We scrape creators with 100k+ followers, find their contact info and send them a pitch deck of a product based on their content audience comment sentiment, and partner up with them to build their own product.
+abort canplay canplaythrough durationchange emptied encrypted ended error loadeddata loadedmetadata loadstart pause play playing progress ratechange resize seeked seeking stalled suspend timeupdate volumechange waiting
+allowFullScreen async autoFocus autoPlay controls default defer disabled disablePictureInPicture disableRemotePlayback formNoValidate hidden loop noModule noValidate open playsInline readOnly required reversed scoped seamless itemScope
+radial-gradient(ellipse at 30% 20%, hsla(4, 95%, 45%, 0.5) 0%, transparent 50%), radial-gradient(ellipse at 70% 80%, hsla(4, 90%, 55%, 0.4) 0%, transparent 50%), radial-gradient(ellipse at 50% 50%, hsla(0, 85%, 40%, 0.3) 0%, transparent 70%)
+group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full
+abort auxClick cancel canPlay canPlayThrough click close contextMenu copy cut drag dragEnd dragEnter dragExit dragLeave dragOver dragStart drop durationChange emptied encrypted ended error gotPointerCapture input invalid keyDown keyPress keyUp load loadedData loadedMetadata loadStart lostPointerCapture mouseDown mouseMove mouseOut mouseOver mouseUp paste pause play playing pointerCancel pointerDown pointerMove pointerOut pointerOver pointerUp progress rateChange reset resize seeked seeking stalled submit suspend timeUpdate touchCancel touchEnd touchStart volumeChange scroll toggle touchMove waiting wheel
+accent-height alignment-baseline arabic-form baseline-shift cap-height clip-path clip-rule color-interpolation color-interpolation-filters color-profile color-rendering dominant-baseline enable-background fill-opacity fill-rule flood-color flood-opacity font-family font-size font-size-adjust font-stretch font-style font-variant font-weight glyph-name glyph-orientation-horizontal glyph-orientation-vertical horiz-adv-x horiz-origin-x image-rendering letter-spacing lighting-color marker-end marker-mid marker-start overline-position overline-thickness paint-order panose-1 pointer-events rendering-intent shape-rendering stop-color stop-opacity strikethrough-position strikethrough-thickness stroke-dasharray stroke-dashoffset stroke-linecap stroke-linejoin stroke-miterlimit stroke-opacity stroke-width text-anchor text-decoration text-rendering underline-position underline-thickness unicode-bidi unicode-range units-per-em v-alphabetic v-hanging v-ideographic v-mathematical vector-effect vert-adv-y vert-origin-x vert-origin-y word-spacing writing-mode xmlns:xlink x-height
