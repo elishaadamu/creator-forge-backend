@@ -18,7 +18,10 @@ class Settings:
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
 
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/creator_forge.db")
+    _db_url = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/creator_forge.db")
+    if _db_url.startswith("postgres://"):
+        _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+    DATABASE_URL: str = _db_url
 
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-this-in-production-internal-ops-only")
