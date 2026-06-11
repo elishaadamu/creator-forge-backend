@@ -389,6 +389,8 @@ class DownloadKeysRequest(BaseModel):
     gemini_api_key: str = ""
     together_api_key: str = ""
     nvidia_api_key: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
 
 @app.post("/api/settings/download-keys-pdf")
 def download_keys_pdf(req: DownloadKeysRequest):
@@ -449,6 +451,8 @@ def download_keys_pdf(req: DownloadKeysRequest):
         ("Apify Token", req.apify_token),
         ("YouTube API Key", req.youtube_api_key),
         ("Google Gemini Key", req.gemini_api_key),
+        ("OpenAI Key", req.openai_api_key),
+        ("Anthropic Key", req.anthropic_api_key),
         ("Together.ai Key", req.together_api_key),
         ("NVIDIA NIM Key", req.nvidia_api_key)
     ]
