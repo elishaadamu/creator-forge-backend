@@ -636,6 +636,28 @@ def load_ai_keys(username: str, db: Session = Depends(get_db)):
     return {"status": "success", "ai_keys": user.ai_keys}
 
 
+@app.get("/api/auth/profile/{username}")
+def get_user_profile(username: str, db: Session = Depends(get_db)):
+    """Retrieve full user profile data for session synchronization."""
+    from app.models.creator import UserProfile
+    from fastapi import HTTPException
+
+    user = db.query(UserProfile).filter(UserProfile.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "status": "success",
+        "username": user.username,
+        "email": user.email,
+        "creator_data": user.creator_data,
+        "calendar_data": user.calendar_data,
+        "launch_pack_data": user.launch_pack_data,
+        "studio_data": user.studio_data,
+        "ai_keys": user.ai_keys
+    }
+
+
 # ── Admin Control APIs ────────────────────────────────────────────────────────
 @app.get("/api/admin/users")
 def list_admin_users(db: Session = Depends(get_db)):
