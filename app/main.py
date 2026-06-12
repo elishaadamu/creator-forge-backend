@@ -307,14 +307,19 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
             "recipient": req.email
         }
 
-    # Determine dynamic base url (e.g. http://localhost:5173 for local dev, or the production URL)
-    origin = request.headers.get("origin") or request.headers.get("referer")
-    if origin:
-        from urllib.parse import urlparse
-        parsed = urlparse(origin)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-    else:
-        base_url = str(request.base_url).rstrip('/')
+    # Determine base url (check env first, then dynamic origin, fallback to vercel URL)
+    import os
+    base_url = os.getenv("BASE_URL", "").rstrip('/')
+    if not base_url:
+        origin = request.headers.get("origin") or request.headers.get("referer")
+        if origin:
+            from urllib.parse import urlparse
+            parsed = urlparse(origin)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            if "localhost:8000" in base_url or "127.0.0.1:8000" in base_url:
+                base_url = "https://creator-forge-frontend.vercel.app"
+        else:
+            base_url = "https://creator-forge-frontend.vercel.app"
 
     subject = "Welcome to Creator Forge!"
     body_text = (
@@ -324,7 +329,7 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
         "- Automated Content Calendar: Generate strategically aligned content drafts in one click.\n"
         "- Monetization Blueprints: Analyze stats and auto-generate pitch decks.\n"
         "- Privacy-Enforced Sandbox: Your API keys and tokens remain local and secure.\n\n"
-        f"Launch Console: {base_url}"
+        f"Launch Console: {base_url}/login"
     )
     body_html = f"""
     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #1f2937; border-radius: 20px; background-color: #050505; color: #f3f4f6; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
@@ -362,7 +367,7 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
 
             <!-- Button -->
             <div style="text-align: center; margin-bottom: 8px;">
-                <a href="{base_url}" target="_blank" style="display: inline-block; background-color: #ffffff; color: #000000; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 100px; font-size: 13px;">
+                <a href="{base_url}/login" target="_blank" style="display: inline-block; background-color: #ffffff; color: #000000; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 100px; font-size: 13px;">
                     Launch Console
                 </a>
             </div>
