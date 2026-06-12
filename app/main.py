@@ -294,92 +294,100 @@ class SignupEmailRequest(BaseModel):
     sendgrid_api_key: str = ""
 
 @app.post("/api/auth/signup-email")
-def send_signup_email(req: SignupEmailRequest):
-    """Send a successful account creation email using SendGrid."""
-    import httpx
+def send_signup_email(req: SignupEmailRequest, request: Request):
+    """Send a successful account creation email using Google SMTP."""
     import logging
+    from app.integrations.email_provider import email_provider
 
-    api_key = req.sendgrid_api_key.strip() or settings.SENDGRID_API_KEY
-    if not api_key:
-        logging.warning("SendGrid API key not set. Simulating welcome email success.")
+    if not email_provider.is_configured():
+        logging.warning("Email provider not fully configured. Simulating welcome email success.")
         return {
             "status": "simulated",
-            "message": "SendGrid API key not set. Onboarding welcome email simulation succeeded.",
+            "message": "Email configurations not set. Onboarding welcome email simulation succeeded.",
             "recipient": req.email
         }
 
-    from_email = settings.FROM_EMAIL or "welcome@creatorforge.com"
-    from_name = settings.FROM_NAME or "Creator Forge Team"
+    # Determine dynamic base url (e.g. http://localhost:5173 for local dev, or the production URL)
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if origin:
+        from urllib.parse import urlparse
+        parsed = urlparse(origin)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+    else:
+        base_url = str(request.base_url).rstrip('/')
 
-    subject = f"Welcome to Creator Forge, {req.username}!"
-    body_text = f"Hi {req.username},\n\nYour account has been successfully created on Creator Forge. Welcome to the command center!\n\nBest,\nThe Creator Forge Team"
+    subject = "Welcome to Creator Forge!"
+    body_text = (
+        f"Welcome to the Forge, {req.username}!\n\n"
+        "Your secure creator sandbox is ready. Launch the console to start blueprinting, scheduling, and generating your next-generation content pipeline.\n\n"
+        "Features:\n"
+        "- Automated Content Calendar: Generate strategically aligned content drafts in one click.\n"
+        "- Monetization Blueprints: Analyze stats and auto-generate pitch decks.\n"
+        "- Privacy-Enforced Sandbox: Your API keys and tokens remain local and secure.\n\n"
+        f"Launch Console: {base_url}"
+    )
     body_html = f"""
-    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #1f2937; border-radius: 16px; background-color: #0b0b0b; color: #f3f4f6; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #1f2937; border-radius: 20px; background-color: #050505; color: #f3f4f6; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
+        <!-- Logo Header -->
         <div style="text-align: center; margin-bottom: 32px; border-bottom: 1px solid #1f2937; padding-bottom: 24px;">
-            <h1 style="color: #ffffff; font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -0.025em; text-transform: uppercase;">CREATOR FORGE</h1>
-            <p style="color: #9ca3af; font-size: 13px; margin: 6px 0 0 0; text-transform: uppercase; letter-spacing: 0.1em;">Secure Operator Console</p>
+            <h1 style="color: #ffffff; font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -0.03em; text-transform: uppercase;">CREATOR FORGE</h1>
+            <p style="color: rgba(255,255,255,0.4); font-size: 12px; margin: 6px 0 0 0; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600;">Operator Console Active</p>
         </div>
-        <div style="line-height: 1.6; font-size: 15px; color: #d1d5db;">
-            <p style="font-size: 16px; color: #ffffff;">Hi <strong>{req.username}</strong>,</p>
-            <p>Your secure operator account has been successfully created. Welcome to the **Creator Forge** command center!</p>
-            <p>You now have full local access to your personal audience builder, automated launch campaigns, and AI content calendar.</p>
-            
-            <div style="background: rgba(245, 158, 11, 0.04); border: 1px solid rgba(245, 158, 11, 0.15); border-left: 4px solid #f59e0b; border-radius: 12px; padding: 16px; margin: 24px 0;">
-                <h4 style="margin: 0 0 4px 0; font-size: 13px; color: #ffffff; font-weight: 600;">🔒 Local Sandbox Privacy Enforced</h4>
-                <p style="margin: 0; font-size: 12px; color: #9ca3af; line-height: 1.5;">
-                    To protect your digital identity, all platform API credentials (like Apify and Gemini keys) are loaded strictly in your browser's active memory. They are never written to databases or persistent storage, and are immediately cleared when you log out.
-                </p>
+
+        <!-- Body -->
+        <div style="line-height: 1.6; font-size: 14px; color: #d1d5db; margin-bottom: 32px;">
+            <p style="font-size: 18px; color: #ffffff; font-weight: 700; margin-top: 0; margin-bottom: 12px; letter-spacing: -0.02em;">Welcome to the Forge, <strong>{req.username}</strong>.</p>
+            <p style="margin-top: 0; margin-bottom: 24px; color: rgba(255,255,255,0.7); font-size: 14px;">
+                Your secure creator sandbox is fully provisioned. Step into your console to start blueprinting, scheduling, and generating your next-generation content pipeline.
+            </p>
+
+            <!-- Feature highlights -->
+            <div style="margin-bottom: 32px;">
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
+                    <span style="font-size: 16px; margin-right: 6px;">📅</span>
+                    <strong style="color: #ffffff; font-size: 13px;">Automated Content Calendar</strong>
+                    <p style="margin: 4px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.45);">Generate 7-day strategically aligned multi-platform content drafts in one click.</p>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
+                    <span style="font-size: 16px; margin-right: 6px;">💡</span>
+                    <strong style="color: #ffffff; font-size: 13px;">Monetization Blueprints</strong>
+                    <p style="margin: 4px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.45);">Analyze channel stats to discover optimal digital products and auto-generate pitch decks.</p>
+                </div>
+                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
+                    <span style="font-size: 16px; margin-right: 6px;">🔒</span>
+                    <strong style="color: #ffffff; font-size: 13px;">Privacy-Enforced Sandbox</strong>
+                    <p style="margin: 4px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.45);">Your platform tokens and API credentials remain secure, private, and local to you.</p>
+                </div>
             </div>
-            
-            <p>Let's build something epic.</p>
-            <p style="margin-top: 40px; border-t: 1px solid #1f2937; padding-top: 24px; font-size: 13px; color: #9ca3af; line-height: 1.5;">
-                Best regards,<br/>
-                <strong style="color: #ffffff;">The Creator Forge Team</strong>
+
+            <!-- Button -->
+            <div style="text-align: center; margin-bottom: 8px;">
+                <a href="{base_url}" target="_blank" style="display: inline-block; background-color: #ffffff; color: #000000; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 100px; font-size: 13px;">
+                    Launch Console
+                </a>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="border-top: 1px solid #1f2937; padding-top: 24px; text-align: center;">
+            <p style="font-size: 11px; color: rgba(255,255,255,0.3); margin: 0; line-height: 1.5;">
+                To protect your digital identity, all platform API credentials are loaded strictly in your browser's active memory. They are never written to database tables or persistent storage.
             </p>
         </div>
     </div>
     """
 
-    url = "https://api.sendgrid.com/v3/mail/send"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "personalizations": [
-            {
-                "to": [{"email": req.email}]
-            }
-        ],
-        "from": {
-            "email": from_email,
-            "name": from_name
-        },
-        "subject": subject,
-        "content": [
-            {
-                "type": "text/plain",
-                "value": body_text
-            },
-            {
-                "type": "text/html",
-                "value": body_html
-            }
-        ]
-    }
-
     try:
-        r = httpx.post(url, headers=headers, json=payload, timeout=15.0)
-        if r.status_code not in (200, 201, 202):
-            logging.error(f"SendGrid responded with status {r.status_code}: {r.text}")
-            return {
-                "status": "error",
-                "message": f"SendGrid API responded with status {r.status_code}"
-            }
-        return {"status": "sent", "message_id": r.headers.get("X-Message-Id", "unknown")}
+        res = email_provider.send(
+            to_email=req.email,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text
+        )
+        return {"status": "sent", "message_id": res.get("message_id", "unknown")}
     except Exception as e:
-        logging.error(f"SendGrid connection error: {str(e)}")
-        return {"status": "error", "message": f"Connection to SendGrid failed: {str(e)}"}
+        logging.error(f"Google SMTP sending error: {str(e)}")
+        return {"status": "error", "message": f"SMTP delivery failed: {str(e)}"}
 
 
 # ── Download Keys PDF API ─────────────────────────────────────────────────────
@@ -656,6 +664,68 @@ def get_user_profile(username: str, db: Session = Depends(get_db)):
         "studio_data": user.studio_data,
         "ai_keys": user.ai_keys
     }
+
+
+class UpdateProfileRequest(BaseModel):
+    username: str
+    email: str
+
+
+@app.post("/api/auth/update-profile")
+def update_profile(req: UpdateProfileRequest, db: Session = Depends(get_db)):
+    """Update profile email on DB and send alert if changed."""
+    from app.models.creator import UserProfile
+    from fastapi import HTTPException
+    from app.integrations.email_provider import email_provider
+    import logging
+
+    user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    new_email = req.email.strip().lower()
+    old_email = user.email.strip().lower()
+
+    if new_email != old_email:
+        # Check if email is already taken
+        existing = db.query(UserProfile).filter(UserProfile.email == new_email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email address already registered by another account")
+
+        user.email = new_email
+        db.commit()
+
+        # Send alert to OLD email address
+        subject = "Creator Forge - Security Alert: Email Address Changed"
+        body_text = f"Hello {user.username},\n\nThe email address associated with your Creator Forge account has been successfully changed from {old_email} to {new_email}.\n\nIf you did not authorize this change, please contact support immediately."
+        body_html = f"""
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #1f2937; border-radius: 16px; background-color: #0b0b0b; color: #f3f4f6; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+            <div style="text-align: center; margin-bottom: 24px; border-bottom: 1px solid #1f2937; padding-bottom: 16px;">
+                <h1 style="color: #ffffff; font-size: 24px; font-weight: 800; margin: 0; letter-spacing: -0.025em; text-transform: uppercase;">CREATOR FORGE</h1>
+                <p style="color: #ef4444; font-size: 12px; margin: 6px 0 0 0; text-transform: uppercase; letter-spacing: 0.1em; font-weight: bold;">Security Alert</p>
+            </div>
+            <div style="line-height: 1.6; font-size: 14px; color: #d1d5db;">
+                <p style="font-size: 16px; color: #ffffff;">Hello <strong>{user.username}</strong>,</p>
+                <p>The email address associated with your secure operator account has been changed:</p>
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 16px; margin: 16px 0; font-family: monospace; font-size: 13px;">
+                    <span style="color: #ef4444;">- Old: {old_email}</span><br>
+                    <span style="color: #10b981;">+ New: {new_email}</span>
+                </div>
+                <p style="color: #9ca3af; font-size: 12px;">If you did not make this change, please contact security immediately.</p>
+            </div>
+        </div>
+        """
+        try:
+            email_provider.send(
+                to_email=old_email,
+                subject=subject,
+                body_html=body_html,
+                body_text=body_text
+            )
+        except Exception as e:
+            logging.error(f"Failed to send email change notification to {old_email}: {str(e)}")
+
+    return {"status": "success", "email": new_email}
 
 
 # ── Admin Control APIs ────────────────────────────────────────────────────────

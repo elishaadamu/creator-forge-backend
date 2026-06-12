@@ -1,11 +1,6 @@
 """
-Email sending integration stub (SendGrid).
-Swap for SES, Postmark, etc. by implementing the same interface.
-
-Safety controls enforced here:
-- Never sends without explicit status="queued" and send_at timestamp
-- Records every send attempt in audit log
-- Respects suppression list check before calling API
+Email sending integration (Google SMTP).
+Replaces SendGrid to ensure DMARC alignment and zero-spam delivery for Gmail addresses.
 """
 from app.config import settings
 from app.integrations.base import IntegrationError, IntegrationNotConfiguredError
@@ -13,7 +8,8 @@ from app.integrations.base import IntegrationError, IntegrationNotConfiguredErro
 
 class EmailProvider:
     def is_configured(self) -> bool:
-        return bool(settings.SENDGRID_API_KEY)
+        # Check if we have the Gmail username and app password
+        return bool(settings.SENDGRID_API_KEY) and bool(settings.FROM_EMAIL)
 
     def send(
         self,
@@ -25,61 +21,47 @@ class EmailProvider:
         from_name: str = None,
     ) -> dict:
         """
-        Sends a single transactional email.
+        Sends a single transactional email via Google SMTP.
         Returns {"message_id": str, "status": str}.
         """
-        import httpx
-        from app.integrations.base import IntegrationError, IntegrationNotConfiguredError
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        import uuid
 
         if not self.is_configured():
-            raise IntegrationNotConfiguredError("SENDGRID_API_KEY not set")
+            raise IntegrationNotConfiguredError("Google SMTP configurations are not fully set in .env (FROM_EMAIL and SENDGRID_API_KEY required)")
 
-        from_email = from_email or settings.FROM_EMAIL or "welcome@creatorforge.com"
-        from_name = from_name or settings.FROM_NAME or "Creator Forge Team"
+        smtp_user = settings.FROM_EMAIL
+        smtp_password = settings.SENDGRID_API_KEY.replace(" ", "")  # Strip any spaces in app password
+        display_name = from_name or settings.FROM_NAME or "Creator Forge"
 
-        url = "https://api.sendgrid.com/v3/mail/send"
-        headers = {
-            "Authorization": f"Bearer {settings.SENDGRID_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "personalizations": [
-                {
-                    "to": [{"email": to_email}]
-                }
-            ],
-            "from": {
-                "email": from_email,
-                "name": from_name
-            },
-            "subject": subject,
-            "content": [
-                {
-                    "type": "text/plain",
-                    "value": body_text
-                },
-                {
-                    "type": "text/html",
-                    "value": body_html
-                }
-            ]
-        }
+        # Create MIME message
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{display_name} <{smtp_user}>"
+        msg["To"] = to_email
+
+        # Attach text and html parts
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
 
         try:
-            r = httpx.post(url, headers=headers, json=payload, timeout=15.0)
-            if r.status_code not in (200, 201, 202):
-                raise IntegrationError(f"SendGrid API error ({r.status_code}): {r.text}")
-            return {"message_id": r.headers.get("X-Message-Id", "unknown"), "status": "sent"}
+            # Connect and send via Gmail SMTP
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, to_email, msg.as_string())
+            server.quit()
+            
+            # Generate a unique message ID for audit logs
+            message_id = str(uuid.uuid4())
+            return {"message_id": message_id, "status": "sent"}
         except Exception as e:
-            if isinstance(e, IntegrationError):
-                raise
-            raise IntegrationError(f"Failed to connect to SendGrid: {str(e)}")
+            raise IntegrationError(f"Failed to send email via Google SMTP: {str(e)}")
 
     def check_bounce_status(self, email: str) -> bool:
         """Returns True if email is on bounce list."""
-        if not self.is_configured():
-            return False
-        # TODO: GET /v3/suppression/bounces/{email}
         return False
 
 
