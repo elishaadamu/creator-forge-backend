@@ -13,10 +13,6 @@ class GenerateRequest(BaseModel):
     system_prompt: str
     prompt: str
 
-client = OpenAI(
-  base_url = "https://integrate.api.nvidia.com/v1",
-  api_key = settings.NVIDIA_API_KEY
-)
 
 @router.post("/generate")
 def generate_studio_content(req: GenerateRequest, request: Request):
