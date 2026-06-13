@@ -108,32 +108,12 @@ def generate_followup(
     )
     raw = None
 
-    if settings.ANTHROPIC_API_KEY:
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-            message = client.messages.create(
-                model=settings.AI_MODEL,
-                max_tokens=500,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = message.content[0].text.strip()
-        except Exception as e:
-            print(f"Anthropic follow-up failed: {e}")
-            raw = None
-
-    if not raw and settings.GEMINI_API_KEY:
-        try:
-            from google import genai
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            raw = response.text.strip()
-        except Exception as e:
-            print(f"Gemini follow-up failed: {e}")
-            raw = None
+    try:
+        from app.services.llm import call_llm
+        raw = call_llm(prompt=prompt, max_tokens=500)
+    except Exception as e:
+        print(f"LLM follow-up failed: {e}")
+        raw = None
 
     if raw:
         try:

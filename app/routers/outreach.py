@@ -114,8 +114,15 @@ def queue_for_send(message_id: str, actor: str = "internal", db: Session = Depen
 @router.post("/{message_id}/send")
 def send(message_id: str, actor: str = "internal", db: Session = Depends(get_db)):
     try:
+        msg = db.get(OutreachMessage, message_id)
+        if not msg:
+            raise HTTPException(404, "Message not found")
+        if msg.status == "approved":
+            queue_message(db, message_id, actor)
         msg = send_message(db, message_id, actor)
         return _msg_dict(msg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, str(e))
 

@@ -93,32 +93,12 @@ def generate_outreach_draft(
     prompt = _build_outreach_prompt(creator, rec, analysis, bool(deck_id), tone)
     raw = None
 
-    if settings.ANTHROPIC_API_KEY:
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-            message = client.messages.create(
-                model=settings.AI_MODEL,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = message.content[0].text.strip()
-        except Exception as e:
-            print(f"Anthropic generation failed: {e}")
-            raw = None
-
-    if not raw and settings.GEMINI_API_KEY:
-        try:
-            from google import genai
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            raw = response.text.strip()
-        except Exception as e:
-            print(f"Gemini generation failed: {e}")
-            raw = None
+    try:
+        from app.services.llm import call_llm
+        raw = call_llm(prompt=prompt, max_tokens=1000)
+    except Exception as e:
+        print(f"LLM generation failed for outreach draft: {e}")
+        raw = None
 
     if raw:
         try:

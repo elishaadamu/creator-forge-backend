@@ -9,7 +9,9 @@ from app.integrations.base import IntegrationError, IntegrationNotConfiguredErro
 class EmailProvider:
     def is_configured(self) -> bool:
         # Check if we have the Gmail username and app password
-        return bool(settings.SENDGRID_API_KEY) and bool(settings.FROM_EMAIL)
+        has_new = bool(settings.GOOGLE_EMAIL) and bool(settings.GOOGLE_APP_PASSWORD)
+        has_old = bool(settings.SENDGRID_API_KEY) and bool(settings.FROM_EMAIL)
+        return has_new or has_old
 
     def send(
         self,
@@ -30,10 +32,16 @@ class EmailProvider:
         import uuid
 
         if not self.is_configured():
-            raise IntegrationNotConfiguredError("Google SMTP configurations are not fully set in .env (FROM_EMAIL and SENDGRID_API_KEY required)")
+            raise IntegrationNotConfiguredError("Google SMTP configurations are not fully set in .env (GOOGLE_EMAIL and GOOGLE_APP_PASSWORD required)")
 
-        smtp_user = settings.FROM_EMAIL
-        smtp_password = settings.SENDGRID_API_KEY.replace(" ", "")  # Strip any spaces in app password
+        # Determine SMTP credentials
+        if settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD:
+            smtp_user = settings.GOOGLE_EMAIL
+            smtp_password = settings.GOOGLE_APP_PASSWORD.replace(" ", "")
+        else:
+            smtp_user = settings.FROM_EMAIL
+            smtp_password = settings.SENDGRID_API_KEY.replace(" ", "")
+
         display_name = from_name or settings.FROM_NAME or "Creator Forge"
 
         # Create MIME message

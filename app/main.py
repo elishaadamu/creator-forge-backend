@@ -145,17 +145,21 @@ def view_deck(request: Request, deck_id: str): return _tpl(request, "deck_previe
 # ── Settings API ─────────────────────────────────────────────────────────────
 @app.get("/api/settings")
 def get_settings():
-    """Return current runtime-editable settings (masked secrets)."""
-    def mask(v): return ("•" * 8 + v[-4:]) if v and len(v) > 4 else ("set" if v else "")
+    """Return current runtime-editable settings (complete secrets for local workspace)."""
     return {
-        "anthropic_api_key":  mask(settings.ANTHROPIC_API_KEY),
-        "apify_api_key":      mask(settings.APIFY_API_KEY),
-        "sendgrid_api_key":   mask(settings.SENDGRID_API_KEY),
+        "anthropic_api_key":  settings.ANTHROPIC_API_KEY,
+        "openai_api_key":     settings.OPENAI_API_KEY,
+        "gemini_api_key":     settings.GEMINI_API_KEY,
+        "active_ai_provider": settings.ACTIVE_AI_PROVIDER,
+        "apify_api_key":      settings.APIFY_API_KEY,
+        "sendgrid_api_key":   settings.SENDGRID_API_KEY,
         "from_email":         settings.FROM_EMAIL,
         "from_name":          settings.FROM_NAME,
+        "google_email":       settings.GOOGLE_EMAIL,
+        "google_app_password": settings.GOOGLE_APP_PASSWORD,
         "ai_model":           settings.AI_MODEL,
         "apify_configured":   bool(settings.APIFY_API_KEY),
-        "ai_configured":      bool(settings.ANTHROPIC_API_KEY),
+        "ai_configured":      bool(settings.ANTHROPIC_API_KEY or settings.GEMINI_API_KEY or settings.OPENAI_API_KEY),
     }
 
 
@@ -167,10 +171,15 @@ def update_settings(body: dict):
 
     allowed = {
         "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "openai_api_key":    "OPENAI_API_KEY",
+        "gemini_api_key":    "GEMINI_API_KEY",
+        "active_ai_provider": "ACTIVE_AI_PROVIDER",
         "apify_api_key":     "APIFY_API_KEY",
         "sendgrid_api_key":  "SENDGRID_API_KEY",
         "from_email":        "FROM_EMAIL",
         "from_name":         "FROM_NAME",
+        "google_email":       "GOOGLE_EMAIL",
+        "google_app_password": "GOOGLE_APP_PASSWORD",
     }
     updated = []
     env_updates = {}

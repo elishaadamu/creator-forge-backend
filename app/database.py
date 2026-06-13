@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
@@ -8,6 +8,11 @@ engine = create_engine(
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
     echo=settings.DEBUG,
 )
+
+@event.listens_for(engine, "before_cursor_execute")
+def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    print(f"\n[DB ACTION] Executing SQL: {statement}")
+    print(f"[DB ACTION] Parameters: {parameters}\n")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

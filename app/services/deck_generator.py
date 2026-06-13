@@ -75,23 +75,23 @@ def generate_deck(
     if not creator or not rec:
         raise ValueError("Creator or ProductRecommendation not found")
 
-    if not settings.ANTHROPIC_API_KEY:
-        slides = _fallback_slides(creator, rec)
-    else:
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        prompt = _build_deck_prompt(creator, rec)
-        message = client.messages.create(
-            model=settings.AI_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = message.content[0].text.strip()
+    prompt = _build_deck_prompt(creator, rec)
+    raw = None
+    try:
+        from app.services.llm import call_llm
+        raw = call_llm(prompt=prompt, max_tokens=4000)
+    except Exception as e:
+        print(f"LLM deck generation failed: {e}")
+        raw = None
+
+    if raw:
         try:
             slides = json.loads(raw)
         except json.JSONDecodeError:
             match = re.search(r"\[.*\]", raw, re.DOTALL)
             slides = json.loads(match.group()) if match else _fallback_slides(creator, rec)
+    else:
+        slides = _fallback_slides(creator, rec)
 
     # Check for existing deck version
     existing = (

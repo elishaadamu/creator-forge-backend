@@ -36,12 +36,16 @@ class Settings:
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
-    AI_MODEL: str = "claude-sonnet-4-6"
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "gemini")
+    AI_MODEL: str = "claude-opus-4-6"
 
     # Email / Outreach (stubs — real keys go in .env)
     SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
     FROM_EMAIL: str = os.getenv("FROM_EMAIL", "partnerships@yourcompany.com")
     FROM_NAME: str = os.getenv("FROM_NAME", "Creator Partnerships Team")
+    GOOGLE_EMAIL: str = os.getenv("GOOGLE_EMAIL", "")
+    GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
 
     # Integration stubs
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")

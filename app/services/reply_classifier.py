@@ -107,7 +107,19 @@ def classify_reply(
     if not reply:
         raise ValueError("Reply not found")
 
-    if not settings.ANTHROPIC_API_KEY:
+    has_ai = bool(settings.ANTHROPIC_API_KEY or settings.GEMINI_API_KEY or settings.OPENAI_API_KEY)
+    raw = None
+
+    if has_ai:
+        try:
+            from app.services.llm import call_llm
+            prompt = _build_classify_prompt(reply.subject or "", reply.body)
+            raw = call_llm(prompt=prompt, max_tokens=500)
+        except Exception as e:
+            print(f"LLM reply classification failed: {e}")
+            raw = None
+
+    if not raw:
         # Rule-based fallback
         lower = reply.body.lower()
         if any(w in lower for w in ["yes", "interested", "love to", "sounds great", "let's talk"]):
@@ -134,15 +146,6 @@ def classify_reply(
         db.commit()
         return reply
 
-    import anthropic
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    prompt = _build_classify_prompt(reply.subject or "", reply.body)
-    message = client.messages.create(
-        model=settings.AI_MODEL,
-        max_tokens=500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = message.content[0].text.strip()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

@@ -498,6 +498,34 @@ def validate(
         raise HTTPException(404, str(e))
 
 
+@router.get("/{creator_id}/analysis")
+def get_creator_analysis(creator_id: str, db: Session = Depends(get_db)):
+    from app.models.creator import Analysis
+    analysis = (
+        db.query(Analysis)
+        .filter(Analysis.creator_id == creator_id)
+        .order_by(Analysis.analyzed_at.desc())
+        .first()
+    )
+    if not analysis:
+        raise HTTPException(404, "No analysis found for this creator")
+    return {
+        "id": analysis.id,
+        "creator_id": analysis.creator_id,
+        "analysis_type": analysis.analysis_type,
+        "engagement_quality_score": analysis.engagement_quality_score,
+        "audience_demand_signals": analysis.audience_demand_signals or {},
+        "content_themes": analysis.content_themes or [],
+        "brand_safety_score": analysis.brand_safety_score,
+        "recommended_niches": analysis.recommended_niches or [],
+        "audience_pain_points": analysis.audience_pain_points or [],
+        "summary": analysis.summary,
+        "raw_output": analysis.raw_output,
+        "model_used": analysis.model_used,
+        "analyzed_at": analysis.analyzed_at.isoformat() if analysis.analyzed_at else None,
+    }
+
+
 def _creator_dict(c: Creator) -> dict:
     return {
         "id": c.id, "handle": c.handle, "platform": c.platform,

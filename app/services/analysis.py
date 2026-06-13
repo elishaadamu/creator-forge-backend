@@ -164,7 +164,7 @@ def run_ai_analysis(
         .all()
     )
 
-    if not settings.ANTHROPIC_API_KEY and not settings.GEMINI_API_KEY:
+    if not settings.ANTHROPIC_API_KEY and not settings.GEMINI_API_KEY and not settings.OPENAI_API_KEY:
         # Return a placeholder analysis when no API key
         analysis = Analysis(
             creator_id=creator_id,
@@ -175,7 +175,7 @@ def run_ai_analysis(
             audience_demand_signals={"note": "AI key not configured — manual analysis required"},
             recommended_niches=creator.niche or [],
             audience_pain_points=[],
-            summary="AI analysis not available. Configure GEMINI_API_KEY or ANTHROPIC_API_KEY.",
+            summary="AI analysis not available. Configure GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
             raw_output="",
             model_used="none",
         )
@@ -185,32 +185,35 @@ def run_ai_analysis(
         return analysis
 
     prompt = _build_analysis_prompt(creator, samples)
+    raw = None
+    model_used = settings.ACTIVE_AI_PROVIDER or "gemini"
 
-    if settings.ANTHROPIC_API_KEY:
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        message = client.messages.create(
-            model=settings.AI_MODEL,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
+    try:
+        from app.services.llm import call_llm
+        raw = call_llm(prompt=prompt, max_tokens=2000)
+    except Exception as e:
+        print(f"LLM analysis failed: {e}")
+        raw = None
+
+    if not raw:
+        # Fallback to placeholder if call_llm fails completely
+        analysis = Analysis(
+            creator_id=creator_id,
+            analysis_type=analysis_type,
+            engagement_quality_score=creator.engagement_score or 0,
+            brand_safety_score=7.0,
+            content_themes=creator.niche or [],
+            audience_demand_signals={"note": "AI call failed — manual analysis required"},
+            recommended_niches=creator.niche or [],
+            audience_pain_points=[],
+            summary="AI analysis failed at runtime.",
+            raw_output="",
+            model_used="none",
         )
-        raw = message.content[0].text.strip()
-        model_used = settings.AI_MODEL
-    else:
-        import httpx
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json"}
-        }
-        r = httpx.post(url, json=payload, timeout=30)
-        if r.status_code != 200:
-            raise ValueError(f"Gemini API error: {r.text}")
-        try:
-            raw = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except KeyError:
-            raise ValueError(f"Unexpected Gemini response: {r.text}")
-        model_used = "gemini-2.5-flash"
+        db.add(analysis)
+        db.commit()
+        db.refresh(analysis)
+        return analysis
 
     try:
         data = json.loads(raw)
