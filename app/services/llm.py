@@ -67,7 +67,7 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                     messages.append({"role": "system", "content": system_prompt})
                 messages.append({"role": "user", "content": prompt})
                 response = client.chat.completions.create(
-                    model="gpt-5.5",
+                    model="gpt-4o",
                     messages=messages,
                     max_tokens=max_tokens,
                 )

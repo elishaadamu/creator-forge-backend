@@ -350,27 +350,6 @@ def _generate_email_draft(creator, rec, settings) -> dict:
         if n >= 1_000: return f"{n//1_000}K"
         return str(n)
 
-    if not settings.ANTHROPIC_API_KEY:
-        # Rich template that uses all scraped data
-        bio_line = f"Your channel — \"{bio[:120]}{'...' if len(bio)>120 else ''}\" — " if bio else f"Your {platform} channel "
-        niche_line = f"in the {niche_str} space" if niche_str else "in your space"
-        subject = f"Partnership idea for {name}"
-        body = (
-            f"Hi {name},\n\n"
-            f"{bio_line}caught my attention. {_fmt(followers)} followers {niche_line} — "
-            f"and I think your audience is exactly who we've been trying to reach.\n\n"
-            f"We're looking to build **{rec.product_name}** with the right creator — {rec.tagline}\n\n"
-            f"{rec.description}\n\n"
-            f"Revenue potential: {rec.revenue_potential}. "
-            f"You'd bring the audience and trust; we handle the product and operations.\n\n"
-            f"Would you be open to a quick 20-minute call this week to explore it?\n\n"
-            f"Best,\n[Your Name]\n\n"
-            f"P.S. Reply STOP anytime and I won't reach out again."
-        )
-        return {"subject": subject, "body": body}
-
-    import anthropic, json, re
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     prompt = (
         f"Write a short, highly personalized cold outreach email for a creator partnership.\n\n"
         f"Creator: {name} (@{handle}) on {platform}\n"
@@ -389,17 +368,45 @@ def _generate_email_draft(creator, rec, settings) -> dict:
         f"- End with: 'Reply STOP anytime to opt out.'\n\n"
         f'Return JSON only: {{"subject": "...", "body": "..."}}'
     )
-    msg = client.messages.create(
-        model=settings.AI_MODEL, max_tokens=800,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = msg.content[0].text.strip()
+
+    raw = None
     try:
-        data = json.loads(raw)
-    except Exception:
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
-        data = json.loads(m.group()) if m else {"subject": f"Partnership idea for {name}", "body": raw}
-    return data
+        from app.services.llm import call_llm
+        raw = call_llm(prompt=prompt, max_tokens=800)
+        if raw:
+            print(f"\n🚀 [PITCH PACK OUTREACH SUCCESS] Generated successfully using LLM raw payload.")
+        else:
+            print(f"\n⚠️ [PITCH PACK OUTREACH WARNING] LLM returned empty response. Falling back to default template.")
+    except Exception as e:
+        print(f"\n❌ [PITCH PACK OUTREACH ERROR] LLM generation failed: {e}. Falling back to default template.")
+        raw = None
+
+    import json, re
+    if raw:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            data = json.loads(m.group()) if m else {"subject": f"Partnership idea for {name}", "body": raw}
+        return data
+    else:
+        # Rich template fallback if LLM failed
+        bio_line = f"Your channel — \"{bio[:120]}{'...' if len(bio)>120 else ''}\" — " if bio else f"Your {platform} channel "
+        niche_line = f"in the {niche_str} space" if niche_str else "in your space"
+        subject = f"Partnership idea for {name}"
+        body = (
+            f"Hi {name},\n\n"
+            f"{bio_line}caught my attention. {_fmt(followers)} followers {niche_line} — "
+            f"and I think your audience is exactly who we've been trying to reach.\n\n"
+            f"We're looking to build **{rec.product_name}** with the right creator — {rec.tagline}\n\n"
+            f"{rec.description}\n\n"
+            f"Revenue potential: {rec.revenue_potential}. "
+            f"You'd bring the audience and trust; we handle the product and operations.\n\n"
+            f"Would you be open to a quick 20-minute call this week to explore it?\n\n"
+            f"Best,\n[Your Name]\n\n"
+            f"P.S. Reply STOP anytime and I won't reach out again."
+        )
+        return {"subject": subject, "body": body}
 
 
 class SendRequest(BaseModel):

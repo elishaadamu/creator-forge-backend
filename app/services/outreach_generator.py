@@ -96,8 +96,12 @@ def generate_outreach_draft(
     try:
         from app.services.llm import call_llm
         raw = call_llm(prompt=prompt, max_tokens=1000)
+        if raw:
+            print(f"\n🚀 [OUTREACH GENERATION SUCCESS] Draft generated successfully using LLM raw payload.")
+        else:
+            print(f"\n⚠️ [OUTREACH GENERATION WARNING] LLM returned empty response. Falling back to default template.")
     except Exception as e:
-        print(f"LLM generation failed for outreach draft: {e}")
+        print(f"\n❌ [OUTREACH GENERATION ERROR] LLM generation failed: {e}. Falling back to default template.")
         raw = None
 
     if raw:

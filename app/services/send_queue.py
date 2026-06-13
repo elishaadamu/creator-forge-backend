@@ -143,6 +143,7 @@ def send_message(
             entity_id=message_id, actor=actor,
             details={"to": email, "method": msg.send_method, "send_result": result},
         )
+        print(f"\n🚀 [SUCCESS] Outreach message {message_id} sent successfully via {msg.send_method} to {email or 'manual channel'}.")
 
     except Exception as e:
         msg.status = "failed"
@@ -154,6 +155,7 @@ def send_message(
             entity_id=message_id, actor=actor,
             details={"error": str(e)},
         )
+        print(f"\n❌ [ERROR] Failed to send outreach message {message_id}: {e}")
         raise
 
     return msg
