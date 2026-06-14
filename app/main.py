@@ -4,12 +4,13 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
+from pydantic import BaseModel
 
 from app.config import settings
 from app.database import init_db
 from app.routers import (
     creators, discovery, outreach, campaigns, decks, suppression, analytics, audit,
-    public_portal, content_calendar, studio
+    public_portal, content_calendar
 )
 from app.routers import agent as agent_router
 
@@ -60,7 +61,6 @@ app.include_router(audit.router)
 app.include_router(agent_router.router)
 app.include_router(public_portal.router)
 app.include_router(content_calendar.router)
-app.include_router(studio.router)
 
 
 # ── Analytics alias (/api/analytics/summary used by ops CampaignStats) ──────
@@ -250,51 +250,6 @@ def proxy_avatar(url: str):
         return Response(status_code=404)
 
 
-# ── NVIDIA NIM Image Generation Proxy ────────────────────────────────────────
-from pydantic import BaseModel
-
-class InferRequest(BaseModel):
-    prompt: str
-    seed: int = 0
-
-@app.post("/v1/infer")
-@app.post("/api/v1/infer")
-def nvidia_infer(req: InferRequest, request: Request):
-    """Proxy image generation requests to NVIDIA NIM FLUX.1-schnell model."""
-    import httpx
-    import logging
-    
-    # Read custom nvidia key from headers if provided
-    nvidia_key = request.headers.get("x-nvidia-api-key", "").strip() or settings.NVIDIA_API_KEY
-    if not nvidia_key:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="NVIDIA API Key not provided. Enter it in settings.")
-
-    url = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell"
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {nvidia_key}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "prompt": req.prompt,
-        "seed": req.seed
-    }
-    
-    try:
-        # Use a longer timeout as image generation can take several seconds
-        r = httpx.post(url, headers=headers, json=payload, timeout=45.0)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        err_msg = str(e)
-        if hasattr(e, 'response') and e.response is not None:
-            err_msg += f" - {e.response.text}"
-        logging.error(f"NVIDIA NIM Image generation failed: {err_msg}")
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=f"Image generation failed: {err_msg}")
-
 
 # ── Signup Welcome Email API ──────────────────────────────────────────────────
 class SignupEmailRequest(BaseModel):
@@ -410,7 +365,6 @@ class DownloadKeysRequest(BaseModel):
     youtube_api_key: str = ""
     gemini_api_key: str = ""
     together_api_key: str = ""
-    nvidia_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
@@ -475,8 +429,7 @@ def download_keys_pdf(req: DownloadKeysRequest):
         ("Google Gemini Key", req.gemini_api_key),
         ("OpenAI Key", req.openai_api_key),
         ("Anthropic Key", req.anthropic_api_key),
-        ("Together.ai Key", req.together_api_key),
-        ("NVIDIA NIM Key", req.nvidia_api_key)
+        ("Together.ai Key", req.together_api_key)
     ]
     
     for label, val in keys_data:

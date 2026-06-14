@@ -54,8 +54,7 @@ def generate_test_pdf():
         ("Apify Token", os.environ.get("APIFY_API_KEY", "[APIFY_API_KEY not set]")),
         ("YouTube API Key", os.environ.get("YOUTUBE_API_KEY", "[YOUTUBE_API_KEY not set]")),
         ("Google Gemini Key", os.environ.get("GEMINI_API_KEY", "[GEMINI_API_KEY not set]")),
-        ("Together.ai Key", os.environ.get("TOGETHER_AI_KEY", "[TOGETHER_AI_KEY not set]")),
-        ("NVIDIA NIM Key", os.environ.get("NVIDIA_API_KEY", "[NVIDIA_API_KEY not set]"))
+        ("Together.ai Key", os.environ.get("TOGETHER_AI_KEY", "[TOGETHER_AI_KEY not set]"))
     ]
     
     for label, val in keys_data:

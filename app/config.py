@@ -35,7 +35,6 @@ class Settings:
     # AI
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "gemini")
     AI_MODEL: str = "claude-opus-4-6"

@@ -61,24 +61,51 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                 continue
             try:
                 import openai
-                client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
-                messages = []
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": prompt})
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages,
-                    max_tokens=max_tokens,
+                client = openai.OpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    max_retries=0,
+                    timeout=15.0
                 )
-                if response and response.choices:
-                    content = response.choices[0].message.content.strip()
+                formatted_input = []
+                if system_prompt:
+                    formatted_input.append({
+                        "role": "system",
+                        "content": [{"type": "input_text", "text": system_prompt}]
+                    })
+                formatted_input.append({
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}]
+                })
+                
+                # Call /responses endpoint via Responses API using client.post
+                response = client.post("/responses", cast_to=dict, body={
+                    "model": "gpt-5.5",
+                    "input": formatted_input,
+                    "max_output_tokens": max_tokens
+                })
+                
+                # Extract text response from Responses API structure
+                content = ""
+                if response and "output_text" in response:
+                    content = response["output_text"]
+                elif response and isinstance(response.get("output"), list):
+                    for out in response["output"]:
+                        if out.get("type") == "message" and isinstance(out.get("content"), list):
+                            for item in out["content"]:
+                                if item and item.get("text"):
+                                    content = item["text"]
+                                    break
+                        if content:
+                            break
+                            
+                content = content.strip() if content else ""
+                if content:
                     print("\n" + "="*50)
-                    print(f"🤖 [AI GENERATED RESPONSE - OPENAI]:\n{content}")
+                    print(f"🤖 [AI GENERATED RESPONSE - OPENAI RESPONSES]:\n{content}")
                     print("="*50 + "\n")
                     return content
                 else:
-                    raise ValueError("OpenAI returned empty response")
+                    raise ValueError("OpenAI Responses returned empty response")
             except Exception as e:
                 errors.append(f"OpenAI error: {e}")
 
