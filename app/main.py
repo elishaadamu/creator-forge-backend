@@ -809,3 +809,81 @@ def health():
     return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
 
 
+# ── Static media directory mount ──────────────────────────────────────────────
+from pathlib import Path
+MEDIA_DIR = Path(__file__).resolve().parent.parent / "static" / "media"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/static/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
+
+class SaveMediaRequest(BaseModel):
+    image_data: str
+
+
+@app.post("/api/media/save")
+def save_media_image(req: SaveMediaRequest):
+    import uuid
+    import time
+    from fastapi import HTTPException
+    
+    # Ensure media directory exists
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        data = req.image_data.strip()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty image data")
+            
+        ext = "png"
+        file_bytes = None
+        
+        if data.startswith("data:"):
+            # It's base64
+            if "," in data:
+                header, data_str = data.split(",", 1)
+            else:
+                header = ""
+                data_str = data
+                
+            # Determine extension
+            if "jpeg" in header or "jpg" in header:
+                ext = "jpg"
+            elif "webp" in header:
+                ext = "webp"
+            elif "gif" in header:
+                ext = "gif"
+                
+            import base64
+            file_bytes = base64.b64decode(data_str)
+        elif data.startswith("http://") or data.startswith("https://"):
+            # It's a remote URL
+            url_lower = data.lower()
+            if ".jpg" in url_lower or ".jpeg" in url_lower:
+                ext = "jpg"
+            elif ".webp" in url_lower:
+                ext = "webp"
+            elif ".gif" in url_lower:
+                ext = "gif"
+                
+            import urllib.request
+            # Download the image
+            u_req = urllib.request.Request(data, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(u_req, timeout=15) as response:
+                file_bytes = response.read()
+        else:
+            raise HTTPException(status_code=400, detail="Invalid image data format. Must be base64 data-URI or HTTP URL.")
+            
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Could not read image bytes")
+            
+        filename = f"prod_{int(time.time())}_{uuid.uuid4().hex[:12]}.{ext}"
+        filepath = MEDIA_DIR / filename
+        
+        with open(filepath, "wb") as f:
+            f.write(file_bytes)
+            
+        return {"url": f"/api/static/media/{filename}"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to save image: {str(e)}")
+
+
