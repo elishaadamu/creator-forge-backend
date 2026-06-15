@@ -56,6 +56,7 @@ Rules:
 - One clear call to action: schedule a 30-min call
 - Include a natural opt-out line ("reply STOP if you'd prefer not to hear from us")
 - Professional but not corporate — conversational and human
+- Use 1-3 relevant emojis in the body to make it friendly but not overwhelming
 - Under 250 words total
 
 Return JSON:
