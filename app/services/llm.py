@@ -1,13 +1,25 @@
 import os
 from app.config import settings
 
-def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> str:
+def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None, api_keys: dict = None) -> str:
     """
     Calls the active LLM provider configured by the admin (gemini, openai, claude).
     Gracefully falls back to other configured providers if the active one fails.
     """
     provider = settings.ACTIVE_AI_PROVIDER.lower().strip() if settings.ACTIVE_AI_PROVIDER else "gemini"
     
+    gemini_api_key = (api_keys.get("geminiKey") or api_keys.get("gemini_api_key")) if api_keys else None
+    if not gemini_api_key:
+        gemini_api_key = settings.GEMINI_API_KEY
+
+    openai_api_key = (api_keys.get("openaiKey") or api_keys.get("openai_api_key")) if api_keys else None
+    if not openai_api_key:
+        openai_api_key = settings.OPENAI_API_KEY
+
+    anthropic_api_key = (api_keys.get("anthropicKey") or api_keys.get("anthropic_api_key")) if api_keys else None
+    if not anthropic_api_key:
+        anthropic_api_key = settings.ANTHROPIC_API_KEY
+
     # Establish priority list based on selected provider
     if provider == "openai":
         priority = ["openai", "gemini", "claude"]
@@ -19,11 +31,11 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
     errors = []
     for p in priority:
         if p == "gemini":
-            if not settings.GEMINI_API_KEY:
+            if not gemini_api_key:
                 continue
             try:
                 from google import genai
-                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                client = genai.Client(api_key=gemini_api_key)
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
                     contents=prompt,
@@ -39,12 +51,12 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                 # Fallback to direct HTTP post if google-genai package fails / has issue
                 try:
                     import httpx
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
                     payload = {
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {"maxOutputTokens": max_tokens}
                     }
-                    r = httpx.post(url, json=payload, timeout=30)
+                    r = httpx.post(url, json=payload, timeout=60)
                     if r.status_code == 200:
                         raw = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                         print("\n" + "="*50)
@@ -57,15 +69,10 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                     errors.append(f"Gemini error: {e} | HTTP Fallback error: {inner_e}")
                     
         elif p == "openai":
-            if not settings.OPENAI_API_KEY:
+            if not openai_api_key:
                 continue
             try:
-                import openai
-                client = openai.OpenAI(
-                    api_key=settings.OPENAI_API_KEY,
-                    max_retries=0,
-                    timeout=15.0
-                )
+                import httpx
                 formatted_input = []
                 if system_prompt:
                     formatted_input.append({
@@ -77,12 +84,21 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                     "content": [{"type": "input_text", "text": prompt}]
                 })
                 
-                # Call /responses endpoint via Responses API using client.post
-                response = client.post("/responses", cast_to=dict, body={
+                url = "https://api.openai.com/v1/responses"
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {openai_api_key}"
+                }
+                payload = {
                     "model": "gpt-5.5",
                     "input": formatted_input,
                     "max_output_tokens": max_tokens
-                })
+                }
+                r = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+                if r.status_code != 200:
+                    raise ValueError(f"HTTP {r.status_code}: {r.text}")
+                
+                response = r.json()
                 
                 # Extract text response from Responses API structure
                 content = ""
@@ -92,8 +108,9 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                     for out in response["output"]:
                         if out.get("type") == "message" and isinstance(out.get("content"), list):
                             for item in out["content"]:
-                                if item and item.get("text"):
-                                    content = item["text"]
+                                text_val = item.get("text") or item.get("output_text")
+                                if text_val:
+                                    content = text_val
                                     break
                         if content:
                             break
@@ -101,7 +118,7 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                 content = content.strip() if content else ""
                 if content:
                     print("\n" + "="*50)
-                    print(f"🤖 [AI GENERATED RESPONSE - OPENAI RESPONSES]:\n{content}")
+                    print(f"🤖 [AI GENERATED RESPONSE - OPENAI RESPONSES HTTP]:\n{content}")
                     print("="*50 + "\n")
                     return content
                 else:
@@ -110,11 +127,11 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None) -> 
                 errors.append(f"OpenAI error: {e}")
 
         elif p == "claude":
-            if not settings.ANTHROPIC_API_KEY:
+            if not anthropic_api_key:
                 continue
             try:
                 import anthropic
-                client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                client = anthropic.Anthropic(api_key=anthropic_api_key)
                 model = settings.AI_MODEL if settings.AI_MODEL else "claude-opus-4-6"
                 # Handle system prompt if provided
                 kwargs = {

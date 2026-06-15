@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from pydantic import BaseModel
@@ -821,10 +821,11 @@ class SaveMediaRequest(BaseModel):
 
 
 @app.post("/api/media/save")
-def save_media_image(req: SaveMediaRequest):
+def save_media_image(req: SaveMediaRequest, db: Session = Depends(get_db)):
     import uuid
     import time
     from fastapi import HTTPException
+    from app.models.creator import MediaImage
     
     # Ensure media directory exists
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
@@ -879,11 +880,47 @@ def save_media_image(req: SaveMediaRequest):
         filename = f"prod_{int(time.time())}_{uuid.uuid4().hex[:12]}.{ext}"
         filepath = MEDIA_DIR / filename
         
+        # Save to filesystem
         with open(filepath, "wb") as f:
             f.write(file_bytes)
+            
+        # Save to database for persistence across ephemeral disk restarts
+        content_type = f"image/{ext}" if ext != "jpg" else "image/jpeg"
+        db_image = MediaImage(
+            filename=filename,
+            image_bytes=file_bytes,
+            content_type=content_type
+        )
+        db.add(db_image)
+        db.commit()
             
         return {"url": f"/api/static/media/{filename}"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to save image: {str(e)}")
+
+
+@app.get("/api/static/media/{filename}")
+def serve_media_image(filename: str, db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+    from app.models.creator import MediaImage
+    
+    filepath = MEDIA_DIR / filename
+    if filepath.exists():
+        return FileResponse(str(filepath))
+        
+    # Check database
+    db_image = db.query(MediaImage).filter(MediaImage.filename == filename).first()
+    if not db_image:
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    # Re-cache to disk for fast subsequent accesses
+    try:
+        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(filepath, "wb") as f:
+            f.write(db_image.image_bytes)
+    except Exception as e:
+        print(f"Failed to write image cache to disk: {e}")
+        
+    return Response(content=db_image.image_bytes, media_type=db_image.content_type)
 
 

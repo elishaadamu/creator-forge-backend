@@ -232,7 +232,8 @@ def run_analysis(creator_id: str, actor: str = "internal", db: Session = Depends
         result = analysis_svc.run_ai_analysis(db, creator_id, actor=actor)
         return {"analysis_id": result.id, "summary": result.summary, "score": result.engagement_quality_score}
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code, str(e))
 
 
 class SuppressBody(BaseModel):
@@ -278,7 +279,8 @@ def generate_products(creator_id: str, actor: str = "internal", db: Session = De
         recs = product_recommendation.generate_recommendations(db, creator_id, actor=actor)
         return [_rec_dict(r) for r in recs]
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code, str(e))
 
 
 @router.post("/{creator_id}/pitch-package")

@@ -70,55 +70,57 @@ def generate_recommendations(
         .first()
     )
 
+    # Try to load user profile API keys if actor is a valid username
+    user_keys = None
+    if actor and actor not in ("system", "internal", "agent", "public_user"):
+        from app.models.creator import UserProfile
+        try:
+            user = db.query(UserProfile).filter(UserProfile.username == actor).first()
+            if user and user.ai_keys:
+                user_keys = user.ai_keys
+        except Exception as e:
+            print(f"Error loading user profile keys for {actor}: {e}")
+
+    has_gemini = settings.GEMINI_API_KEY or (user_keys.get("geminiKey") if user_keys else None)
+    has_openai = settings.OPENAI_API_KEY or (user_keys.get("openaiKey") if user_keys else None)
+    has_anthropic = settings.ANTHROPIC_API_KEY or (user_keys.get("anthropicKey") if user_keys else None)
+
+    if not has_gemini and not has_openai and not has_anthropic:
+        raise ValueError("AI API keys not configured. Please add an API key (GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY) in Settings.")
+
     prompt = _build_product_prompt(creator, analysis)
     try:
         from app.services.llm import call_llm
-        raw = call_llm(prompt=prompt, max_tokens=2500)
+        raw = call_llm(prompt=prompt, max_tokens=2500, api_keys=user_keys)
     except Exception as e:
-        print(f"LLM recommendation failed: {e}")
-        raw = None
+        raise ValueError(f"AI recommendation failed: {str(e)}")
 
-    if raw:
-        try:
-            items = json.loads(raw)
-        except json.JSONDecodeError:
-            match = re.search(r"\[.*\]", raw, re.DOTALL)
-            items = json.loads(match.group()) if match else []
+    if not raw:
+        raise ValueError("AI recommendation returned an empty response.")
 
-        recs = []
-        for item in items:
-            rec = ProductRecommendation(
-                creator_id=creator_id,
-                product_name=item.get("product_name", "Unnamed Product"),
-                product_category=item.get("product_category", "other"),
-                tagline=item.get("tagline", ""),
-                description=item.get("description", ""),
-                target_audience=item.get("target_audience", ""),
-                revenue_model=item.get("revenue_model", ""),
-                revenue_potential=item.get("revenue_potential", ""),
-                rationale=item.get("rationale", ""),
-                confidence_score=float(item.get("confidence_score", 0.5)),
-                status="draft",
-            )
-            db.add(rec)
-            recs.append(rec)
-    else:
-        # Fallback stub
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        items = json.loads(match.group()) if match else []
+
+    recs = []
+    for item in items:
         rec = ProductRecommendation(
             creator_id=creator_id,
-            product_name="[Placeholder] Creator's Signature Course",
-            product_category="course",
-            tagline="Learn directly from the expert",
-            description="A course built around this creator's core expertise.",
-            target_audience="The creator's existing audience",
-            revenue_model="One-time purchase + upsells",
-            revenue_potential="$100k-$500k ARR",
-            rationale="AI key not configured — generic placeholder.",
-            confidence_score=0.5,
+            product_name=item.get("product_name", "Unnamed Product"),
+            product_category=item.get("product_category", "other"),
+            tagline=item.get("tagline", ""),
+            description=item.get("description", ""),
+            target_audience=item.get("target_audience", ""),
+            revenue_model=item.get("revenue_model", ""),
+            revenue_potential=item.get("revenue_potential", ""),
+            rationale=item.get("rationale", ""),
+            confidence_score=float(item.get("confidence_score", 0.5)),
             status="draft",
         )
         db.add(rec)
-        recs = [rec]
+        recs.append(rec)
 
     db.commit()
     for r in recs:

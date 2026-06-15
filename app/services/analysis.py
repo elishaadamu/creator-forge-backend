@@ -164,25 +164,23 @@ def run_ai_analysis(
         .all()
     )
 
-    if not settings.ANTHROPIC_API_KEY and not settings.GEMINI_API_KEY and not settings.OPENAI_API_KEY:
-        # Return a placeholder analysis when no API key
-        analysis = Analysis(
-            creator_id=creator_id,
-            analysis_type=analysis_type,
-            engagement_quality_score=creator.engagement_score or 0,
-            brand_safety_score=7.0,
-            content_themes=creator.niche or [],
-            audience_demand_signals={"note": "AI key not configured — manual analysis required"},
-            recommended_niches=creator.niche or [],
-            audience_pain_points=[],
-            summary="AI analysis not available. Configure GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
-            raw_output="",
-            model_used="none",
-        )
-        db.add(analysis)
-        db.commit()
-        db.refresh(analysis)
-        return analysis
+    # Try to load user profile API keys if actor is a valid username
+    user_keys = None
+    if actor and actor not in ("system", "internal", "agent", "public_user"):
+        from app.models.creator import UserProfile
+        try:
+            user = db.query(UserProfile).filter(UserProfile.username == actor).first()
+            if user and user.ai_keys:
+                user_keys = user.ai_keys
+        except Exception as e:
+            print(f"Error loading user profile keys for {actor}: {e}")
+
+    has_gemini = settings.GEMINI_API_KEY or (user_keys.get("geminiKey") if user_keys else None)
+    has_openai = settings.OPENAI_API_KEY or (user_keys.get("openaiKey") if user_keys else None)
+    has_anthropic = settings.ANTHROPIC_API_KEY or (user_keys.get("anthropicKey") if user_keys else None)
+
+    if not has_gemini and not has_openai and not has_anthropic:
+        raise ValueError("AI API keys not configured. Please add an API key (GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY) in Settings.")
 
     prompt = _build_analysis_prompt(creator, samples)
     raw = None
@@ -190,30 +188,12 @@ def run_ai_analysis(
 
     try:
         from app.services.llm import call_llm
-        raw = call_llm(prompt=prompt, max_tokens=2000)
+        raw = call_llm(prompt=prompt, max_tokens=2000, api_keys=user_keys)
     except Exception as e:
-        print(f"LLM analysis failed: {e}")
-        raw = None
+        raise ValueError(f"AI analysis failed: {str(e)}")
 
     if not raw:
-        # Fallback to placeholder if call_llm fails completely
-        analysis = Analysis(
-            creator_id=creator_id,
-            analysis_type=analysis_type,
-            engagement_quality_score=creator.engagement_score or 0,
-            brand_safety_score=7.0,
-            content_themes=creator.niche or [],
-            audience_demand_signals={"note": "AI call failed — manual analysis required"},
-            recommended_niches=creator.niche or [],
-            audience_pain_points=[],
-            summary="AI analysis failed at runtime.",
-            raw_output="",
-            model_used="none",
-        )
-        db.add(analysis)
-        db.commit()
-        db.refresh(analysis)
-        return analysis
+        raise ValueError("AI analysis returned an empty response.")
 
     try:
         data = json.loads(raw)

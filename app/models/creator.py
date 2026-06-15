@@ -4,7 +4,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, DateTime,
-    ForeignKey, Text, Enum as SAEnum, JSON,
+    ForeignKey, Text, Enum as SAEnum, JSON, LargeBinary,
 )
 from sqlalchemy.orm import relationship
 
@@ -272,4 +272,14 @@ class UserProfile(Base):
 
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
+class MediaImage(Base):
+    __tablename__ = "media_images"
+
+    filename = Column(String, primary_key=True)
+    image_bytes = Column(LargeBinary, nullable=False)
+    content_type = Column(String, default="image/png")
+    created_at = Column(DateTime, default=_now)
+
 
