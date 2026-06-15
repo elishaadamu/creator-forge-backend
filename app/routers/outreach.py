@@ -1,4 +1,5 @@
 from typing import Optional
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -219,7 +220,10 @@ def list_messages(
     """List outreach messages. Called by ops dashboard as GET /outreach?status=review_pending"""
     q = db.query(OutreachMessage)
     if status:
-        q = q.filter(OutreachMessage.status == status)
+        if "," in status:
+            q = q.filter(OutreachMessage.status.in_(status.split(",")))
+        else:
+            q = q.filter(OutreachMessage.status == status)
     msgs = q.order_by(OutreachMessage.created_at.desc()).offset(skip).limit(limit).all()
     return [_msg_dict(m) for m in msgs]
 
@@ -275,14 +279,85 @@ def list_threads(status: Optional[str] = None, skip: int = 0, limit: int = 50, d
     return [_thread_dict(t) for t in threads]
 
 
+class SendReplyRequest(BaseModel):
+    body: str
+
+@router.post("/threads/{thread_id}/reply")
+def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "ops_dashboard", db: Session = Depends(get_db)):
+    from app.integrations.email_provider import email_provider
+    from app.config import settings
+    
+    thread = db.get(Thread, thread_id)
+    if not thread:
+        raise HTTPException(404, "Thread not found")
+        
+    # Determine who to send it to
+    # Prefer the from_address of the most recent reply in the thread
+    to_email = None
+    original_subject = ""
+    if thread.replies:
+        to_email = thread.replies[-1].from_address
+        original_subject = thread.replies[-1].subject or ""
+    elif thread.outreach_message and thread.outreach_message.contact:
+        to_email = thread.outreach_message.contact.value
+        original_subject = thread.outreach_message.subject or ""
+    elif thread.creator and thread.creator.email_public:
+        to_email = thread.creator.email_public
+        
+    if not to_email:
+        raise HTTPException(400, "Could not determine recipient email address for this thread.")
+        
+    # Format subject (Re: )
+    subject = original_subject
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+        
+    # Send the email
+    try:
+        email_provider.send(
+            to_email=to_email,
+            subject=subject,
+            body_text=payload.body,
+            body_html=payload.body.replace("\\n", "<br>")
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send reply: {str(e)}")
+        
+    # Save the reply in the DB so it appears in the thread
+    from_address = settings.GOOGLE_EMAIL or settings.FROM_EMAIL
+    
+    reply = Reply(
+        thread_id=thread_id,
+        from_address=from_address,
+        subject=subject,
+        body=payload.body,
+        classification="other",
+        ai_summary="Outgoing reply from you"
+    )
+    db.add(reply)
+    
+    thread.last_activity = datetime.utcnow()
+    db.commit()
+    db.refresh(reply)
+    
+    return {"status": "sent", "reply": _reply_dict(reply)}
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _msg_dict(m: OutreachMessage) -> dict:
     return {
-        "id": m.id, "creator_id": m.creator_id, "campaign_id": m.campaign_id,
-        "contact_id": m.contact_id, "deck_id": m.deck_id,
-        "subject": m.subject, "body": m.body, "send_method": m.send_method,
-        "status": m.status, "reviewed_by": m.reviewed_by,
+        "id": m.id,
+        "creator_id": m.creator_id,
+        "creator_name": m.creator.display_name if m.creator else None,
+        "campaign_id": m.campaign_id,
+        "contact_id": m.contact_id,
+        "deck_id": m.deck_id,
+        "subject": m.subject,
+        "body": m.body,
+        "send_method": m.send_method,
+        "status": m.status,
+        "reviewed_by": m.reviewed_by,
         "review_notes": m.review_notes,
         "sent_at": m.sent_at.isoformat() if m.sent_at else None,
         "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -311,10 +386,26 @@ def _reply_dict(r: Reply) -> dict:
 
 
 def _thread_dict(t: Thread) -> dict:
+    # Include the original outreach message details
+    original_subject = None
+    original_body = None
+    if t.outreach_message:
+        original_subject = t.outreach_message.subject
+        original_body = t.outreach_message.body
+
+    # Include creator name
+    creator_name = None
+    if t.creator:
+        creator_name = t.creator.display_name
+
     return {
         "id": t.id, "creator_id": t.creator_id,
+        "creator_name": creator_name,
         "outreach_message_id": t.outreach_message_id,
+        "original_subject": original_subject,
+        "original_body": original_body,
         "status": t.status,
         "last_activity": t.last_activity.isoformat() if t.last_activity else None,
         "created_at": t.created_at.isoformat() if t.created_at else None,
+        "replies": [_reply_dict(r) for r in (t.replies or [])],
     }

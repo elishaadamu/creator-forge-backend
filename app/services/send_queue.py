@@ -41,6 +41,17 @@ def queue_message(
     # Suppression check
     contact = db.get(Contact, msg.contact_id) if msg.contact_id else None
     email = contact.value if contact and "@" in contact.value else None
+    if not email:
+        fallback_contact = db.query(Contact).filter(
+            Contact.creator_id == msg.creator_id,
+            Contact.contact_type == "email",
+            Contact.is_suppressed == False
+        ).first()
+        if fallback_contact:
+            contact = fallback_contact
+            email = contact.value
+            msg.contact_id = contact.id
+            db.commit()
     if is_suppressed(db, creator_id=msg.creator_id, email=email):
         msg.status = "failed"
         msg.send_error = "Creator or contact is suppressed"
@@ -96,6 +107,17 @@ def send_message(
     # Final suppression check
     contact = db.get(Contact, msg.contact_id) if msg.contact_id else None
     email = contact.value if contact and "@" in contact.value else None
+    if not email:
+        fallback_contact = db.query(Contact).filter(
+            Contact.creator_id == msg.creator_id,
+            Contact.contact_type == "email",
+            Contact.is_suppressed == False
+        ).first()
+        if fallback_contact:
+            contact = fallback_contact
+            email = contact.value
+            msg.contact_id = contact.id
+            db.commit()
     if is_suppressed(db, creator_id=msg.creator_id, email=email):
         msg.status = "failed"
         msg.send_error = "Suppressed at send time"
@@ -103,7 +125,9 @@ def send_message(
         raise ValueError("Suppressed at send time")
 
     try:
-        if msg.send_method == "email" and email:
+        if msg.send_method == "email":
+            if not email:
+                raise ValueError("Cannot send email: Creator has no public email address configured.")
             from app.integrations.email_provider import email_provider
             result = email_provider.send(
                 to_email=email,

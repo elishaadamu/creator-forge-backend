@@ -125,6 +125,30 @@ def generate_outreach_draft(
             f"P.S. Reply STOP if you'd prefer not to hear from us."
         )
 
+    # Resolve contact_id if None
+    if not contact_id:
+        from app.services.contact_discovery import get_contacts_for_creator
+        contacts = get_contacts_for_creator(db, creator_id)
+        email_contacts = [c for c in contacts if c.contact_type == "email" and not c.is_suppressed]
+        if email_contacts:
+            contact_id = email_contacts[0].id
+        elif creator.email_public:
+            from app.services.contact_discovery import add_contact
+            try:
+                c = add_contact(
+                    db,
+                    creator_id=creator_id,
+                    contact_type="email",
+                    value=creator.email_public,
+                    source="public_profile",
+                    actor=actor,
+                )
+                contact_id = c.id
+            except Exception as e:
+                print(f"[OUTREACH DRAFT WARNING] Failed to auto-create contact from email_public: {e}")
+        elif contacts:
+            contact_id = contacts[0].id
+
     msg = OutreachMessage(
         creator_id=creator_id,
         campaign_id=campaign_id,
@@ -151,7 +175,7 @@ def submit_for_review(db: Session, message_id: str, actor: str = "system") -> Ou
     msg = db.get(OutreachMessage, message_id)
     if not msg:
         raise ValueError("Message not found")
-    if msg.status != "draft":
+    if msg.status not in ("draft", "rejected", "failed"):
         raise ValueError(f"Message is {msg.status}, cannot submit for review")
     msg.status = "review_pending"
     msg.updated_at = datetime.utcnow()
@@ -173,7 +197,7 @@ def update_draft(
     msg = db.get(OutreachMessage, message_id)
     if not msg:
         raise ValueError("Message not found")
-    if msg.status not in ("draft", "review_pending"):
+    if msg.status not in ("draft", "review_pending", "rejected", "failed"):
         raise ValueError(f"Cannot edit message in status: {msg.status}")
     if subject:
         msg.subject = subject

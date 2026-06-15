@@ -34,10 +34,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import asyncio
+from app.services.inbox_poller import start_poller_loop, stop_poller_loop
+
 # ── Database init ────────────────────────────────────────────────────────────
 @app.on_event("startup")
-def startup():
+async def startup():
     init_db()
+    # Start the IMAP poller loop in the background
+    asyncio.create_task(start_poller_loop(interval_seconds=60))
+
+@app.on_event("shutdown")
+def shutdown():
+    stop_poller_loop()
 
 
 # ── Static files + templates (only mount if the directory exists) ─────────────

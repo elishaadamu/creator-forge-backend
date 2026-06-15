@@ -56,8 +56,7 @@ class EmailProvider:
 
         try:
             # Connect and send via Gmail SMTP
-            server = smtplib.SMTP("smtp.gmail.com", 587)
-            server.starttls()
+            server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
             server.login(smtp_user, smtp_password)
             server.sendmail(smtp_user, to_email, msg.as_string())
             server.quit()
