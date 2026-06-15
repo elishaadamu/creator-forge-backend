@@ -13,6 +13,7 @@ from app.routers import (
     public_portal, content_calendar
 )
 from app.routers import agent as agent_router
+from app.routers import auth as auth_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -70,6 +71,7 @@ app.include_router(audit.router)
 app.include_router(agent_router.router)
 app.include_router(public_portal.router)
 app.include_router(content_calendar.router)
+app.include_router(auth_router.router)
 
 
 # ── Analytics alias (/api/analytics/summary used by ops CampaignStats) ──────

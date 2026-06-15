@@ -37,7 +37,55 @@ class InstagramIntegration(BasePlatformIntegration):
         if not self.is_configured():
             raise IntegrationNotConfiguredError("INSTAGRAM_ACCESS_TOKEN not set")
         # Extract from biography field and website field only
-        return {}
+        return {}    async def publish_post(self, access_token: str, business_id: str, caption: str, media_url: str = None) -> str:
+        """
+        Publish an image post to Instagram Graph API.
+        1. Create media container: POST /{business_id}/media
+        2. Publish container: POST /{business_id}/media_publish
+        """
+        import httpx
+        if not access_token or not business_id:
+            raise ValueError("Instagram credentials (access token and business ID) are required.")
+
+        # Default fallback image if none provided (premium abstract graphic)
+        if not media_url:
+            media_url = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop"
+
+        # Step 1: Create media container
+        container_url = f"https://graph.facebook.com/v21.0/{business_id}/media"
+        container_data = {
+            "image_url": media_url,
+            "caption": caption,
+            "access_token": access_token
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(container_url, data=container_data)
+            resp_data = resp.json()
+
+        if "error" in resp_data:
+            raise Exception(f"Instagram container creation failed: {resp_data['error'].get('message')}")
+
+        creation_id = resp_data.get("id")
+        if not creation_id:
+            raise Exception("No creation ID returned from Instagram API.")
+
+        # Step 2: Publish media container
+        publish_url = f"https://graph.facebook.com/v21.0/{business_id}/media_publish"
+        publish_data = {
+            "creation_id": creation_id,
+            "access_token": access_token
+        }
+
+        async with httpx.AsyncClient() as client:
+            pub_resp = await client.post(publish_url, data=publish_data)
+            pub_resp_data = pub_resp.json()
+
+        if "error" in pub_resp_data:
+            raise Exception(f"Instagram media publish failed: {pub_resp_data['error'].get('message')}")
+
+        return pub_resp_data.get("id")
 
 
 instagram = InstagramIntegration()
+

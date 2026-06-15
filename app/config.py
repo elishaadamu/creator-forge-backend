@@ -50,6 +50,12 @@ class Settings:
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
     INSTAGRAM_ACCESS_TOKEN: str = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
     TIKTOK_API_KEY: str = os.getenv("TIKTOK_API_KEY", "")
+    
+    # Meta (Instagram) OAuth
+    META_CLIENT_ID: str = os.getenv("META_CLIENT_ID", "YOUR_META_APP_ID_HERE")
+    META_CLIENT_SECRET: str = os.getenv("META_CLIENT_SECRET", "YOUR_META_APP_SECRET_HERE")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "")
+    REDIRECT_URI: str = os.getenv("REDIRECT_URI", "")
 
     # Apify — enables accurate scraping for Instagram & TikTok
     APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
