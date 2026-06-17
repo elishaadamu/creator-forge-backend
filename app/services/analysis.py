@@ -147,6 +147,7 @@ def run_ai_analysis(
     creator_id: str,
     analysis_type: str = "overall",
     actor: str = "system",
+    custom_keys: Optional[dict] = None,
 ) -> Analysis:
     """
     Runs AI analysis on a creator using their profile + content samples.
@@ -165,8 +166,8 @@ def run_ai_analysis(
     )
 
     # Try to load user profile API keys if actor is a valid username
-    user_keys = None
-    if actor and actor not in ("system", "internal", "agent", "public_user"):
+    user_keys = custom_keys
+    if not user_keys and actor and actor not in ("system", "internal", "agent", "public_user"):
         from app.models.creator import UserProfile
         try:
             user = db.query(UserProfile).filter(UserProfile.username == actor).first()

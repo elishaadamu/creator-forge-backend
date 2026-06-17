@@ -58,6 +58,7 @@ def generate_recommendations(
     db: Session,
     creator_id: str,
     actor: str = "system",
+    custom_keys: Optional[dict] = None,
 ) -> list[ProductRecommendation]:
     creator = db.get(Creator, creator_id)
     if not creator:
@@ -71,8 +72,8 @@ def generate_recommendations(
     )
 
     # Try to load user profile API keys if actor is a valid username
-    user_keys = None
-    if actor and actor not in ("system", "internal", "agent", "public_user"):
+    user_keys = custom_keys
+    if not user_keys and actor and actor not in ("system", "internal", "agent", "public_user"):
         from app.models.creator import UserProfile
         try:
             user = db.query(UserProfile).filter(UserProfile.username == actor).first()

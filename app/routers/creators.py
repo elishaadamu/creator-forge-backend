@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -199,7 +199,15 @@ def qualify_creator(
 
 
 @router.post("/{creator_id}/analyze")
-def run_analysis(creator_id: str, actor: str = "internal", db: Session = Depends(get_db)):
+def run_analysis(
+    creator_id: str,
+    actor: str = "internal",
+    x_gemini_key: Optional[str] = Header(None),
+    x_openai_key: Optional[str] = Header(None),
+    x_anthropic_key: Optional[str] = Header(None),
+    x_together_key: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
     from app.services.scraper import scrape_profile
 
     creator = db.get(Creator, creator_id)
@@ -228,8 +236,18 @@ def run_analysis(creator_id: str, actor: str = "internal", db: Session = Depends
         except Exception:
             pass  # continue with whatever data we have
 
+    custom_keys = {}
+    if x_gemini_key:
+        custom_keys["geminiKey"] = x_gemini_key
+    if x_openai_key:
+        custom_keys["openaiKey"] = x_openai_key
+    if x_anthropic_key:
+        custom_keys["anthropicKey"] = x_anthropic_key
+    if x_together_key:
+        custom_keys["togetherKey"] = x_together_key
+
     try:
-        result = analysis_svc.run_ai_analysis(db, creator_id, actor=actor)
+        result = analysis_svc.run_ai_analysis(db, creator_id, actor=actor, custom_keys=custom_keys or None)
         return {"analysis_id": result.id, "summary": result.summary, "score": result.engagement_quality_score}
     except ValueError as e:
         status_code = 404 if "not found" in str(e).lower() else 400
@@ -274,9 +292,29 @@ def delete_creator(
 
 
 @router.post("/{creator_id}/recommend")
-def generate_products(creator_id: str, actor: str = "internal", db: Session = Depends(get_db)):
+def generate_products(
+    creator_id: str,
+    actor: str = "internal",
+    x_gemini_key: Optional[str] = Header(None),
+    x_openai_key: Optional[str] = Header(None),
+    x_anthropic_key: Optional[str] = Header(None),
+    x_together_key: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    custom_keys = {}
+    if x_gemini_key:
+        custom_keys["geminiKey"] = x_gemini_key
+    if x_openai_key:
+        custom_keys["openaiKey"] = x_openai_key
+    if x_anthropic_key:
+        custom_keys["anthropicKey"] = x_anthropic_key
+    if x_together_key:
+        custom_keys["togetherKey"] = x_together_key
+
     try:
-        recs = product_recommendation.generate_recommendations(db, creator_id, actor=actor)
+        recs = product_recommendation.generate_recommendations(
+            db, creator_id, actor=actor, custom_keys=custom_keys or None
+        )
         return [_rec_dict(r) for r in recs]
     except ValueError as e:
         status_code = 404 if "not found" in str(e).lower() else 400
