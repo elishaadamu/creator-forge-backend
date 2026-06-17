@@ -37,7 +37,9 @@ def scrape_youtube(handle: str) -> dict:
     """
     from app.config import settings
     handle = handle.strip()
-    if handle.startswith(("channel/", "c/", "user/", "@")):
+    if handle.startswith("UC") and len(handle) == 24:
+        url = f"https://www.youtube.com/channel/{handle}"
+    elif handle.startswith(("channel/", "c/", "user/", "@")):
         url = f"https://www.youtube.com/{handle}"
     else:
         url = f"https://www.youtube.com/@{handle}"
@@ -431,6 +433,46 @@ def scrape_tiktok(handle: str) -> dict:
     return result
 
 
+def scrape_twitter(handle: str) -> dict:
+    """Twitter/X scrape — uses Apify when key is configured."""
+    from app.config import settings
+    handle = handle.lstrip("@").strip()
+    url = f"https://x.com/{handle}"
+    result = {
+        "handle": handle, "platform": "twitter", "profile_url": url,
+        "display_name": handle, "bio": "", "avatar_url": "",
+        "follower_count": 0, "niche": [], "email_public": "",
+        "website": "", "social_links": [],
+    }
+
+    if settings.APIFY_API_KEY:
+        try:
+            items = _apify_run(
+                "apify/twitter-scraper",
+                {
+                    "twitterHandles": [handle],
+                    "maxItems": 20,
+                    "addUserInfo": True,
+                    "includeUserData": True
+                },
+                settings.APIFY_API_KEY,
+            )
+            if items:
+                item = items[0]
+                user = item.get("author") or item.get("user") or (item if item.get("userName") else None)
+                if user:
+                    username = user.get("userName") or user.get("screen_name") or handle
+                    result["display_name"] = user.get("name") or user.get("displayName") or username
+                    result["bio"] = user.get("description") or user.get("bio") or ""
+                    result["follower_count"] = user.get("followers") or user.get("followersCount") or 0
+                    avatar_raw = user.get("profilePicture") or user.get("profile_image_url_https") or user.get("avatarUrl") or ""
+                    result["avatar_url"] = avatar_raw.replace("_normal", "_400x400") if avatar_raw else ""
+            return result
+        except Exception as e:
+            result["error"] = f"Apify: {e}"
+    return result
+
+
 def scrape_profile(platform: str, handle: str) -> dict:
     """Dispatch to correct scraper."""
     if platform == "youtube":
@@ -439,5 +481,8 @@ def scrape_profile(platform: str, handle: str) -> dict:
         return scrape_instagram(handle)
     elif platform == "tiktok":
         return scrape_tiktok(handle)
+    elif platform == "twitter":
+        return scrape_twitter(handle)
     else:
         return {"error": f"No scraper for platform: {platform}", "handle": handle, "platform": platform}
+
