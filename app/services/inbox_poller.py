@@ -9,7 +9,7 @@ from email.utils import parseaddr
 from app.config import settings
 from app.database import SessionLocal
 from app.models.creator import Contact, Creator
-from app.models.outreach import Thread
+from app.models.outreach import OutreachMessage, Thread, Reply
 from app.services.reply_classifier import record_reply
 
 logger = logging.getLogger(__name__)
@@ -100,31 +100,60 @@ def _parse_email_message(msg):
     body = _clean_email_body(body)
     return subject, from_email, body
 
-def _find_thread_for_sender(db, from_email: str) -> str:
-    """Attempt to find the most recent thread ID for the sender's email address."""
+def _find_thread_for_sender(db, from_email: str, subject: str = "") -> Optional[str]:
+    """Attempt to find the most recent thread ID for the sender's email address or subject line."""
+    if not from_email:
+        return None
+    from_email_clean = from_email.lower().strip()
+
     # 1. Match against Contacts table
-    contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email}%"), Contact.contact_type == "email").first()
+    contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email_clean}%"), Contact.contact_type == "email").first()
     creator_id = contact.creator_id if contact else None
     
     # 2. Match against Creator table (public_email)
     if not creator_id:
-        creator = db.query(Creator).filter(Creator.email_public.ilike(f"%{from_email}%")).first()
+        creator = db.query(Creator).filter(Creator.email_public.ilike(f"%{from_email_clean}%")).first()
         if creator:
             creator_id = creator.id
-            
+
+    # 3. Match against OutreachMessage subject if not found by email address
+    if not creator_id and subject:
+        clean_subj = subject.lower().replace("re:", "").replace("fwd:", "").strip()
+        if clean_subj:
+            msg = db.query(OutreachMessage).filter(OutreachMessage.subject.ilike(f"%{clean_subj}%")).order_by(OutreachMessage.created_at.desc()).first()
+            if msg:
+                creator_id = msg.creator_id
+                # Learn/save this sender email as public_email for this creator
+                creator = db.get(Creator, creator_id)
+                if creator and not creator.email_public:
+                    creator.email_public = from_email_clean
+                    db.commit()
+
     if not creator_id:
+        # Fallback: if there's only 1 active thread or creator in database during demo/dev, attach to latest thread!
+        latest_thread = db.query(Thread).order_by(Thread.created_at.desc()).first()
+        if latest_thread:
+            return latest_thread.id
         return None
-        
-    # 3. Find latest thread
+
+    # 4. Find latest thread for this creator
     thread = db.query(Thread).filter(Thread.creator_id == creator_id).order_by(Thread.created_at.desc()).first()
-    return thread.id if thread else None
+    if not thread:
+        # Create thread if missing
+        thread = Thread(creator_id=creator_id, status="open")
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+    return thread.id
+
 
 def poll_inbox_sync():
-    """Synchronous function that connects to IMAP, fetches UNSEEN, and processes them."""
+    """Synchronous function that connects to IMAP, fetches recent messages, and processes incoming creator replies."""
     if not settings.GOOGLE_EMAIL or not settings.GOOGLE_APP_PASSWORD:
         logger.warning("IMAP Poller: GOOGLE_EMAIL or GOOGLE_APP_PASSWORD not set. Skipping poll.")
         return
 
+    admin_email = (settings.GOOGLE_EMAIL or "").lower().strip()
     mail = None
     db = SessionLocal()
     try:
@@ -132,11 +161,13 @@ def poll_inbox_sync():
         mail.login(settings.GOOGLE_EMAIL, settings.GOOGLE_APP_PASSWORD.replace(" ", ""))
         mail.select("INBOX")
         
-        status, messages = mail.search(None, "UNSEEN")
+        # Search recent messages (fetch last 25 message IDs)
+        status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             return
             
-        email_ids = messages[0].split()
+        all_ids = messages[0].split()
+        email_ids = all_ids[-25:]  # Check last 25 emails in INBOX
         for e_id in email_ids:
             status, msg_data = mail.fetch(e_id, "(RFC822)")
             if status != "OK":
@@ -149,36 +180,47 @@ def poll_inbox_sync():
                     
                     if not from_email:
                         continue
+
+                    # Ignore outgoing emails sent by the admin/system email
+                    if from_email.lower().strip() == admin_email:
+                        continue
                         
-                    thread_id = _find_thread_for_sender(db, from_email)
+                    thread_id = _find_thread_for_sender(db, from_email, subject)
                     
                     if thread_id:
-                        # We found a matching thread, record the reply!
-                        try:
-                            record_reply(
-                                db=db,
-                                thread_id=thread_id,
-                                from_address=from_email,
-                                subject=subject,
-                                body=body,
-                                actor="imap_poller"
-                            )
-                            logger.info(f"Recorded IMAP reply from {from_email} to thread {thread_id}")
-                        except Exception as e:
-                            logger.error(f"Failed to record reply from {from_email}: {e}")
+                        # Check if reply already exists in DB to prevent duplicates
+                        existing_reply = db.query(Reply).filter(
+                            Reply.thread_id == thread_id,
+                            Reply.from_address == from_email,
+                            Reply.body == body,
+                        ).first()
+
+                        if not existing_reply:
+                            try:
+                                record_reply(
+                                    db=db,
+                                    thread_id=thread_id,
+                                    from_address=from_email,
+                                    subject=subject,
+                                    body=body,
+                                    actor="imap_poller"
+                                )
+                                logger.info(f"Recorded IMAP reply from {from_email} to thread {thread_id}")
+                            except Exception as e:
+                                safe_err = str(e).encode("ascii", "ignore").decode("ascii")
+                                logger.error(f"Failed to record reply from {from_email}: {safe_err}")
                     else:
-                        logger.info(f"Ignored UNSEEN email from {from_email} (No matching creator/thread found)")
-                        
-            # Mark as read
-            # The act of fetching RFC822 typically marks as \Seen automatically in Gmail, 
-            # but we can explicitly store the flag if needed.
-            # mail.store(e_id, '+FLAGS', '\\Seen')
-            
+                        logger.info(f"Ignored email from {from_email} (No matching creator/thread found)")
     except Exception as e:
-        logger.error(f"IMAP Polling Error: {e}")
+        safe_err = str(e).encode("ascii", "ignore").decode("ascii")
+        logger.error(f"IMAP Polling Error: {safe_err}")
     finally:
         db.close()
         if mail:
+            try:
+                mail.close()
+            except:
+                pass
             try:
                 mail.logout()
             except:

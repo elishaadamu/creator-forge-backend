@@ -268,7 +268,52 @@ def patch_message(message_id: str, body: PatchDraft, actor: str = "ops_dashboard
         raise HTTPException(400, str(e))
 
 
+@router.delete("/{message_id}")
+@router.delete("/messages/{message_id}")
+def delete_message(message_id: str, db: Session = Depends(get_db)):
+    """Delete an outreach message and its associated thread if any."""
+    msg = db.get(OutreachMessage, message_id)
+    if not msg:
+        raise HTTPException(404, "Message not found")
+    
+    # Delete associated thread & replies if any
+    threads = db.query(Thread).filter(Thread.outreach_message_id == message_id).all()
+    for t in threads:
+        db.query(Reply).filter(Reply.thread_id == t.id).delete(synchronize_session=False)
+        db.query(FollowUp).filter(FollowUp.thread_id == t.id).delete(synchronize_session=False)
+        db.delete(t)
+        
+    db.delete(msg)
+    db.commit()
+    return {"status": "deleted", "id": message_id}
+
+
 # ── Threads ──────────────────────────────────────────────────────────────────
+
+@router.delete("/threads/{thread_id}")
+def delete_thread(thread_id: str, db: Session = Depends(get_db)):
+    """Delete a thread and its replies."""
+    thread = db.get(Thread, thread_id)
+    if not thread:
+        raise HTTPException(404, "Thread not found")
+
+    db.query(Reply).filter(Reply.thread_id == thread_id).delete(synchronize_session=False)
+    db.query(FollowUp).filter(FollowUp.thread_id == thread_id).delete(synchronize_session=False)
+    db.delete(thread)
+    db.commit()
+    return {"status": "deleted", "id": thread_id}
+
+
+@router.delete("/replies/{reply_id}")
+def delete_reply_endpoint(reply_id: str, db: Session = Depends(get_db)):
+    """Delete an individual reply message."""
+    reply = db.get(Reply, reply_id)
+    if not reply:
+        raise HTTPException(404, "Reply not found")
+    db.delete(reply)
+    db.commit()
+    return {"status": "deleted", "id": reply_id}
+
 
 @router.get("/threads")
 def list_threads(status: Optional[str] = None, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
