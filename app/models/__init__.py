@@ -3,7 +3,9 @@ from app.models.creator import (  # noqa: F401
     Contact, ProductRecommendation, Deck, PostSuggestion, Partnership,
 )
 from app.models.campaign import Campaign  # noqa: F401
+from app.models.autonomous_campaign import AutonomousCampaign  # noqa: F401
 from app.models.outreach import (  # noqa: F401
     OutreachMessage, Thread, FollowUp, Reply, SuppressionList,
 )
 from app.models.audit import Review, AuditLog  # noqa: F401
+

@@ -46,6 +46,30 @@ def create_or_get_creator(
         .first()
     )
     if existing:
+        from app.services.send_queue import is_real_valid_email
+        from app.models.creator import Contact
+        updated = False
+        if email_public and is_real_valid_email(email_public) and not existing.email_public:
+            existing.email_public = email_public.strip()
+            updated = True
+        if display_name and existing.display_name == existing.handle:
+            existing.display_name = display_name
+            updated = True
+        if avatar_url and not existing.avatar_url:
+            existing.avatar_url = avatar_url
+            updated = True
+        if bio and not existing.bio:
+            existing.bio = bio
+            updated = True
+        if updated:
+            db.commit()
+            db.refresh(existing)
+        if existing.email_public and is_real_valid_email(existing.email_public):
+            contact = db.query(Contact).filter(Contact.creator_id == existing.id, Contact.contact_type == "email").first()
+            if not contact:
+                contact = Contact(creator_id=existing.id, contact_type="email", value=existing.email_public, source="discovery_update")
+                db.add(contact)
+                db.commit()
         return existing, False
 
     # Check suppression before adding
@@ -75,6 +99,12 @@ def create_or_get_creator(
     db.add(creator)
     db.commit()
     db.refresh(creator)
+
+    if creator.email_public and is_real_valid_email(creator.email_public):
+        from app.models.creator import Contact
+        contact = Contact(creator_id=creator.id, contact_type="email", value=creator.email_public, source="discovery")
+        db.add(contact)
+        db.commit()
 
     audit_svc.log(
         db, action="creator_discovered", entity_type="creator",

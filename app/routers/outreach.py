@@ -118,7 +118,7 @@ def send(message_id: str, actor: str = "internal", db: Session = Depends(get_db)
         msg = db.get(OutreachMessage, message_id)
         if not msg:
             raise HTTPException(404, "Message not found")
-        if msg.status == "approved":
+        if msg.status in ("approved", "failed", "queued", "review_pending", "draft"):
             queue_message(db, message_id, actor)
         msg = send_message(db, message_id, actor)
         return _msg_dict(msg)
@@ -281,34 +281,67 @@ def list_threads(status: Optional[str] = None, skip: int = 0, limit: int = 50, d
 
 class SendReplyRequest(BaseModel):
     body: str
+    to_email: Optional[str] = None
 
 @router.post("/threads/{thread_id}/reply")
 def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "ops_dashboard", db: Session = Depends(get_db)):
     from app.integrations.email_provider import email_provider
     from app.config import settings
+    from app.services.autonomous_outreach import is_real_valid_email
+    from app.models.creator import Contact
     
     thread = db.get(Thread, thread_id)
     if not thread:
         raise HTTPException(404, "Thread not found")
         
-    # Determine who to send it to
-    # Prefer the from_address of the most recent reply in the thread
+    admin_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "").lower().strip()
     to_email = None
     original_subject = ""
-    if thread.replies:
-        to_email = thread.replies[-1].from_address
-        original_subject = thread.replies[-1].subject or ""
-    elif thread.outreach_message and thread.outreach_message.contact:
-        to_email = thread.outreach_message.contact.value
-        original_subject = thread.outreach_message.subject or ""
-    elif thread.creator and thread.creator.email_public:
-        to_email = thread.creator.email_public
+
+    # 0. Override from payload if user provided a recipient email explicitly
+    if payload.to_email and is_real_valid_email(payload.to_email):
+        to_email = payload.to_email.strip()
+
+    # 1. Prefer incoming replies from creator (not admin)
+    if not to_email and thread.replies:
+        for r in reversed(thread.replies):
+            if r.from_address and r.from_address.lower().strip() != admin_email and is_real_valid_email(r.from_address):
+                to_email = r.from_address.strip()
+                original_subject = r.subject or ""
+                break
+
+    # 2. Fallback to thread's creator public_email
+    if not to_email and thread.creator and is_real_valid_email(thread.creator.email_public):
+        to_email = thread.creator.email_public.strip()
+
+    # 3. Fallback to thread's outreach message contact
+    if not to_email and thread.outreach_message:
+        if thread.outreach_message.contact and is_real_valid_email(thread.outreach_message.contact.value):
+            to_email = thread.outreach_message.contact.value.strip()
+        if not original_subject:
+            original_subject = thread.outreach_message.subject or ""
+
+    # 4. Fallback to any Contact associated with creator
+    if not to_email and thread.creator_id:
+        contact = db.query(Contact).filter(Contact.creator_id == thread.creator_id, Contact.contact_type == "email").first()
+        if contact and is_real_valid_email(contact.value):
+            to_email = contact.value.strip()
         
-    if not to_email:
-        raise HTTPException(400, "Could not determine recipient email address for this thread.")
+    if not to_email or not is_real_valid_email(to_email):
+        raise HTTPException(400, "Could not determine recipient email address for this thread. Please specify a valid recipient email address.")
+
+    # Save to creator's public_email if creator email was missing/not set
+    if thread.creator:
+        if not thread.creator.email_public:
+            thread.creator.email_public = to_email
+        contact = db.query(Contact).filter(Contact.creator_id == thread.creator_id, Contact.contact_type == "email").first()
+        if not contact:
+            contact = Contact(creator_id=thread.creator_id, contact_type="email", value=to_email, source="reply_form")
+            db.add(contact)
+        db.commit()
         
     # Format subject (Re: )
-    subject = original_subject
+    subject = original_subject or "Re: Co-founder partnership inquiry"
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
         
@@ -318,7 +351,7 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
             to_email=to_email,
             subject=subject,
             body_text=payload.body,
-            body_html=payload.body.replace("\\n", "<br>")
+            body_html=payload.body.replace("\n", "<br>")
         )
     except Exception as e:
         raise HTTPException(500, f"Failed to send reply: {str(e)}")
@@ -340,16 +373,25 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
     db.commit()
     db.refresh(reply)
     
-    return {"status": "sent", "reply": _reply_dict(reply)}
+    return {"status": "sent", "recipient_email": to_email, "reply": _reply_dict(reply)}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _msg_dict(m: OutreachMessage) -> dict:
+    creator_name = None
+    creator_email = None
+    if m.creator:
+        creator_name = m.creator.display_name or m.creator.handle
+        creator_email = m.creator.email_public
+    if not creator_email and m.contact:
+        creator_email = m.contact.value
+
     return {
         "id": m.id,
         "creator_id": m.creator_id,
-        "creator_name": m.creator.display_name if m.creator else None,
+        "creator_name": creator_name,
+        "creator_email": creator_email,
         "campaign_id": m.campaign_id,
         "contact_id": m.contact_id,
         "deck_id": m.deck_id,
@@ -357,6 +399,7 @@ def _msg_dict(m: OutreachMessage) -> dict:
         "body": m.body,
         "send_method": m.send_method,
         "status": m.status,
+        "send_error": m.send_error,
         "reviewed_by": m.reviewed_by,
         "review_notes": m.review_notes,
         "sent_at": m.sent_at.isoformat() if m.sent_at else None,
@@ -386,6 +429,9 @@ def _reply_dict(r: Reply) -> dict:
 
 
 def _thread_dict(t: Thread) -> dict:
+    from app.services.autonomous_outreach import is_real_valid_email
+    from app.config import settings
+
     # Include the original outreach message details
     original_subject = None
     original_body = None
@@ -393,14 +439,38 @@ def _thread_dict(t: Thread) -> dict:
         original_subject = t.outreach_message.subject
         original_body = t.outreach_message.body
 
-    # Include creator name
+    # Include creator name & email
     creator_name = None
+    creator_handle = None
+    creator_email = None
+    creator_avatar = None
     if t.creator:
-        creator_name = t.creator.display_name
+        creator_name = t.creator.display_name or t.creator.handle
+        creator_handle = t.creator.handle
+        creator_email = t.creator.email_public
+        creator_avatar = t.creator.avatar_url
+    if not creator_email and t.outreach_message and t.outreach_message.contact:
+        creator_email = t.outreach_message.contact.value
+
+    recipient_email = None
+    admin_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "").lower().strip()
+    if t.replies:
+        for r in reversed(t.replies):
+            if r.from_address and r.from_address.lower().strip() != admin_email and is_real_valid_email(r.from_address):
+                recipient_email = r.from_address.strip()
+                break
+
+    if not recipient_email:
+        recipient_email = creator_email
 
     return {
-        "id": t.id, "creator_id": t.creator_id,
+        "id": t.id,
+        "creator_id": t.creator_id,
         "creator_name": creator_name,
+        "creator_handle": creator_handle,
+        "creator_email": creator_email,
+        "recipient_email": recipient_email,
+        "creator_avatar": creator_avatar,
         "outreach_message_id": t.outreach_message_id,
         "original_subject": original_subject,
         "original_body": original_body,

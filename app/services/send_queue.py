@@ -17,10 +17,23 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.campaign import Campaign
-from app.models.creator import Contact
+from app.models.creator import Creator, Contact
 from app.models.outreach import OutreachMessage, Thread, SuppressionList
 from app.services import audit as audit_svc
 from app.services.suppression import is_suppressed, add_suppression
+
+
+def is_real_valid_email(email_str: Optional[str]) -> bool:
+    """Validate that email is not empty, missing @/., or a dummy @example.com domain."""
+    if not email_str or not isinstance(email_str, str):
+        return False
+    email_clean = email_str.strip().lower()
+    if "@" not in email_clean or "." not in email_clean:
+        return False
+    invalid_domains = ["example.com", "example.org", "example.net", "test.com", "placeholder.com"]
+    if any(domain in email_clean for domain in invalid_domains):
+        return False
+    return True
 
 
 def queue_message(
@@ -35,19 +48,28 @@ def queue_message(
     msg = db.get(OutreachMessage, message_id)
     if not msg:
         raise ValueError("Message not found")
-    if msg.status != "approved":
-        raise ValueError(f"Message must be approved before queuing (current: {msg.status})")
+    if msg.status not in ("approved", "failed", "queued", "review_pending", "draft"):
+        raise ValueError(f"Message status '{msg.status}' cannot be queued.")
+    msg.send_error = None
 
-    # Suppression check
+    # Suppression check & email resolution
+    creator = db.get(Creator, msg.creator_id) if msg.creator_id else None
+    email = None
+    if creator and is_real_valid_email(creator.email_public):
+        email = creator.email_public.strip()
+
     contact = db.get(Contact, msg.contact_id) if msg.contact_id else None
-    email = contact.value if contact and "@" in contact.value else None
+    if contact and is_real_valid_email(contact.value):
+        if not email:
+            email = contact.value.strip()
+
     if not email:
         fallback_contact = db.query(Contact).filter(
             Contact.creator_id == msg.creator_id,
             Contact.contact_type == "email",
             Contact.is_suppressed == False
         ).first()
-        if fallback_contact:
+        if fallback_contact and is_real_valid_email(fallback_contact.value):
             contact = fallback_contact
             email = contact.value
             msg.contact_id = contact.id
@@ -104,20 +126,29 @@ def send_message(
     if msg.status != "queued":
         raise ValueError(f"Message must be queued to send (current: {msg.status})")
 
-    # Final suppression check
+    # Resolve real public email address
+    creator = db.get(Creator, msg.creator_id) if msg.creator_id else None
+    email = None
+    if creator and is_real_valid_email(creator.email_public):
+        email = creator.email_public.strip()
+
     contact = db.get(Contact, msg.contact_id) if msg.contact_id else None
-    email = contact.value if contact and "@" in contact.value else None
+    if contact and is_real_valid_email(contact.value):
+        if not email:
+            email = contact.value.strip()
+
     if not email:
         fallback_contact = db.query(Contact).filter(
             Contact.creator_id == msg.creator_id,
             Contact.contact_type == "email",
             Contact.is_suppressed == False
         ).first()
-        if fallback_contact:
+        if fallback_contact and is_real_valid_email(fallback_contact.value):
             contact = fallback_contact
             email = contact.value
             msg.contact_id = contact.id
             db.commit()
+
     if is_suppressed(db, creator_id=msg.creator_id, email=email):
         msg.status = "failed"
         msg.send_error = "Suppressed at send time"
@@ -126,8 +157,8 @@ def send_message(
 
     try:
         if msg.send_method == "email":
-            if not email:
-                raise ValueError("Cannot send email: Creator has no public email address configured.")
+            if not email or not is_real_valid_email(email):
+                raise ValueError("Cannot send email: Creator has no valid public email address in database (dummy @example.com skipped).")
             from app.integrations.email_provider import email_provider
             result = email_provider.send(
                 to_email=email,

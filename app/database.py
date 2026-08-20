@@ -1,13 +1,20 @@
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from app.config import settings
+from app.config import settings, BASE_DIR
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
-    echo=settings.DEBUG,
-)
+try:
+    engine = create_engine(
+        settings.DATABASE_URL,
+        connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
+        echo=settings.DEBUG,
+    )
+except Exception as _e:
+    print(f"[DB INIT] PostgreSQL driver/connection error: {_e}. Falling back to local SQLite database.")
+    fallback_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
+    engine = create_engine(fallback_url, connect_args={"check_same_thread": False}, echo=settings.DEBUG)
+
+
 
 @event.listens_for(engine, "before_cursor_execute")
 def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):

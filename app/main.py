@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import init_db
 from app.routers import (
     creators, discovery, outreach, campaigns, decks, suppression, analytics, audit,
-    public_portal, content_calendar
+    public_portal, content_calendar, autonomous
 )
 from app.routers import agent as agent_router
 from app.routers import auth as auth_router
@@ -27,6 +27,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
         "https://creator-forge-frontend.vercel.app",
     ],
     allow_origin_regex="https://.*\\.vercel\\.app",
@@ -37,17 +39,23 @@ app.add_middleware(
 
 import asyncio
 from app.services.inbox_poller import start_poller_loop, stop_poller_loop
+from app.services.autonomous_outreach import start_autonomous_scheduler_loop, stop_autonomous_scheduler_loop
 
 # ── Database init ────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup():
     init_db()
+    # Ensure autonomous table is registered
+    from app.models.autonomous_campaign import AutonomousCampaign
     # Start the IMAP poller loop in the background
     asyncio.create_task(start_poller_loop(interval_seconds=60))
+    # Start the Autonomous Outreach Scheduler loop in the background
+    asyncio.create_task(start_autonomous_scheduler_loop(interval_hours=24))
 
 @app.on_event("shutdown")
 def shutdown():
     stop_poller_loop()
+    stop_autonomous_scheduler_loop()
 
 
 # ── Static files + templates (only mount if the directory exists) ─────────────
@@ -72,6 +80,8 @@ app.include_router(agent_router.router)
 app.include_router(public_portal.router)
 app.include_router(content_calendar.router)
 app.include_router(auth_router.router)
+app.include_router(autonomous.router)
+
 
 
 # ── Analytics alias (/api/analytics/summary used by ops CampaignStats) ──────

@@ -21,7 +21,19 @@ class Settings:
     _db_url = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/creator_forge.db")
     if _db_url.startswith("postgres://"):
         _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+    if _db_url.startswith("postgresql://") and not _db_url.startswith("postgresql+"):
+        try:
+            import psycopg2  # noqa: F401
+        except ImportError:
+            try:
+                import pg8000  # noqa: F401
+                _db_url = _db_url.replace("postgresql://", "postgresql+pg8000://", 1)
+            except ImportError:
+                print("[CONFIG] Neither psycopg2 nor pg8000 installed. Falling back to local SQLite.")
+                _db_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
     DATABASE_URL: str = _db_url
+
+
 
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-this-in-production-internal-ops-only")
