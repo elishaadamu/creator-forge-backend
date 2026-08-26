@@ -3,6 +3,8 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings, BASE_DIR
 
+fallback_sqlite_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
+
 try:
     engine = create_engine(
         settings.DATABASE_URL,
@@ -11,9 +13,7 @@ try:
     )
 except Exception as _e:
     print(f"[DB INIT] PostgreSQL driver/connection error: {_e}. Falling back to local SQLite database.")
-    fallback_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
-    engine = create_engine(fallback_url, connect_args={"check_same_thread": False}, echo=False)
-
+    engine = create_engine(fallback_sqlite_url, connect_args={"check_same_thread": False}, echo=False)
 
 
 @event.listens_for(engine, "before_cursor_execute")
@@ -36,8 +36,18 @@ def get_db():
 
 
 def init_db():
+    global engine, SessionLocal
     from app.models import creator, campaign, outreach, audit, project  # noqa: F401 — registers models
-    Base.metadata.create_all(bind=engine)
+    try:
+        with engine.connect() as conn:
+            pass
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"[DB INIT] Database connection failed: {e}.")
+        print("[DB INIT] Gracefully falling back to local SQLite database to keep service online.")
+        engine = create_engine(fallback_sqlite_url, connect_args={"check_same_thread": False}, echo=False)
+        SessionLocal.configure(bind=engine)
+        Base.metadata.create_all(bind=engine)
     
     # Auto-seed the 'default' campaign if missing
     from app.models.campaign import Campaign
