@@ -3,6 +3,7 @@ import email
 from email.header import decode_header
 import imaplib
 import logging
+import re
 from datetime import datetime
 from email.utils import parseaddr
 from typing import Optional
@@ -81,7 +82,7 @@ def _parse_email_message(msg):
     from_email = from_email.lower().strip()
     
     # Parse Body
-    body = ""
+    raw_body = ""
     if msg.is_multipart():
         for part in msg.walk():
             content_type = part.get_content_type()
@@ -90,71 +91,93 @@ def _parse_email_message(msg):
                 payload = part.get_payload(decode=True)
                 if payload:
                     charset = part.get_content_charset()
-                    body = _decode_str(payload, charset)
+                    raw_body = _decode_str(payload, charset)
                 break
     else:
         payload = msg.get_payload(decode=True)
         if payload:
             charset = msg.get_content_charset()
-            body = _decode_str(payload, charset)
+            raw_body = _decode_str(payload, charset)
             
-    body = _clean_email_body(body)
-    return subject, from_email, body
+    cleaned_body = _clean_email_body(raw_body)
+    return subject, from_email, cleaned_body, raw_body
 
-def _find_thread_for_sender(db, from_email: str, subject: str = "") -> Optional[str]:
-    """Attempt to find the most recent thread ID for the sender's email address or subject line."""
+def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = "", raw_body: str = "") -> Optional[str]:
+    """Attempt to find the thread ID for a creator using tracking tokens, handle, subject, or email."""
     if not from_email:
         return None
     from_email_clean = from_email.lower().strip()
     creator_id = None
+    all_text = f"{subject} {body} {raw_body}".lower()
+
+    # 1. Primary & 100% Reliable: Direct Creator Tracking Token
+    # Matches [CF-CID:<creator_id>] embedded in the subject or quoted email body
+    cid_match = re.search(r"cf-cid:([a-z0-9\-_]+)", all_text)
+    if cid_match:
+        cand_id = cid_match.group(1).strip()
+        c = db.get(Creator, cand_id)
+        if c:
+            creator_id = c.id
+
+    # 2. Handle token match: Handle:@<handle> or [#<handle>]
+    if not creator_id:
+        handle_match = re.search(r"handle:@([a-z0-9_.\-]+)", all_text) or re.search(r"\[#([a-z0-9_.\-]+)\]", all_text)
+        if handle_match:
+            cand_handle = handle_match.group(1).strip()
+            c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
+            if c:
+                creator_id = c.id
 
     all_creators = db.query(Creator).all()
 
-    # 1. Match against Creator name or handle in subject line
-    if subject:
+    # 3. Match against Creator display_name or handle in subject line
+    if not creator_id and subject:
         subj_lower = subject.lower()
-        for c in all_creators:
+        sorted_creators = sorted(all_creators, key=lambda x: len(x.display_name or ""), reverse=True)
+        for c in sorted_creators:
             c_name = (c.display_name or "").lower().strip()
             c_handle = (c.handle or "").lower().lstrip("@").strip()
             if (c_name and len(c_name) >= 3 and c_name in subj_lower) or (c_handle and len(c_handle) >= 3 and c_handle in subj_lower):
                 creator_id = c.id
                 break
 
-    # 2. Match against OutreachMessage subject
+    # 4. Match against OutreachMessage subject
     if not creator_id and subject:
-        clean_subj = subject.lower().replace("re:", "").replace("fwd:", "").strip()
-        if clean_subj:
-            msg = db.query(OutreachMessage).filter(OutreachMessage.subject.ilike(f"%{clean_subj[:30]}%")).order_by(OutreachMessage.created_at.desc()).first()
+        clean_subj = subject.lower().replace("re:", "").replace("fwd:", "").replace("fw:", "").strip()
+        if len(clean_subj) >= 6:
+            msg = db.query(OutreachMessage).filter(OutreachMessage.subject.ilike(f"%{clean_subj[:35]}%")).order_by(OutreachMessage.created_at.desc()).first()
             if msg and msg.creator_id:
                 creator_id = msg.creator_id
 
-    # 3. Match against Creator table (email_public)
+    # 5. Match against Creator table (email_public) with multiple-creator disambiguation
     if not creator_id:
-        for c in all_creators:
-            c_email = (c.email_public or "").lower().strip()
-            if c_email and c_email == from_email_clean:
-                creator_id = c.id
-                break
+        matching_creators = [c for c in all_creators if (c.email_public or "").lower().strip() == from_email_clean]
+        if len(matching_creators) == 1:
+            creator_id = matching_creators[0].id
+        elif len(matching_creators) > 1:
+            # If multiple creators share this email (e.g. test environment or agency address):
+            # Prefer the creator with the most recent open outreach thread
+            recent_thread = db.query(Thread).filter(
+                Thread.creator_id.in_([c.id for c in matching_creators])
+            ).order_by(Thread.last_activity.desc()).first()
+            if recent_thread:
+                return recent_thread.id
+            creator_id = matching_creators[0].id
 
-    # 4. Match against Contacts table
+    # 6. Match against Contacts table
     if not creator_id:
         contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email_clean}%"), Contact.contact_type == "email").first()
-        if contact:
+        if contact and contact.creator_id:
             creator_id = contact.creator_id
 
-    # 5. If still not matched, find the most recently pitched creator
-    if not creator_id and all_creators:
-        recent_msg = db.query(OutreachMessage).order_by(OutreachMessage.created_at.desc()).first()
-        if recent_msg and recent_msg.creator_id:
-            creator_id = recent_msg.creator_id
-
+    # Strictly do NOT assign unrecognized/marketing emails to random creators
     if not creator_id:
         return None
 
-    # Find or create latest thread for this creator
+    # Find or create latest thread for this specific creator
     thread = db.query(Thread).filter(Thread.creator_id == creator_id).order_by(Thread.created_at.desc()).first()
     if not thread:
-        thread = Thread(creator_id=creator_id, status="open")
+        thread = Thread(creator_id=creator_id, status="open", created_at=datetime.utcnow(), last_activity=datetime.utcnow())
         db.add(thread)
         db.commit()
         db.refresh(thread)
@@ -203,24 +226,29 @@ def poll_inbox_sync():
                 for response_part in msg_data:
                     if isinstance(response_part, tuple):
                         msg = email.message_from_bytes(response_part[1])
-                        subject, from_email, body = _parse_email_message(msg)
+                        subject, from_email, body, raw_body = _parse_email_message(msg)
                         
                         if not from_email:
                             continue
 
-                        # Ignore outgoing emails sent by admin, system, or automated notifications.
-                        # A self-reply is useful in local/testing workflows, so let messages
-                        # with reply-style subjects reach the subject/thread matcher.
                         from_lower = from_email.lower().strip()
                         is_reply_subject = subject.lower().lstrip().startswith(("re:", "fwd:", "fw:"))
-                        if ((from_lower == admin_email and not is_reply_subject)
-                            or "mailer-daemon" in from_lower
-                            or "no-reply" in from_lower
-                            or "noreply" in from_lower
-                            or "accounts.google.com" in from_lower):
+
+                        # Filter out automated marketing, system alerts, and notification bots
+                        ignore_patterns = (
+                            "mailer-daemon", "no-reply", "noreply", "accounts.google.com",
+                            "googleaistudio", "prisma.io", "openai.com", "twilio.com",
+                            "qualtrics", "apify.com", "github.com", "notifications@",
+                            "security-noreply"
+                        )
+                        if any(pat in from_lower for pat in ignore_patterns):
+                            continue
+
+                        # Ignore outgoing messages from admin unless it's a self-test reply
+                        if from_lower == admin_email and not is_reply_subject:
                             continue
                             
-                        thread_id = _find_thread_for_sender(db, from_email, subject)
+                        thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body)
                         
                         if thread_id:
                             # Check if reply already exists in DB to prevent duplicates

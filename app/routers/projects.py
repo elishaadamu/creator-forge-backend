@@ -347,6 +347,74 @@ def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(proj)
 
+    # ── Automated Dual Email Dispatch to Creator and Admin ────────────────────
+    try:
+        from app.integrations.email_provider import email_provider
+        from app.config import settings
+
+        creator_email = (body.creatorEmail or "").strip()
+        admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
+        portal_magic_link = f"{settings.FRONTEND_URL or 'http://localhost:3001'}/portal?token={proj.portal_token}&project={proj.id}"
+
+        email_subject = f"🚀 Project Initialized: {proj.product_name} with {proj.creator_name or proj.creator_handle} (Section 2 Live)"
+        admin_email_body = f"""Hello Admin,
+
+A new Co-Launch Software Venture has been initialized into Section 2:
+
+• Product Name: {proj.product_name}
+• Tagline: {proj.product_tagline}
+• Creator Partner: {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})
+• Creator Email: {creator_email or 'Pending'}
+• Target Presale Milestone: ${int(proj.presale_target):,}
+• Creator Portal Magic Link: {portal_magic_link}
+
+Phase 1 (Validate) is now active and ready for execution.
+
+Best regards,
+Creator Forge Studio Operations"""
+
+        # 1. Dispatch Briefing to Admin (elishadamu97@gmail.com)
+        if admin_email and "@" in admin_email:
+            try:
+                email_provider.send(
+                    to_email=admin_email,
+                    subject=f"[ADMIN BRIEFING] {email_subject}",
+                    body_html=admin_email_body.replace("\n", "<br>"),
+                    body_text=admin_email_body
+                )
+                logger.info(f"Dispatched Section 2 Admin Briefing to {admin_email}")
+            except Exception as e:
+                logger.warning(f"Failed to dispatch admin launch briefing: {e}")
+
+        # 2. Dispatch Magic Portal Link to Creator
+        if creator_email and "@" in creator_email:
+            try:
+                creator_email_body = f"""Hi {proj.creator_name or 'there'},
+
+Welcome to your software co-launch portal!
+
+We have officially initialized {proj.product_name} into Phase 1 (Validation). You can access your dedicated Creator Portal and track live progress here:
+
+👉 Access Portal: {portal_magic_link}
+
+Best,
+Creator Forge Studio Team"""
+                email_provider.send(
+                    to_email=creator_email,
+                    subject=f"Access Your Co-Founder Portal: {proj.product_name}",
+                    body_html=creator_email_body.replace("\n", "<br>"),
+                    body_text=creator_email_body
+                )
+                proj.portal_link_sent = True
+                proj.portal_link_sent_to = creator_email
+                proj.portal_link_sent_at = datetime.utcnow()
+                db.commit()
+                logger.info(f"Dispatched Portal Magic Link to Creator {creator_email}")
+            except Exception as e:
+                logger.warning(f"Failed to dispatch creator portal link: {e}")
+    except Exception as dispatch_err:
+        logger.warning(f"Project dispatch notification exception: {dispatch_err}")
+
     return _format_project_response(proj)
 
 

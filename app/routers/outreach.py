@@ -368,22 +368,48 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     if not is_real_valid_email(to_email):
         raise HTTPException(400, f"Invalid recipient email address: '{to_email}'")
 
+    creator = None
+    if payload.creator_id:
+        creator = db.get(Creator, payload.creator_id)
+
+    subject_to_send = payload.subject
+    body_text = payload.body
+    body_html = payload.body.replace("\n", "<br>")
+
+    # Embed creator tracking token in subject and body for 100% reliable reply attribution
+    if creator:
+        c_handle = (creator.handle or "").lstrip("@").strip()
+        c_id = str(creator.id).strip()
+        tracking_token = f"[CF-CID:{c_id} | Handle:@{c_handle}]"
+        
+        # Ensure handle or token is in subject if not already present
+        if f"[#{c_handle}]" not in subject_to_send and f"CF-CID" not in subject_to_send:
+            if c_handle:
+                subject_to_send = f"{subject_to_send} [#{c_handle}]"
+            else:
+                subject_to_send = f"{subject_to_send} [CF:{c_id[:8]}]"
+
+        # Embed reference footer in body
+        body_text = f"{payload.body}\n\n---\nRef: {tracking_token}"
+        body_html = f'{payload.body.replace(chr(10), "<br>")}<br><br><div style="border-top:1px solid #e2e8f0;margin-top:20px;padding-top:10px;font-size:11px;color:#94a3b8;font-family:monospace;">Ref: {tracking_token}</div>'
+
+        # Record email_public on creator if empty
+        if not creator.email_public:
+            creator.email_public = to_email
+            db.commit()
+
     # 1. Send via Google SMTP
     try:
         res = email_provider.send(
             to_email=to_email,
-            subject=payload.subject,
-            body_html=payload.body.replace("\n", "<br>"),
-            body_text=payload.body
+            subject=subject_to_send,
+            body_html=body_html,
+            body_text=body_text
         )
     except Exception as e:
         raise HTTPException(500, f"SMTP delivery failed: {str(e)}")
 
     # 2. Record OutreachMessage & Thread in database
-    creator = None
-    if payload.creator_id:
-        creator = db.get(Creator, payload.creator_id)
-
     contact = None
     if creator:
         contact = db.query(Contact).filter(Contact.creator_id == creator.id, Contact.contact_type == "email").first()
@@ -397,8 +423,8 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
         creator_id=creator.id if creator else None,
         campaign_id="default",
         contact_id=contact.id if contact else None,
-        subject=payload.subject,
-        body=payload.body,
+        subject=subject_to_send,
+        body=body_text,
         send_method="email",
         status="sent",
         sent_at=datetime.utcnow()

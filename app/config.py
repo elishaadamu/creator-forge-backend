@@ -65,6 +65,7 @@ class Settings:
     FROM_NAME: str = os.getenv("FROM_NAME", "Creator Partnerships Team")
     GOOGLE_EMAIL: str = os.getenv("GOOGLE_EMAIL", "")
     GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "elishadamu97@gmail.com")
 
     # Integration stubs
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
