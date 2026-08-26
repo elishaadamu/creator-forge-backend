@@ -441,18 +441,84 @@ def suppress_creator(
     return {"suppressed": True, "creator_id": creator_id}
 
 
+@router.delete("/all")
+def delete_all_creators(db: Session = Depends(get_db)):
+    """Delete all creators and all associated contacts, outreach messages, threads, and replies."""
+    from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
+    from app.models.creator import (
+        Contact, Analysis, ContentSample, Deck, MediaImage,
+        MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
+    )
+    from app.models.project import CoLaunchProject
+    try:
+        db.query(Reply).delete(synchronize_session=False)
+        db.query(FollowUp).delete(synchronize_session=False)
+        db.query(Thread).delete(synchronize_session=False)
+        db.query(OutreachMessage).delete(synchronize_session=False)
+        db.query(SuppressionList).delete(synchronize_session=False)
+        db.query(Contact).delete(synchronize_session=False)
+        db.query(Analysis).delete(synchronize_session=False)
+        db.query(ContentSample).delete(synchronize_session=False)
+        db.query(Deck).delete(synchronize_session=False)
+        db.query(MediaImage).delete(synchronize_session=False)
+        db.query(MetricsSnapshot).delete(synchronize_session=False)
+        db.query(Partnership).delete(synchronize_session=False)
+        db.query(PostSuggestion).delete(synchronize_session=False)
+        db.query(ProductRecommendation).delete(synchronize_session=False)
+        db.query(CoLaunchProject).update({CoLaunchProject.creator_id: None}, synchronize_session=False)
+
+        deleted_count = db.query(Creator).delete(synchronize_session=False)
+        db.commit()
+        return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to delete all creators: {str(e)}")
+
+
 @router.delete("/{creator_id}")
 def delete_creator(
     creator_id: str, actor: str = "ops_dashboard", db: Session = Depends(get_db)
 ):
-    """Ops dashboard — delete a creator entirely."""
+    """Ops dashboard — delete a creator entirely with all dependencies cascaded."""
+    if creator_id == "all":
+        return delete_all_creators(db=db)
+
     creator = db.get(Creator, creator_id)
     if not creator:
         raise HTTPException(404, "Creator not found")
-    
-    db.delete(creator)
-    db.commit()
-    return {"deleted": True, "creator_id": creator_id}
+
+    from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
+    from app.models.creator import (
+        Contact, Analysis, ContentSample, Deck, MediaImage,
+        MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
+    )
+    from app.models.project import CoLaunchProject
+
+    try:
+        thread_ids = [t.id for t in db.query(Thread.id).filter(Thread.creator_id == creator_id).all()]
+        if thread_ids:
+            db.query(Reply).filter(Reply.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+            db.query(FollowUp).filter(FollowUp.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+        db.query(Thread).filter(Thread.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(OutreachMessage).filter(OutreachMessage.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(SuppressionList).filter(SuppressionList.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(Contact).filter(Contact.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(Analysis).filter(Analysis.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(ContentSample).filter(ContentSample.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(Deck).filter(Deck.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(MediaImage).filter(MediaImage.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(MetricsSnapshot).filter(MetricsSnapshot.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(Partnership).filter(Partnership.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(PostSuggestion).filter(PostSuggestion.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == creator_id).update({CoLaunchProject.creator_id: None}, synchronize_session=False)
+
+        db.delete(creator)
+        db.commit()
+        return {"deleted": True, "creator_id": creator_id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to delete creator: {str(e)}")
 
 
 class CreatorPatchBody(BaseModel):
@@ -833,49 +899,4 @@ def _contact_dict(c) -> dict:
     }
 
 
-@router.delete("/all")
-def delete_all_creators(db: Session = Depends(get_db)):
-    """Delete all creators and associated contacts, outreach, threads, and replies."""
-    from app.models.outreach import OutreachMessage, EmailThread, EmailReply
-    from app.models.creator import CreatorContact, ProductRecommendation
-    from app.models.campaign import Campaign
-    from app.models.autonomous_campaign import AutonomousCampaign
-    try:
-        db.query(EmailReply).delete()
-        db.query(EmailThread).delete()
-        db.query(OutreachMessage).delete()
-        db.query(CreatorContact).delete()
-        db.query(ProductRecommendation).delete()
-        db.query(Campaign).delete()
-        db.query(AutonomousCampaign).delete()
-        deleted_count = db.query(Creator).delete()
-        db.commit()
-        return {"success": True, "deleted_count": deleted_count, "message": "All creators and associated records deleted"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Failed to delete all creators: {str(e)}")
-
-
-@router.delete("/{creator_id}")
-def delete_single_creator(creator_id: str, db: Session = Depends(get_db)):
-    """Delete a specific creator by ID and their associated data."""
-    from app.models.outreach import OutreachMessage, EmailThread, EmailReply
-    from app.models.creator import CreatorContact, ProductRecommendation
-    creator = db.query(Creator).filter(Creator.id == creator_id).first()
-    if not creator:
-        raise HTTPException(404, "Creator not found")
-    try:
-        db.query(EmailReply).filter(EmailReply.thread_id.in_(
-            db.query(EmailThread.id).filter(EmailThread.creator_id == creator_id)
-        )).delete(synchronize_session=False)
-        db.query(EmailThread).filter(EmailThread.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(OutreachMessage).filter(OutreachMessage.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(CreatorContact).filter(CreatorContact.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == creator_id).delete(synchronize_session=False)
-        db.delete(creator)
-        db.commit()
-        return {"success": True, "deleted_id": creator_id}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Failed to delete creator: {str(e)}")
 
