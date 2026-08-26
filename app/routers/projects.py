@@ -1,0 +1,562 @@
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.project import (
+    CoLaunchProject, ValidationPlan, ValidationCampaign,
+    CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
+)
+from app.models.creator import Creator
+
+router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+# Pydantic Schemas
+class CreateProjectRequest(BaseModel):
+    id: Optional[str] = None
+    creatorId: Optional[str] = None
+    creatorHandle: Optional[str] = None
+    creatorName: Optional[str] = None
+    creatorAvatar: Optional[str] = None
+    creatorEmail: Optional[str] = None
+    niche: Optional[str] = None
+    followers: Optional[str] = None
+    productName: str
+    productTagline: Optional[str] = None
+    targetAudience: Optional[str] = None
+    customer: Optional[str] = None
+    problem: Optional[str] = None
+    keyFeatures: Optional[List[str]] = None
+    pricing: Optional[str] = None
+    revenueModel: Optional[str] = None
+    presaleTarget: Optional[float] = 5000.0
+    selectedConcept: Optional[Dict[str, Any]] = None
+    mockup: Optional[Dict[str, Any]] = None
+
+
+class UpdatePlanRequest(BaseModel):
+    customer: Optional[str] = None
+    problem: Optional[str] = None
+    offer: Optional[str] = None
+    pricing: Optional[str] = None
+    test_method: Optional[str] = None
+    period: Optional[str] = "14 days"
+    threshold: Optional[str] = "$5,000 in presales within 14 days"
+    target_revenue: Optional[float] = 5000.0
+    status: Optional[str] = "ready"
+
+
+class UpdateCampaignRequest(BaseModel):
+    product_assets: Optional[Dict[str, Any]] = None
+    infrastructure: Optional[Dict[str, Any]] = None
+    research_survey: Optional[Dict[str, Any]] = None
+    review_status: Optional[str] = None # 'draft', 'approved', 'launched'
+
+
+class UpdateTaskRequest(BaseModel):
+    status: Optional[str] = None # 'pending', 'today', 'completed', 'skipped'
+    content_draft: Optional[str] = None
+    cta_text: Optional[str] = None
+    tracking_link: Optional[str] = None
+
+
+class AddReservationRequest(BaseModel):
+    name: str
+    email: str
+    amount: float
+    tier: Optional[str] = "Founding Member"
+    channel: Optional[str] = "instagram"
+
+
+class GateDecisionRequest(BaseModel):
+    decision: str # 'pass_to_phase2', 'iterate_validation', 'kill_project'
+    notes: Optional[str] = None
+
+
+def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
+    plan = proj.validation_plan
+    campaign = proj.validation_campaign
+    telemetry = proj.telemetry
+    tasks = [
+        {
+            "id": t.id,
+            "dayNumber": t.day_number,
+            "channel": t.channel,
+            "title": t.task_title,
+            "content": t.content_draft,
+            "cta": t.cta_text,
+            "trackingLink": t.tracking_link,
+            "mediaPrompt": t.media_prompt,
+            "status": t.status,
+            "completedAt": t.completed_at.isoformat() if t.completed_at else None,
+        }
+        for t in (proj.creator_tasks or [])
+    ]
+    gate_decisions = [
+        {
+            "id": g.id,
+            "decision": g.decision,
+            "targetRevenue": g.target_revenue,
+            "achievedRevenue": g.achieved_revenue,
+            "backersCount": g.backers_count,
+            "conversionRate": g.conversion_rate,
+            "gateStatus": g.gate_status,
+            "notes": g.gate_notes,
+            "decidedAt": g.decided_at.isoformat() if g.decided_at else None,
+        }
+        for t in (proj.gate_decisions or [])
+    ]
+
+    return {
+        "id": proj.id,
+        "creatorId": proj.creator_id,
+        "creatorHandle": proj.creator_handle,
+        "creatorName": proj.creator_name,
+        "creatorAvatar": proj.creator_avatar,
+        "creatorEmail": proj.creator_email,
+        "niche": proj.niche,
+        "followers": proj.followers,
+        "productName": proj.product_name,
+        "productTagline": proj.product_tagline,
+        "targetAudience": proj.target_audience,
+        "pricing": proj.pricing,
+        "revenueModel": proj.revenue_model,
+        "currentPhase": proj.current_phase,
+        "currentStep": proj.current_step,
+        "status": proj.status,
+        "presaleTarget": proj.presale_target,
+        "currentPresales": proj.current_presales,
+        "visitors": proj.visitors,
+        "conversionRate": proj.conversion_rate,
+        "portalToken": proj.portal_token,
+        "portalLinkSent": proj.portal_link_sent,
+        "portalLinkSentTo": proj.portal_link_sent_to,
+        "portalLinkSentAt": proj.portal_link_sent_at.isoformat() if proj.portal_link_sent_at else None,
+        "selectedConcept": proj.selected_concept,
+        "createdAt": proj.created_at.isoformat() if proj.created_at else None,
+        "updatedAt": proj.updated_at.isoformat() if proj.updated_at else None,
+        # Step 1
+        "validationPlan": {
+            "id": plan.id,
+            "customer": plan.customer,
+            "problem": plan.problem,
+            "offer": plan.offer,
+            "pricing": plan.pricing,
+            "testMethod": plan.test_method,
+            "period": plan.period,
+            "threshold": plan.threshold,
+            "targetRevenue": plan.target_revenue,
+            "status": plan.status,
+        } if plan else None,
+        # Step 2
+        "validationCampaign": {
+            "id": campaign.id,
+            "productAssets": campaign.product_assets,
+            "infrastructure": campaign.infrastructure,
+            "researchSurvey": campaign.research_survey,
+            "reviewStatus": campaign.review_status,
+            "approvedAt": campaign.approved_at.isoformat() if campaign.approved_at else None,
+        } if campaign else None,
+        # Step 3
+        "creatorTasks": tasks,
+        # Step 4
+        "telemetry": {
+            "id": telemetry.id,
+            "visitors": telemetry.visitors,
+            "views": telemetry.views,
+            "ctr": telemetry.ctr,
+            "signups": telemetry.signups,
+            "presalesCount": telemetry.presales_count,
+            "presalesRevenue": telemetry.presales_revenue,
+            "conversionRate": telemetry.conversion_rate,
+            "reservations": telemetry.reservations or [],
+            "channelAttribution": telemetry.channel_attribution or {},
+            "experiments": telemetry.experiments or [],
+            "feedbackClusters": telemetry.feedback_clusters or [],
+        } if telemetry else None,
+        # Step 5
+        "gateDecisions": gate_decisions,
+    }
+
+
+@router.get("")
+def list_projects(db: Session = Depends(get_db)):
+    """List all co-launch projects."""
+    projects = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).all()
+    return [_format_project_response(p) for p in projects]
+
+
+@router.post("", status_code=201)
+def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
+    """
+    Initialize a new Co-Launch Project from Section 1 concept.
+    Automatically initializes the 5-step validation architecture in the database.
+    """
+    proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
+
+    # Clean existing if ID exists
+    existing = db.get(CoLaunchProject, proj_id)
+    if existing:
+        db.delete(existing)
+        db.commit()
+
+    proj = CoLaunchProject(
+        id=proj_id,
+        creator_id=body.creatorId,
+        creator_handle=body.creatorHandle,
+        creator_name=body.creatorName or body.creatorHandle,
+        creator_avatar=body.creatorAvatar,
+        creator_email=body.creatorEmail,
+        niche=body.niche,
+        followers=body.followers,
+        product_name=body.productName,
+        product_tagline=body.productTagline or "",
+        target_audience=body.customer or body.targetAudience or "",
+        pricing=body.pricing or "$29/mo Starter • $79/mo Pro",
+        revenue_model=body.revenueModel or "SaaS Subscription",
+        current_phase=1,
+        current_step="plan",
+        status="validating",
+        presale_target=body.presaleTarget or 5000.0,
+        current_presales=0.0,
+        visitors=0,
+        conversion_rate=0.0,
+        portal_token="cf_sec_live",
+        selected_concept=body.selectedConcept or {},
+        created_at=datetime.utcnow()
+    )
+    db.add(proj)
+    db.commit()
+    db.refresh(proj)
+
+    # 1. Step 1: Create Validation Plan
+    customer_desc = body.customer or body.targetAudience or f"{body.niche or 'Creator'} audience and builders"
+    problem_desc = body.problem or f"Manual workflows and lack of specialized tooling in {body.niche or 'this space'}"
+    offer_desc = f"{body.productName} Founding Co-Launch Access: {body.productTagline or ''}"
+    plan = ValidationPlan(
+        project_id=proj.id,
+        customer=customer_desc,
+        problem=problem_desc,
+        offer=offer_desc,
+        pricing=body.pricing or "$29/mo Starter • $79/mo Pro",
+        test_method="1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
+        period="14 days",
+        threshold=f"${int(body.presaleTarget or 5000):,} in presales within 14 days",
+        target_revenue=body.presaleTarget or 5000.0,
+        status="ready"
+    )
+    db.add(plan)
+
+    # 2. Step 2: Build Validation Campaign
+    slug = body.productName.lower().replace(" ", "-").replace("'", "")
+    campaign = ValidationCampaign(
+        project_id=proj.id,
+        product_assets={
+            "productName": body.productName,
+            "productTagline": body.productTagline or "",
+            "positioning": f"The #1 automated platform built exclusively for {customer_desc}",
+            "headline": f"Finally, an operating system tailored for {body.niche or 'your'} workflows",
+            "mockup": body.mockup or {},
+            "pricingTiers": [
+                {"name": "Founding Member", "price": 99, "period": "lifetime", "perks": "Lifetime core access, private Discord, roadmap voting"},
+                {"name": "Starter Plan", "price": 29, "period": "month", "perks": "Full template library, monthly updates, standard support"},
+                {"name": "Pro Builder", "price": 79, "period": "month", "perks": "Unlimited syncs, 1-on-1 onboarding, priority feature access"},
+            ]
+        },
+        infrastructure={
+            "landingPageUrl": f"/p/{slug}",
+            "checkoutUrl": f"/p/{slug}/checkout",
+            "waitlistCount": 240,
+            "attributionTracking": True,
+            "utmSource": "creator_launch"
+        },
+        research_survey={
+            "summary": f"Initial audience feedback survey identifying key pain points in {body.niche or 'niche'}.",
+            "questions": [
+                {"id": "q1", "question": f"What is your biggest daily roadblock when executing {body.niche or 'work'}?", "type": "text"},
+                {"id": "q2", "question": f"Would you pay $29–$79/month for a tool that automates this completely?", "type": "multiple_choice", "options": ["Definitely yes", "Maybe", "No"]},
+                {"id": "q3", "question": "What software do you currently stitch together to solve this?", "type": "text"},
+            ],
+            "responses": []
+        },
+        review_status="draft"
+    )
+    db.add(campaign)
+
+    # 3. Step 3: Creator Campaign (14-day schedule)
+    sample_tasks = [
+        (1, "instagram", "Post Instagram Story #1: The Problem Teaser", f"Hey everyone! I've been noticing how frustrating {problem_desc.lower()} has been lately. Who else deals with this daily?", "Vote on poll + DM me", f"https://launch.app/p/{slug}?utm=ig_story1"),
+        (2, "instagram", "Post Instagram Story #2: Behind-The-Scenes Co-Founding", f"Yesterday so many of you replied about this. That's why I'm co-founding {body.productName} to fix it once and for all! Link below to see the first preview.", "Tap link to view preview", f"https://launch.app/p/{slug}?utm=ig_story2"),
+        (3, "youtube", "YouTube Video Integration Script (60s Mid-Roll)", f"Before we continue, a quick heads-up: my team and I are launching {body.productName}. If you're tired of {problem_desc.lower()}, we're opening 50 founding spots today at 50% off.", "Check link in top pinned comment", f"https://launch.app/p/{slug}?utm=yt_desc"),
+        (5, "newsletter", "Newsletter Broadcast: Founding Cohort Announcement", f"Subject: Building something new with you.\n\nOver the past 6 months, the #1 request I received was a dedicated solution for {body.niche or 'creators'}. Today we're opening presales for {body.productName}.", "Reserve Founding Access ($99)", f"https://launch.app/p/{slug}?utm=newsletter"),
+        (7, "twitter", "X / Twitter Breakdown Thread", f"1/5 Why existing tools fail for {customer_desc}.\n\n2/5 How we designed {body.productName} from scratch to cut setup time by 90%.\n\n3/5 Pre-order cohort open now (first 50 members get lifetime updates).", "Read thread & grab pass", f"https://launch.app/p/{slug}?utm=twitter"),
+        (10, "instagram", "Post Instagram Story #3: Live Backer Progress", f"Update: We just crossed $3,000 in pre-orders in 48 hours! Only 18 founding member passes remain before prices increase.", "Claim remaining pass", f"https://launch.app/p/{slug}?utm=ig_story3"),
+        (14, "youtube", "Community Post & Final Call", f"Closing the founding presale window for {body.productName} tonight at midnight. Huge thank you to the 40+ founding builders who joined!", "Final 6 hours to join", f"https://launch.app/p/{slug}?utm=yt_comm"),
+    ]
+    for day, chan, title, draft, cta, trk in sample_tasks:
+        db.add(CreatorCampaignTask(
+            project_id=proj.id,
+            day_number=day,
+            channel=chan,
+            task_title=title,
+            content_draft=draft,
+            cta_text=cta,
+            tracking_link=trk,
+            status="today" if day == 1 else "pending"
+        ))
+
+    # 4. Step 4: Validation Telemetry
+    telemetry = ValidationTelemetry(
+        project_id=proj.id,
+        visitors=0,
+        views=0,
+        ctr=0.0,
+        signups=0,
+        presales_count=0,
+        presales_revenue=0.0,
+        conversion_rate=0.0,
+        reservations=[],
+        channel_attribution={"instagram": 0, "youtube": 0, "newsletter": 0, "twitter": 0, "direct": 0},
+        experiments=[
+            {
+                "id": "exp_msg_1",
+                "category": "messaging",
+                "title": "Pain-Point vs Outcome Headline",
+                "hypothesis": "Focusing on hours saved will increase landing page conversion from 4% to 7%",
+                "variant": f"Stop wasting 15+ hours a week on manual setups. {body.productName} automates your entire workflow in one click.",
+                "status": "ready"
+            },
+            {
+                "id": "exp_price_1",
+                "category": "pricing",
+                "title": "Lifetime Founding Pass vs Monthly",
+                "hypothesis": "Offering a $99 lifetime founding pass accelerates initial presale velocity towards the $5K threshold",
+                "variant": "$99 Lifetime Founding Access (Limited to first 50 builders)",
+                "status": "ready"
+            }
+        ],
+        feedback_clusters=[
+            {"topic": "Setup Simplicity", "count": 28, "sentiment": "positive", "quote": "If this actually takes less than 5 minutes to connect, take my money."},
+            {"topic": "Pricing Sensitivity", "count": 14, "sentiment": "neutral", "quote": "Is there an annual discount option?"}
+        ]
+    )
+    db.add(telemetry)
+    db.commit()
+    db.refresh(proj)
+
+    return _format_project_response(proj)
+
+
+@router.get("/{project_id}")
+def get_project(project_id: str, db: Session = Depends(get_db)):
+    """Fetch complete co-launch project with all 5 validation steps."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    return _format_project_response(proj)
+
+
+@router.put("/{project_id}/plan")
+def update_validation_plan(project_id: str, body: UpdatePlanRequest, db: Session = Depends(get_db)):
+    """Save or update Step 1 Validation Plan."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    plan = proj.validation_plan
+    if not plan:
+        plan = ValidationPlan(project_id=proj.id)
+        db.add(plan)
+
+    if body.customer is not None: plan.customer = body.customer
+    if body.problem is not None: plan.problem = body.problem
+    if body.offer is not None: plan.offer = body.offer
+    if body.pricing is not None: plan.pricing = body.pricing
+    if body.test_method is not None: plan.test_method = body.test_method
+    if body.period is not None: plan.period = body.period
+    if body.threshold is not None: plan.threshold = body.threshold
+    if body.target_revenue is not None:
+        plan.target_revenue = body.target_revenue
+        proj.presale_target = body.target_revenue
+    if body.status is not None: plan.status = body.status
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.put("/{project_id}/campaign")
+def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db: Session = Depends(get_db)):
+    """Save or update Step 2 Campaign Assets, Infrastructure, and Approve & Launch status."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    campaign = proj.validation_campaign
+    if not campaign:
+        campaign = ValidationCampaign(project_id=proj.id)
+        db.add(campaign)
+
+    if body.product_assets is not None: campaign.product_assets = body.product_assets
+    if body.infrastructure is not None: campaign.infrastructure = body.infrastructure
+    if body.research_survey is not None: campaign.research_survey = body.research_survey
+    if body.review_status is not None:
+        campaign.review_status = body.review_status
+        if body.review_status in ("approved", "launched"):
+            campaign.approved_at = datetime.utcnow()
+            campaign.approved_by = "Lead Founder"
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.get("/{project_id}/creator-tasks")
+def get_creator_tasks(project_id: str, db: Session = Depends(get_db)):
+    """Fetch Step 3 Creator Campaign Tasks."""
+    tasks = db.query(CreatorCampaignTask).filter(CreatorCampaignTask.project_id == project_id).order_by(CreatorCampaignTask.day_number).all()
+    return [
+        {
+            "id": t.id,
+            "dayNumber": t.day_number,
+            "channel": t.channel,
+            "title": t.task_title,
+            "content": t.content_draft,
+            "cta": t.cta_text,
+            "trackingLink": t.tracking_link,
+            "mediaPrompt": t.media_prompt,
+            "status": t.status,
+            "completedAt": t.completed_at.isoformat() if t.completed_at else None,
+        }
+        for t in tasks
+    ]
+
+
+@router.patch("/{project_id}/creator-tasks/{task_id}")
+def update_creator_task(project_id: str, task_id: str, body: UpdateTaskRequest, db: Session = Depends(get_db)):
+    """Update a Step 3 creator campaign checklist task."""
+    task = db.query(CreatorCampaignTask).filter(
+        CreatorCampaignTask.project_id == project_id,
+        CreatorCampaignTask.id == task_id
+    ).first()
+    if not task:
+        raise HTTPException(404, f"Task '{task_id}' not found")
+
+    if body.status is not None:
+        task.status = body.status
+        if body.status == "completed":
+            task.completed_at = datetime.utcnow()
+    if body.content_draft is not None: task.content_draft = body.content_draft
+    if body.cta_text is not None: task.cta_text = body.cta_text
+    if body.tracking_link is not None: task.tracking_link = body.tracking_link
+
+    db.commit()
+    return {"status": "success", "taskId": task.id, "newStatus": task.status}
+
+
+@router.post("/{project_id}/reservations")
+def add_reservation(project_id: str, body: AddReservationRequest, db: Session = Depends(get_db)):
+    """Record a verified buyer pre-order / reservation in Step 4 Telemetry."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    telemetry = proj.telemetry
+    if not telemetry:
+        telemetry = ValidationTelemetry(project_id=proj.id)
+        db.add(telemetry)
+
+    reservation_item = {
+        "id": f"res_{int(datetime.utcnow().timestamp()*1000)}",
+        "name": body.name,
+        "email": body.email,
+        "amount": float(body.amount),
+        "tier": body.tier,
+        "channel": body.channel,
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "status": "paid"
+    }
+
+    cur_res = list(telemetry.reservations or [])
+    cur_res.insert(0, reservation_item)
+    telemetry.reservations = cur_res
+
+    # Increment telemetry metrics
+    telemetry.presales_count = len(cur_res)
+    new_revenue = sum(r.get("amount", 0) for r in cur_res)
+    telemetry.presales_revenue = new_revenue
+    proj.current_presales = new_revenue
+
+    # Update visitors and conversion rate
+    cur_visitors = max(telemetry.visitors, len(cur_res) * 6)
+    telemetry.visitors = cur_visitors
+    proj.visitors = cur_visitors
+    conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
+    telemetry.conversion_rate = conv
+    proj.conversion_rate = conv
+
+    # Attribution
+    cur_attr = dict(telemetry.channel_attribution or {})
+    chan = body.channel or "direct"
+    cur_attr[chan] = cur_attr.get(chan, 0) + 1
+    telemetry.channel_attribution = cur_attr
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.post("/{project_id}/gate-decision")
+def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session = Depends(get_db)):
+    """Record Step 5 Executive Validation Gate decision."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    target = proj.presale_target or 5000.0
+    achieved = proj.current_presales or 0.0
+    is_passed = achieved >= target
+
+    if body.decision == "pass_to_phase2":
+        proj.current_phase = 2
+        proj.current_step = "specs"
+        proj.status = "building"
+        gate_status = "passed"
+    elif body.decision == "iterate_validation":
+        proj.current_phase = 1
+        proj.current_step = "optimize"
+        proj.status = "validating"
+        gate_status = "iterating"
+    else: # 'kill_project'
+        proj.status = "killed"
+        gate_status = "failed"
+
+    decision = ValidationGateDecision(
+        project_id=proj.id,
+        decision=body.decision,
+        target_revenue=target,
+        achieved_revenue=achieved,
+        backers_count=proj.telemetry.presales_count if proj.telemetry else 0,
+        conversion_rate=proj.conversion_rate or 0.0,
+        gate_status=gate_status,
+        gate_notes=body.notes or f"Executive gate decision: {body.decision}"
+    )
+    db.add(decision)
+    db.commit()
+    db.refresh(proj)
+
+    return _format_project_response(proj)
+
+
+@router.delete("/{project_id}")
+def delete_project(project_id: str, db: Session = Depends(get_db)):
+    """Delete a co-launch project and all validation phase child records."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    db.delete(proj)
+    db.commit()
+    return {"status": "success", "message": f"Project '{project_id}' deleted."}

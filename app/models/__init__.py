@@ -8,4 +8,8 @@ from app.models.outreach import (  # noqa: F401
     OutreachMessage, Thread, FollowUp, Reply, SuppressionList,
 )
 from app.models.audit import Review, AuditLog  # noqa: F401
+from app.models.project import (  # noqa: F401
+    CoLaunchProject, ValidationPlan, ValidationCampaign,
+    CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
+)
 
