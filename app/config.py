@@ -6,7 +6,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Load .env file if present (no external deps needed)
 _env_path = BASE_DIR / ".env"
 if _env_path.exists():
-    for _line in _env_path.read_text().splitlines():
+    try:
+        _content = _env_path.read_text(encoding="utf-8-sig")
+    except Exception:
+        _content = _env_path.read_text()
+    for _line in _content.splitlines():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _, _v = _line.partition("=")
