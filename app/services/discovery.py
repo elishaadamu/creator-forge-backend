@@ -52,16 +52,26 @@ def create_or_get_creator(
         if email_public and is_real_valid_email(email_public) and not existing.email_public:
             existing.email_public = email_public.strip()
             updated = True
-        if display_name and existing.display_name == existing.handle:
+        if follower_count and follower_count > 0:
+            existing.follower_count = follower_count
+            updated = True
+        if display_name:
             existing.display_name = display_name
             updated = True
-        if avatar_url and not existing.avatar_url:
+        if avatar_url:
             existing.avatar_url = avatar_url
             updated = True
-        if bio and not existing.bio:
+        if bio:
             existing.bio = bio
             updated = True
+        if profile_url:
+            existing.profile_url = profile_url
+            updated = True
+        if existing.status == "discovered" and follower_count >= settings.MIN_FOLLOWERS_THRESHOLD:
+            existing.status = "qualified"
+            updated = True
         if updated:
+            existing.updated_at = datetime.utcnow()
             db.commit()
             db.refresh(existing)
         if existing.email_public and is_real_valid_email(existing.email_public):

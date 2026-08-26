@@ -48,8 +48,12 @@ class Settings:
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "gemini")
-    AI_MODEL: str = "claude-opus-4-6"
+    TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
+    APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
+    SCRAPECREATORS_API_KEY: str = os.getenv("SCRAPECREATORS_API_KEY", "")
+    HUNTER_API_KEY: str = os.getenv("HUNTER_API_KEY", "")
+    ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "openai")
+    AI_MODEL: str = "gpt-4o"
 
     # Email / Outreach (stubs — real keys go in .env)
     SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
@@ -72,5 +76,9 @@ class Settings:
     # Apify — enables accurate scraping for Instagram & TikTok
     APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
 
+    # ScrapeCreators API — https://api.scrapecreators.com/v1/{platform}/profile?handle={handle}
+    SCRAPECREATORS_API_KEY: str = os.getenv("SCRAPECREATORS_API_KEY", "")
+
 
 settings = Settings()
+

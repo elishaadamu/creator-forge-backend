@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -40,14 +40,125 @@ class ScrapeRequest(BaseModel):
     save: bool = True  # auto-save to DB after scraping
 
 
+class ScrapeCreatorsRequest(BaseModel):
+    platform: str = "tiktok"  # tiktok | instagram | youtube | twitter
+    handle: str
+    api_key: Optional[str] = None
+    save: bool = True
+
+
+@router.post("/scrapecreators")
+def scrape_with_scrapecreators_api(
+    body: ScrapeCreatorsRequest,
+    actor: str = "scrapecreators_api",
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch profile data directly using ScrapeCreators API:
+    https://api.scrapecreators.com/v1/{platform}/profile?handle={handle}
+    Extracts followers, bio, and public business email, saving to Creator DB.
+    """
+    from app.services.scraper import scrapecreators_fetch_profile
+    from app.services.contact_discovery import add_contact
+
+    try:
+        scraped = scrapecreators_fetch_profile(body.platform, body.handle, body.api_key)
+        if "error" in scraped:
+            raise HTTPException(400, f"ScrapeCreators API failed: {scraped['error']}")
+
+        creator = None
+        if body.save:
+            try:
+                creator, created = discovery.create_or_get_creator(
+                    db=db,
+                    handle=scraped["handle"],
+                    platform=scraped["platform"],
+                    display_name=scraped.get("display_name"),
+                    bio=scraped.get("bio"),
+                    profile_url=scraped.get("profile_url"),
+                    avatar_url=scraped.get("avatar_url"),
+                    follower_count=scraped.get("follower_count", 0),
+                    email_public=scraped.get("email_public"),
+                    discovery_source="scrapecreators_api",
+                    actor=actor,
+                )
+                if scraped.get("email_public") and creator:
+                    try:
+                        add_contact(
+                            db, creator.id, "email",
+                            scraped["email_public"], "scrapecreators_api", actor=actor,
+                        )
+                    except Exception:
+                        pass
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+
+        return {
+            "scraped": scraped,
+            "creator": _creator_dict(creator) if creator else None,
+            "created": creator is not None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_msg = str(e).encode("ascii", "ignore").decode("ascii")
+        raise HTTPException(500, f"Internal Scrape Error: {safe_msg}")
+
+
+class HunterFindRequest(BaseModel):
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    domain: Optional[str] = None
+    company: Optional[str] = None
+    linkedin_handle: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+class HunterVerifyRequest(BaseModel):
+    email: str
+    api_key: Optional[str] = None
+
+
+@router.post("/hunter/find-email")
+def hunter_find_email_endpoint(body: HunterFindRequest):
+    """Hunter.io Email Finder: finds verified email by name and domain/company."""
+    from app.services.hunter_service import find_email
+    res = find_email(
+        full_name=body.full_name,
+        first_name=body.first_name,
+        last_name=body.last_name,
+        domain=body.domain,
+        company=body.company,
+        linkedin_handle=body.linkedin_handle,
+        api_key=body.api_key,
+    )
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Email not found via Hunter.io"))
+    return res
+
+
+@router.post("/hunter/verify-email")
+def hunter_verify_email_endpoint(body: HunterVerifyRequest):
+    """Hunter.io Email Verifier: checks email deliverability and score."""
+    from app.services.hunter_service import verify_email
+    res = verify_email(email=body.email, api_key=body.api_key)
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Email verification failed via Hunter.io"))
+    return res
+
+
+
+
 @router.post("/scrape")
-def scrape_creator(body: ScrapeRequest, actor: str = "internal", db: Session = Depends(get_db)):
+def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal", db: Session = Depends(get_db)):
     """
     Scrape a public profile and optionally save it.
     Parses handle from full URLs automatically.
     """
     import re
     handle = body.handle.strip()
+    platform = body.platform.lower().strip()
 
     # Parse handle from URL
     yt_patterns = [
@@ -58,32 +169,44 @@ def scrape_creator(body: ScrapeRequest, actor: str = "internal", db: Session = D
     ]
     ig_patterns = [r"instagram\.com/([^/?&\s]+)"]
     tt_patterns = [r"tiktok\.com/(@?[^/?&\s]+)"]
+    tw_patterns = [r"(?:twitter|x)\.com/([^/?&\s]+)"]
 
-    if body.platform == "youtube":
+    if "youtube.com" in handle:
+        platform = "youtube"
         for pat in yt_patterns:
             m = re.search(pat, handle)
             if m:
                 handle = m.group(1)
                 break
-    elif body.platform == "instagram":
+    elif "instagram.com" in handle:
+        platform = "instagram"
         for pat in ig_patterns:
             m = re.search(pat, handle)
             if m:
                 handle = m.group(1)
                 break
-    elif body.platform == "tiktok":
+    elif "tiktok.com" in handle:
+        platform = "tiktok"
         for pat in tt_patterns:
             m = re.search(pat, handle)
             if m:
                 handle = m.group(1)
                 break
+    elif "twitter.com" in handle or "x.com" in handle:
+        platform = "twitter"
+        for pat in tw_patterns:
+            m = re.search(pat, handle)
+            if m:
+                handle = m.group(1)
+                break
 
-    if body.platform != "youtube":
+    if platform != "youtube":
         handle = handle.lstrip("@").strip("/")
     else:
         handle = handle.strip("/")
 
-    scraped = scrape_profile(body.platform, handle)
+    apify_token = request.headers.get("X-Apify-Token")
+    scraped = scrape_profile(platform, handle, apify_token=apify_token)
     if "error" in scraped and not scraped.get("display_name"):
         raise HTTPException(400, f"Scrape failed: {scraped['error']}")
 
@@ -166,6 +289,47 @@ def get_creator(creator_id: str, db: Session = Depends(get_db)):
     if not c:
         raise HTTPException(404, "Creator not found")
     return _creator_dict(c)
+
+
+class CreatorUpdate(BaseModel):
+    display_name: Optional[str] = None
+    bio: Optional[str] = None
+    profile_url: Optional[str] = None
+    follower_count: Optional[int] = None
+    niche: Optional[list[str]] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
+    email_public: Optional[str] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None
+
+
+@router.patch("/{creator_id}")
+@router.put("/{creator_id}")
+def update_creator_details(
+    creator_id: str,
+    body: CreatorUpdate,
+    actor: str = "user",
+    db: Session = Depends(get_db)
+):
+    c = db.get(Creator, creator_id)
+    if not c:
+        raise HTTPException(404, "Creator not found")
+    
+    data = body.model_dump(exclude_unset=True)
+    for field, val in data.items():
+        if hasattr(c, field):
+            setattr(c, field, val)
+    
+    if body.email_public:
+        try:
+            add_contact(db, c.id, "email", body.email_public, "manual_edit", actor=actor)
+        except Exception:
+            pass
+            
+    db.commit()
+    db.refresh(c)
+    return {"status": "success", "creator": _creator_dict(c)}
 
 
 @router.patch("/{creator_id}/status")
@@ -289,6 +453,56 @@ def delete_creator(
     db.delete(creator)
     db.commit()
     return {"deleted": True, "creator_id": creator_id}
+
+
+class CreatorPatchBody(BaseModel):
+    display_name: Optional[str] = None
+    email_public: Optional[str] = None
+    status: Optional[str] = None
+    reply_classification: Optional[str] = None
+    reply_text: Optional[str] = None
+    discovery_notes: Optional[str] = None
+    niche: Optional[list] = None
+
+
+@router.patch("/{creator_id}")
+def update_creator(
+    creator_id: str, body: CreatorPatchBody, actor: str = "ops_dashboard", db: Session = Depends(get_db)
+):
+    """Update creator attributes, including email, status, and reply classification."""
+    creator = db.get(Creator, creator_id)
+    if not creator:
+        raise HTTPException(404, "Creator not found")
+
+    if body.display_name is not None:
+        creator.display_name = body.display_name
+    if body.email_public is not None:
+        creator.email_public = body.email_public
+    if body.status is not None:
+        creator.status = body.status
+    if body.discovery_notes is not None:
+        creator.discovery_notes = body.discovery_notes
+    if body.niche is not None:
+        creator.niche = body.niche
+    
+    if body.reply_classification is not None or body.reply_text is not None:
+        import json
+        notes_data = {}
+        try:
+            if creator.discovery_notes and creator.discovery_notes.startswith("{"):
+                notes_data = json.loads(creator.discovery_notes)
+        except Exception:
+            notes_data = {}
+        if body.reply_classification is not None:
+            notes_data["reply_classification"] = body.reply_classification
+        if body.reply_text is not None:
+            notes_data["reply_text"] = body.reply_text
+        creator.discovery_notes = json.dumps(notes_data)
+
+    creator.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(creator)
+    return _creator_dict(creator)
 
 
 @router.post("/{creator_id}/recommend")
@@ -574,6 +788,17 @@ def get_creator_analysis(creator_id: str, db: Session = Depends(get_db)):
 
 
 def _creator_dict(c: Creator) -> dict:
+    reply_classification = None
+    reply_text = None
+    try:
+        if c.discovery_notes and c.discovery_notes.startswith("{"):
+            import json
+            parsed = json.loads(c.discovery_notes)
+            reply_classification = parsed.get("reply_classification")
+            reply_text = parsed.get("reply_text")
+    except Exception:
+        pass
+
     return {
         "id": c.id, "handle": c.handle, "platform": c.platform,
         "display_name": c.display_name, "bio": c.bio,
@@ -581,6 +806,8 @@ def _creator_dict(c: Creator) -> dict:
         "follower_count": c.follower_count, "niche": c.niche or [],
         "location": c.location, "website": c.website,
         "email_public": c.email_public, "status": c.status,
+        "reply_classification": reply_classification,
+        "reply_text": reply_text,
         "discovery_source": c.discovery_source,
         "engagement_score": c.engagement_score,
         "created_at": c.created_at.isoformat() if c.created_at else None,
@@ -604,3 +831,51 @@ def _contact_dict(c) -> dict:
         "is_suppressed": c.is_suppressed, "notes": c.notes,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
+
+
+@router.delete("/all")
+def delete_all_creators(db: Session = Depends(get_db)):
+    """Delete all creators and associated contacts, outreach, threads, and replies."""
+    from app.models.outreach import OutreachMessage, EmailThread, EmailReply
+    from app.models.creator import CreatorContact, ProductRecommendation
+    from app.models.campaign import Campaign
+    from app.models.autonomous_campaign import AutonomousCampaign
+    try:
+        db.query(EmailReply).delete()
+        db.query(EmailThread).delete()
+        db.query(OutreachMessage).delete()
+        db.query(CreatorContact).delete()
+        db.query(ProductRecommendation).delete()
+        db.query(Campaign).delete()
+        db.query(AutonomousCampaign).delete()
+        deleted_count = db.query(Creator).delete()
+        db.commit()
+        return {"success": True, "deleted_count": deleted_count, "message": "All creators and associated records deleted"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to delete all creators: {str(e)}")
+
+
+@router.delete("/{creator_id}")
+def delete_single_creator(creator_id: str, db: Session = Depends(get_db)):
+    """Delete a specific creator by ID and their associated data."""
+    from app.models.outreach import OutreachMessage, EmailThread, EmailReply
+    from app.models.creator import CreatorContact, ProductRecommendation
+    creator = db.query(Creator).filter(Creator.id == creator_id).first()
+    if not creator:
+        raise HTTPException(404, "Creator not found")
+    try:
+        db.query(EmailReply).filter(EmailReply.thread_id.in_(
+            db.query(EmailThread.id).filter(EmailThread.creator_id == creator_id)
+        )).delete(synchronize_session=False)
+        db.query(EmailThread).filter(EmailThread.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(OutreachMessage).filter(OutreachMessage.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(CreatorContact).filter(CreatorContact.creator_id == creator_id).delete(synchronize_session=False)
+        db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == creator_id).delete(synchronize_session=False)
+        db.delete(creator)
+        db.commit()
+        return {"success": True, "deleted_id": creator_id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to delete creator: {str(e)}")
+

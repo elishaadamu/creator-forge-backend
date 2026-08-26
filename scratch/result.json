@@ -1,7 +1,0 @@
-HTTP/1.1 500 Internal Server Error
-date: Tue, 09 Jun 2026 08:14:35 GMT
-server: uvicorn
-content-length: 66
-content-type: application/json
-
-{"detail":"Image generation failed: The read operation timed out"}

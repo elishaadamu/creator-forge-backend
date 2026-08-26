@@ -324,6 +324,108 @@ def list_threads(status: Optional[str] = None, skip: int = 0, limit: int = 50, d
     return [_thread_dict(t) for t in threads]
 
 
+@router.post("/poll-inbox")
+def trigger_inbox_poll(db: Session = Depends(get_db)):
+    """Trigger an immediate IMAP fetch from Gmail to check for new creator replies."""
+    from app.services.inbox_poller import poll_inbox_sync
+    try:
+        poll_inbox_sync()
+    except Exception as e:
+        logger.warning(f"IMAP poll sync exception: {e}")
+        
+    try:
+        threads = db.query(Thread).order_by(Thread.last_activity.desc()).all()
+        return {
+            "status": "success",
+            "message": "IMAP inbox polled",
+            "threads": [_thread_dict(t) for t in threads]
+        }
+    except Exception as e:
+        return {
+            "status": "partial",
+            "message": f"Polled with error: {str(e)}",
+            "threads": []
+        }
+
+
+class DirectEmailRequest(BaseModel):
+    to_email: str
+    subject: str
+    body: str
+    creator_id: Optional[str] = None
+
+
+@router.post("/send-direct")
+def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)):
+    """Directly dispatch an email via Google SMTP and record thread/message in DB."""
+    from app.integrations.email_provider import email_provider
+    from app.models.creator import Creator, Contact
+    from app.models.outreach import Thread, OutreachMessage
+    from app.services.autonomous_outreach import is_real_valid_email
+    import uuid
+
+    to_email = payload.to_email.strip()
+    if not is_real_valid_email(to_email):
+        raise HTTPException(400, f"Invalid recipient email address: '{to_email}'")
+
+    # 1. Send via Google SMTP
+    try:
+        res = email_provider.send(
+            to_email=to_email,
+            subject=payload.subject,
+            body_html=payload.body.replace("\n", "<br>"),
+            body_text=payload.body
+        )
+    except Exception as e:
+        raise HTTPException(500, f"SMTP delivery failed: {str(e)}")
+
+    # 2. Record OutreachMessage & Thread in database
+    creator = None
+    if payload.creator_id:
+        creator = db.get(Creator, payload.creator_id)
+
+    contact = None
+    if creator:
+        contact = db.query(Contact).filter(Contact.creator_id == creator.id, Contact.contact_type == "email").first()
+        if not contact:
+            contact = Contact(creator_id=creator.id, contact_type="email", value=to_email, source="outreach_dispatch")
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+
+    msg = OutreachMessage(
+        creator_id=creator.id if creator else None,
+        campaign_id="default",
+        contact_id=contact.id if contact else None,
+        subject=payload.subject,
+        body=payload.body,
+        send_method="email",
+        status="sent",
+        sent_at=datetime.utcnow()
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+
+    thread = Thread(
+        creator_id=creator.id if creator else None,
+        outreach_message_id=msg.id,
+        status="open",
+        created_at=datetime.utcnow(),
+        last_activity=datetime.utcnow()
+    )
+    db.add(thread)
+    db.commit()
+    db.refresh(thread)
+
+    return {
+        "status": "sent",
+        "message_id": res.get("message_id", str(uuid.uuid4())),
+        "thread_id": thread.id,
+        "recipient": to_email
+    }
+
+
 class SendReplyRequest(BaseModel):
     body: str
     to_email: Optional[str] = None

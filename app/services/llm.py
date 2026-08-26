@@ -73,56 +73,34 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None, api
                 continue
             try:
                 import httpx
-                formatted_input = []
+                messages = []
                 if system_prompt:
-                    formatted_input.append({
-                        "role": "system",
-                        "content": [{"type": "input_text", "text": system_prompt}]
-                    })
-                formatted_input.append({
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": prompt}]
-                })
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
                 
-                url = "https://api.openai.com/v1/responses"
+                url = "https://api.openai.com/v1/chat/completions"
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {openai_api_key}"
                 }
                 payload = {
-                    "model": "gpt-5.5",
-                    "input": formatted_input,
-                    "max_output_tokens": max_tokens
+                    "model": "gpt-4o-mini",
+                    "messages": messages,
+                    "max_tokens": max_tokens
                 }
-                r = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+                r = httpx.post(url, json=payload, headers=headers, timeout=60.0)
                 if r.status_code != 200:
                     raise ValueError(f"HTTP {r.status_code}: {r.text}")
                 
-                response = r.json()
-                
-                # Extract text response from Responses API structure
-                content = ""
-                if response and "output_text" in response:
-                    content = response["output_text"]
-                elif response and isinstance(response.get("output"), list):
-                    for out in response["output"]:
-                        if out.get("type") == "message" and isinstance(out.get("content"), list):
-                            for item in out["content"]:
-                                text_val = item.get("text") or item.get("output_text")
-                                if text_val:
-                                    content = text_val
-                                    break
-                        if content:
-                            break
-                            
-                content = content.strip() if content else ""
+                res_data = r.json()
+                content = res_data["choices"][0]["message"]["content"].strip()
                 if content:
                     print("\n" + "="*50)
-                    print(f"🤖 [AI GENERATED RESPONSE - OPENAI RESPONSES HTTP]:\n{content}")
+                    print(f"[AI GENERATED RESPONSE - OPENAI]:\n{content}")
                     print("="*50 + "\n")
                     return content
                 else:
-                    raise ValueError("OpenAI Responses returned empty response")
+                    raise ValueError("OpenAI returned empty response")
             except Exception as e:
                 errors.append(f"OpenAI error: {e}")
 

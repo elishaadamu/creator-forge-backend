@@ -44,3 +44,7 @@ npm-debug.log*
 # Vercel
 .vercel/
 web/.env.local
+
+# Scratch files
+scratch/
+scratch_*.py

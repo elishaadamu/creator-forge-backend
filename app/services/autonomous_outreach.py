@@ -98,12 +98,16 @@ def run_autonomous_batch(
     db: Session,
     campaign_id: str,
     limit: Optional[int] = None,
+    creator_ids: Optional[List[str]] = None,
+    creators_data: Optional[List[dict]] = None,
+    template_subject: Optional[str] = None,
+    template_body: Optional[str] = None,
     actor: str = "autonomous_engine",
 ) -> Dict:
     """
     Run an autonomous batch outreach execution for a given campaign.
-    Filters creators by follower count (e.g. 100k-1M), engagement rate, and niche.
-    Renders email templates and dispatches or queues outreach.
+    Supports explicitly passed creators/creators_data with user-modified emails,
+    or falls back to eligible filtered creators in database.
     """
     campaign = db.get(AutonomousCampaign, campaign_id)
     if not campaign:
@@ -112,64 +116,126 @@ def run_autonomous_batch(
     if campaign.status == "paused":
         return {"status": "paused", "sent": 0, "queued": 0, "message": "Campaign is currently paused."}
 
+    if actor == "autonomous_scheduler" and campaign.last_run_at:
+        next_run_at = campaign.last_run_at + timedelta(days=7)
+        if datetime.utcnow() < next_run_at:
+            return {
+                "status": "throttled",
+                "sent": 0,
+                "queued": 0,
+                "message": f"Automatic outreach is paused until {next_run_at.isoformat()}.",
+            }
+
     max_batch = limit or campaign.target_weekly_limit or 50
-
-    # Base query for eligible creators
-    query = db.query(Creator).filter(
-        Creator.follower_count >= campaign.min_followers,
-        Creator.follower_count <= campaign.max_followers,
-        Creator.status.in_(["discovered", "qualified", "in_review", "approved"]),
-    )
-
-    all_creators = query.all()
     eligible_creators = []
 
-    for creator in all_creators:
-        # Check suppression
-        if is_suppressed(db, creator_id=creator.id, email=creator.email_public):
-            continue
+    # 1. If explicit creators_data provided (e.g. from Acquisition Engine active batch)
+    if creators_data and isinstance(creators_data, list) and len(creators_data) > 0:
+        for c_data in creators_data:
+            c_handle = str(c_data.get("handle") or "").lstrip("@").strip()
+            c_id = str(c_data.get("id") or "")
+            c_email = str(c_data.get("email") or c_data.get("email_public") or "").strip()
 
-        # Check if already outreach sent for this campaign
-        already_sent = db.query(OutreachMessage).filter(
-            OutreachMessage.creator_id == creator.id,
-            OutreachMessage.campaign_id == campaign_id,
-        ).first()
-        if already_sent:
-            continue
+            creator = None
+            if c_id and not c_id.startswith("auto_"):
+                creator = db.get(Creator, c_id)
+            if not creator and c_handle:
+                creator = db.query(Creator).filter(Creator.handle == c_handle).first()
 
-        # Niche matching if campaign specifies target niches
-        if campaign.niches and isinstance(campaign.niches, list) and len(campaign.niches) > 0:
-            creator_niches = creator.niche if isinstance(creator.niche, list) else []
-            if creator.bio:
-                bio_lower = creator.bio.lower()
-                niche_match = any(n.lower() in bio_lower for n in campaign.niches)
-            else:
-                niche_match = False
+            if not creator and c_handle:
+                # Create creator on the fly if not in DB yet
+                try:
+                    from app.services.discovery import create_or_get_creator
+                    creator, _ = create_or_get_creator(
+                        db=db,
+                        handle=c_handle,
+                        platform=str(c_data.get("platform", "youtube")).lower(),
+                        display_name=str(c_data.get("display_name") or c_data.get("name") or c_handle),
+                        follower_count=int(c_data.get("follower_count") or 100000),
+                        niche=c_data.get("niche") or ["Tech"],
+                        email_public=c_email,
+                        actor=actor
+                    )
+                except Exception as e:
+                    logger.warn(f"[Autonomous Batch] Failed to create creator @{c_handle}: {e}")
 
-            if not niche_match:
-                niche_match = any(
-                    any(n.lower() in str(cn).lower() for n in campaign.niches)
-                    for cn in creator_niches
-                )
-            # If no niche matched, skip (unless creator niche list is empty, then allow)
-            if creator_niches and not niche_match:
+            if creator:
+                if actor == "autonomous_scheduler":
+                    already_contacted = db.query(OutreachMessage).filter(
+                        OutreachMessage.creator_id == creator.id,
+                        OutreachMessage.status.in_(["queued", "sent"]),
+                    ).first()
+                    if already_contacted:
+                        continue
+                if c_email:
+                    creator.email_public = c_email
+                    db.commit()
+                eligible_creators.append(creator)
+
+    # 2. If explicit creator_ids provided
+    elif creator_ids and isinstance(creator_ids, list) and len(creator_ids) > 0:
+        for cid in creator_ids:
+            c = db.get(Creator, cid)
+            if c:
+                eligible_creators.append(c)
+
+    # 3. Fallback: Query eligible creators from DB
+    else:
+        query = db.query(Creator).filter(
+            Creator.follower_count >= campaign.min_followers,
+            Creator.follower_count <= campaign.max_followers,
+            Creator.status.in_(["discovered", "qualified", "in_review", "approved"]),
+        )
+
+        all_creators = query.all()
+
+        for creator in all_creators:
+            # Check suppression
+            if is_suppressed(db, creator_id=creator.id, email=creator.email_public):
                 continue
 
-        # Engagement rate check (metrics snapshot or creator.engagement_score)
-        eng_rate = creator.engagement_score or 0.0
-        snapshot = db.query(MetricsSnapshot).filter(
-            MetricsSnapshot.creator_id == creator.id
-        ).order_by(MetricsSnapshot.snapshot_date.desc()).first()
-        if snapshot and snapshot.engagement_rate:
-            eng_rate = max(eng_rate, snapshot.engagement_rate)
+            # Check if already outreach sent for this campaign
+            if actor == "autonomous_scheduler":
+                already_sent = db.query(OutreachMessage).filter(
+                    OutreachMessage.creator_id == creator.id,
+                    OutreachMessage.status.in_(["queued", "sent"]),
+                ).first()
+                if already_sent:
+                    continue
 
-        # Minimum engagement rate check (default threshold 2.0%)
-        if campaign.min_engagement_rate and eng_rate < campaign.min_engagement_rate and eng_rate > 0:
-            continue
+            # Niche matching if campaign specifies target niches
+            if campaign.niches and isinstance(campaign.niches, list) and len(campaign.niches) > 0:
+                creator_niches = creator.niche if isinstance(creator.niche, list) else []
+                if creator.bio:
+                    bio_lower = creator.bio.lower()
+                    niche_match = any(n.lower() in bio_lower for n in campaign.niches)
+                else:
+                    niche_match = False
 
-        eligible_creators.append(creator)
-        if len(eligible_creators) >= max_batch:
-            break
+                if not niche_match:
+                    niche_match = any(
+                        any(n.lower() in str(cn).lower() for n in campaign.niches)
+                        for cn in creator_niches
+                    )
+                # If no niche matched, skip (unless creator niche list is empty, then allow)
+                if creator_niches and not niche_match:
+                    continue
+
+            # Engagement rate check (metrics snapshot or creator.engagement_score)
+            eng_rate = creator.engagement_score or 0.0
+            snapshot = db.query(MetricsSnapshot).filter(
+                MetricsSnapshot.creator_id == creator.id
+            ).order_by(MetricsSnapshot.snapshot_date.desc()).first()
+            if snapshot and snapshot.engagement_rate:
+                eng_rate = max(eng_rate, snapshot.engagement_rate)
+
+            # Minimum engagement rate check (default threshold 2.0%)
+            if campaign.min_engagement_rate and eng_rate < campaign.min_engagement_rate and eng_rate > 0:
+                continue
+
+            eligible_creators.append(creator)
+            if len(eligible_creators) >= max_batch:
+                break
 
     results = {"total_eligible": len(eligible_creators), "sent": 0, "queued": 0, "errors": [], "processed_creators": []}
 
@@ -181,8 +247,10 @@ def run_autonomous_batch(
             ).first()
             product_name = rec.product_name if rec else f"{creator.niche[0] if creator.niche and isinstance(creator.niche, list) else 'Creator'} Product"
 
-            subject = render_template(campaign.template_subject, creator, product_name)
-            body = render_template(campaign.template_body, creator, product_name)
+            tmpl_s = template_subject or campaign.template_subject
+            tmpl_b = template_body or campaign.template_body
+            subject = render_template(tmpl_s, creator, product_name)
+            body = render_template(tmpl_b, creator, product_name)
 
             # Determine real public email address
             target_email = None
@@ -221,55 +289,60 @@ def run_autonomous_batch(
                     contact.value = target_email
                     db.commit()
 
-            msg_status = "queued" if campaign.auto_send else "draft"
-            outreach_msg = OutreachMessage(
-                creator_id=creator.id,
-                campaign_id="default",
-                contact_id=contact.id if contact else None,
-                subject=subject,
-                body=body,
-                send_method="email",
-                status=msg_status,
-                queued_at=datetime.utcnow(),
-            )
-            db.add(outreach_msg)
-            db.commit()
-            db.refresh(outreach_msg)
+            if target_email and is_real_valid_email(target_email):
+                msg_status = "queued" if campaign.auto_send else "draft"
+                outreach_msg = OutreachMessage(
+                    creator_id=creator.id,
+                    campaign_id="default",
+                    contact_id=contact.id if contact else None,
+                    subject=subject,
+                    body=body,
+                    send_method="email",
+                    status=msg_status,
+                    queued_at=datetime.utcnow(),
+                )
+                db.add(outreach_msg)
+                db.commit()
+                db.refresh(outreach_msg)
 
-            # Create thread for tracking
-            thread = Thread(
-                creator_id=creator.id,
-                outreach_message_id=outreach_msg.id,
-                status="open",
-                created_at=datetime.utcnow(),
-            )
-            db.add(thread)
-            db.commit()
+                # Create thread for tracking
+                thread = Thread(
+                    creator_id=creator.id,
+                    outreach_message_id=outreach_msg.id,
+                    status="open",
+                    created_at=datetime.utcnow(),
+                )
+                db.add(thread)
+                db.commit()
 
-            # If auto_send is enabled and REAL email exists, attempt email dispatch
-            if campaign.auto_send and target_email and is_real_valid_email(target_email):
-                try:
-                    email_provider.send(
-                        to_email=target_email,
-                        subject=subject,
-                        body_html=body.replace("\n", "<br>"),
-                        body_text=body,
-                    )
-                    outreach_msg.status = "sent"
-                    outreach_msg.sent_at = datetime.utcnow()
-                    db.commit()
-                    results["sent"] += 1
-                except Exception as send_err:
-                    outreach_msg.status = "failed"
-                    outreach_msg.send_error = str(send_err)
-                    db.commit()
-                    results["errors"].append({"creator_id": creator.id, "error": f"Send error: {send_err}"})
+                # Dispatch email via Google SMTP
+                if campaign.auto_send:
+                    try:
+                        email_provider.send(
+                            to_email=target_email,
+                            subject=subject,
+                            body_html=body.replace("\n", "<br>"),
+                            body_text=body,
+                        )
+                        outreach_msg.status = "sent"
+                        outreach_msg.sent_at = datetime.utcnow()
+                        db.commit()
+                        results["sent"] += 1
+                    except Exception as send_err:
+                        outreach_msg.status = "failed"
+                        outreach_msg.send_error = str(send_err)
+                        db.commit()
+                        results["errors"].append({"creator_id": creator.id, "error": f"Send error: {send_err}"})
+                else:
+                    results["queued"] += 1
+
+                final_status = outreach_msg.status
+                send_err_val = outreach_msg.send_error
             else:
-                if not is_real_valid_email(target_email):
-                    outreach_msg.status = "draft" if not campaign.auto_send else "queued"
-                    outreach_msg.send_error = "Missing valid public email address in database"
-                    db.commit()
-                results["queued"] += 1
+                # Creator has no public email address — skip outreach dispatch
+                final_status = "skipped_no_email"
+                send_err_val = "No valid email address found"
+                results["skipped_no_email"] = results.get("skipped_no_email", 0) + 1
 
             results["processed_creators"].append({
                 "id": creator.id,
@@ -277,8 +350,8 @@ def run_autonomous_batch(
                 "display_name": creator.display_name,
                 "email_public": creator.email_public,
                 "target_email": target_email,
-                "status": outreach_msg.status,
-                "send_error": outreach_msg.send_error,
+                "status": final_status,
+                "send_error": send_err_val,
             })
 
             campaign.total_sent = (campaign.total_sent or 0) + 1
@@ -437,7 +510,6 @@ async def start_autonomous_scheduler_loop(interval_hours: int = 24):
         except Exception as e:
             logger.error(f"Error in autonomous scheduler loop: {e}")
 
-        # Sleep interval (default 24 hours)
         await asyncio.sleep(interval_hours * 3600)
 
 

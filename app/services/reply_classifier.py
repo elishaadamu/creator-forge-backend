@@ -119,22 +119,43 @@ def classify_reply(
             print(f"LLM reply classification failed: {e}")
             raw = None
 
+    # Strict rule-based pre-check for negative / decline / opt-out
+    lower = (reply.body or "").lower().strip()
+    neg_patterns = [
+        "not interested", "am not interested", "i am not interested", "im not interested",
+        "i'm not interested", "no thanks", "no thank you", "uninterested", "not for me",
+        "not right now", "decline", "pass on this", "pass", "please remove", "unsubscribe",
+        "stop", "dont contact", "don't contact", "not looking"
+    ]
+    more_info_patterns = [
+        "can you tell me more", "more info", "send details", "send more", "send over details",
+        "send deck", "pitch deck", "more information", "what are the details"
+    ]
+    pos_patterns = [
+        "yes", "interested", "would be interested", "i would be interested", "i'm interested", "im interested",
+        "love to", "sounds great", "sounds good", "let's talk", "lets talk", "let's do it", "lets do it",
+        "let's connect", "lets connect", "count me in", "happy to chat", "open to", "schedule a call",
+        "thanks for reaching out", "let me know next steps", "ready to move forward"
+    ]
+
+    is_explicit_negative = any(p in lower for p in neg_patterns)
+    is_explicit_more_info = any(p in lower for p in more_info_patterns)
+    is_explicit_positive = not is_explicit_negative and any(p in lower for p in pos_patterns)
+
     if not raw:
-        # Rule-based fallback
-        lower = reply.body.lower()
-        if any(w in lower for w in ["yes", "interested", "love to", "sounds great", "let's talk"]):
-            reply.classification = "interested"
-            reply.sentiment = "positive"
-            reply.crm_stage = "qualified"
-            reply.ai_summary = "Creator expressed interest."
-        elif any(w in lower for w in ["no thanks", "not interested", "pass", "decline"]):
+        if is_explicit_negative:
             reply.classification = "not_interested"
             reply.sentiment = "negative"
             reply.crm_stage = "closed_lost"
-            reply.ai_summary = "Creator declined."
-        elif any(w in lower for w in ["can you tell me more", "more info", "details", "deck"]):
-            reply.classification = "more_info"
+            reply.ai_summary = "Creator declined or expressed no interest."
+        elif is_explicit_positive:
+            reply.classification = "interested"
             reply.sentiment = "positive"
+            reply.crm_stage = "qualified"
+            reply.ai_summary = "Creator expressed positive interest."
+        elif is_explicit_more_info:
+            reply.classification = "more_info"
+            reply.sentiment = "neutral"
             reply.crm_stage = "contacted"
             reply.ai_summary = "Creator asking for more information."
         else:
@@ -143,28 +164,58 @@ def classify_reply(
             reply.crm_stage = "contacted"
             reply.ai_summary = "Reply received — manual review needed."
         reply.processed_at = datetime.utcnow()
-        db.commit()
-        return reply
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            data = json.loads(match.group()) if match else {}
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        data = json.loads(match.group()) if match else {}
+        parsed_cls = data.get("classification", "other")
+        # Guardrails: override classification if explicit sentiment keywords match
+        if is_explicit_negative and parsed_cls == "interested":
+            parsed_cls = "not_interested"
+            data["sentiment"] = "negative"
+            data["crm_stage"] = "closed_lost"
+        elif is_explicit_positive and parsed_cls != "not_interested":
+            parsed_cls = "interested"
+            data["sentiment"] = "positive"
+            data["crm_stage"] = "qualified"
+            if not data.get("summary"):
+                data["summary"] = "Creator expressed positive interest."
 
-    reply.classification = data.get("classification", "other")
-    reply.sentiment = data.get("sentiment", "neutral")
-    reply.crm_stage = data.get("crm_stage", "contacted")
-    reply.ai_summary = data.get("summary", "")
-    reply.processed_at = datetime.utcnow()
+        reply.classification = parsed_cls
+        reply.sentiment = data.get("sentiment", "neutral")
+        reply.crm_stage = data.get("crm_stage", "contacted")
+        reply.ai_summary = data.get("summary", "")
+        reply.processed_at = datetime.utcnow()
 
-    # Update thread CRM stage
+    # Update thread CRM stage & Creator model
     thread = db.get(Thread, reply.thread_id)
     if thread:
         if reply.classification == "interested":
             thread.status = "replied"
         elif reply.classification == "not_interested":
             thread.status = "closed"
+
+        if thread.creator_id:
+            from app.models.creator import Creator
+            creator = db.get(Creator, thread.creator_id)
+            if creator:
+                if reply.classification == "interested":
+                    creator.status = "approved"
+                elif reply.classification == "not_interested":
+                    creator.status = "rejected"
+                existing_notes = {}
+                if creator.discovery_notes:
+                    try:
+                        existing_notes = json.loads(creator.discovery_notes)
+                    except:
+                        existing_notes = {"raw": creator.discovery_notes}
+                existing_notes["reply_classification"] = reply.classification
+                existing_notes["reply_text"] = reply.body
+                existing_notes["reply_subject"] = reply.subject
+                creator.discovery_notes = json.dumps(existing_notes)
 
     db.commit()
     return reply
