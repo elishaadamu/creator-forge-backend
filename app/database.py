@@ -36,7 +36,7 @@ def get_db():
 
 
 def init_db():
-    from app.models import creator, campaign, outreach, audit  # noqa: F401 — registers models
+    from app.models import creator, campaign, outreach, audit, project  # noqa: F401 — registers models
     Base.metadata.create_all(bind=engine)
     
     # Auto-seed the 'default' campaign if missing
