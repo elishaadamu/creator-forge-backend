@@ -33,7 +33,7 @@ Body: {body[:1000]}
 
 Return JSON:
 {{
-  "classification": "<interested|not_interested|more_info|out_of_office|bounced|spam|other>",
+  "classification": "<interested|not_interested|question|more_info|out_of_office|bounced|spam|other>",
   "sentiment": "<positive|neutral|negative>",
   "crm_stage": "<new|contacted|qualified|negotiating|closed_won|closed_lost>",
   "summary": "<1-2 sentence summary of what they said>",
@@ -41,9 +41,10 @@ Return JSON:
 }}
 
 Classification guide:
-- interested: enthusiastic, wants to move forward, asks questions about the deal
-- more_info: asks for more details, deck, or clarification before deciding
-- not_interested: clear no or decline
+- interested: explicit positive agreement or confirmation to move forward (e.g. 'let's do it', 'count me in', 'I am interested', 'let's build')
+- question: asks questions, wants thoughts/feedback, or inquires about terms/tech/pricing (e.g. 'thoughts?', 'what tech?', 'how much time?')
+- more_info: asks for deck, more details, or links before deciding
+- not_interested: clear no, decline, or not right now
 - out_of_office: auto-reply or vacation response
 - bounced: delivery failure notification
 - spam: clearly unrelated or malicious
@@ -89,6 +90,13 @@ def record_reply(
         classify_reply(db, reply.id, actor=actor)
     except Exception:
         pass  # Classification failure shouldn't block reply recording
+
+    # Autonomous hands-free creator progression in the background (no frontend required)
+    try:
+        from app.services.autonomous_pipeline import run_autonomous_creator_progression
+        run_autonomous_creator_progression(db, reply)
+    except Exception as auto_err:
+        print(f"[Autonomous Pipeline] Background creator progression notice: {auto_err}")
 
     audit_svc.log(
         db, action="reply_recorded", entity_type="reply",

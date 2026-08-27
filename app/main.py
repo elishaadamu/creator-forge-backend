@@ -47,8 +47,8 @@ async def startup():
     init_db()
     # Ensure autonomous table is registered
     from app.models.autonomous_campaign import AutonomousCampaign
-    # Start the IMAP poller loop in the background
-    asyncio.create_task(start_poller_loop(interval_seconds=60))
+    # Start the IMAP poller loop in the background (polls every 15s for instant autonomous execution)
+    asyncio.create_task(start_poller_loop(interval_seconds=15))
     # Start the Autonomous Outreach Scheduler loop in the background
     asyncio.create_task(start_autonomous_scheduler_loop(interval_hours=24))
 

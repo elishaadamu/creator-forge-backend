@@ -446,10 +446,13 @@ def delete_all_creators(db: Session = Depends(get_db)):
     """Delete all creators and all associated contacts, outreach messages, threads, and replies."""
     from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
     from app.models.creator import (
-        Contact, Analysis, ContentSample, Deck, MediaImage,
+        Contact, Analysis, ContentSample, Deck,
         MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
     )
-    from app.models.project import CoLaunchProject
+    from app.models.project import (
+        CoLaunchProject, ValidationPlan, ValidationCampaign,
+        CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
+    )
     try:
         db.query(Reply).delete(synchronize_session=False)
         db.query(FollowUp).delete(synchronize_session=False)
@@ -460,16 +463,22 @@ def delete_all_creators(db: Session = Depends(get_db)):
         db.query(Analysis).delete(synchronize_session=False)
         db.query(ContentSample).delete(synchronize_session=False)
         db.query(Deck).delete(synchronize_session=False)
-        db.query(MediaImage).delete(synchronize_session=False)
         db.query(MetricsSnapshot).delete(synchronize_session=False)
         db.query(Partnership).delete(synchronize_session=False)
         db.query(PostSuggestion).delete(synchronize_session=False)
         db.query(ProductRecommendation).delete(synchronize_session=False)
-        db.query(CoLaunchProject).update({CoLaunchProject.creator_id: None}, synchronize_session=False)
+
+        # Completely delete all CoLaunchProjects and child tables
+        db.query(ValidationGateDecision).delete(synchronize_session=False)
+        db.query(ValidationTelemetry).delete(synchronize_session=False)
+        db.query(CreatorCampaignTask).delete(synchronize_session=False)
+        db.query(ValidationCampaign).delete(synchronize_session=False)
+        db.query(ValidationPlan).delete(synchronize_session=False)
+        db.query(CoLaunchProject).delete(synchronize_session=False)
 
         deleted_count = db.query(Creator).delete(synchronize_session=False)
         db.commit()
-        return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators"}
+        return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and all venture projects"}
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Failed to delete all creators: {str(e)}")
@@ -489,7 +498,7 @@ def delete_creator(
 
     from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
     from app.models.creator import (
-        Contact, Analysis, ContentSample, Deck, MediaImage,
+        Contact, Analysis, ContentSample, Deck,
         MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
     )
     from app.models.project import CoLaunchProject
@@ -506,7 +515,6 @@ def delete_creator(
         db.query(Analysis).filter(Analysis.creator_id == creator_id).delete(synchronize_session=False)
         db.query(ContentSample).filter(ContentSample.creator_id == creator_id).delete(synchronize_session=False)
         db.query(Deck).filter(Deck.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(MediaImage).filter(MediaImage.creator_id == creator_id).delete(synchronize_session=False)
         db.query(MetricsSnapshot).filter(MetricsSnapshot.creator_id == creator_id).delete(synchronize_session=False)
         db.query(Partnership).filter(Partnership.creator_id == creator_id).delete(synchronize_session=False)
         db.query(PostSuggestion).filter(PostSuggestion.creator_id == creator_id).delete(synchronize_session=False)

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +11,8 @@ from app.models.project import (
     CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
 )
 from app.models.creator import Creator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -189,13 +192,14 @@ def list_projects(db: Session = Depends(get_db)):
     return [_format_project_response(p) for p in projects]
 
 
-@router.post("", status_code=201)
-def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
+def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) -> dict:
     """
-    Initialize a new Co-Launch Project from Section 1 concept.
-    Automatically initializes the 5-step validation architecture in the database.
+    Core implementation to initialize a new Co-Launch Project from concept.
+    Initializes the 5-step validation architecture and sends dual notifications to Creator and Admin.
+    Can be called directly by background autonomous pipeline without HTTP context.
     """
     proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
+
 
     # Clean existing if ID exists
     existing = db.get(CoLaunchProject, proj_id)
@@ -354,7 +358,8 @@ def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
 
         creator_email = (body.creatorEmail or "").strip()
         admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
-        portal_magic_link = f"{settings.FRONTEND_URL or 'http://localhost:3001'}/portal?token={proj.portal_token}&project={proj.id}"
+        base_frontend = (settings.FRONTEND_URL or "http://localhost:3001").rstrip("/")
+        portal_magic_link = f"{base_frontend}/portal?token={proj.portal_token}&project={proj.id}"
 
         email_subject = f"🚀 Project Initialized: {proj.product_name} with {proj.creator_name or proj.creator_handle} (Section 2 Live)"
         admin_email_body = f"""Hello Admin,
@@ -416,6 +421,12 @@ Creator Forge Studio Team"""
         logger.warning(f"Project dispatch notification exception: {dispatch_err}")
 
     return _format_project_response(proj)
+
+
+@router.post("", status_code=201)
+def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
+    """Initialize a new Co-Launch Project from Section 1 concept."""
+    return execute_create_co_launch_project(db, body)
 
 
 @router.get("/{project_id}")
