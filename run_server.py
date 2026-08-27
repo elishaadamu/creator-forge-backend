@@ -25,4 +25,5 @@ uvicorn.run(
     port=8000,
     loop="asyncio",
     http="h11",
+    timeout_keep_alive=300,
 )

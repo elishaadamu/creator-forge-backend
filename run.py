@@ -31,4 +31,5 @@ if __name__ == "__main__":
         port=port,
         reload=True,
         reload_dirs=["app"],
+        timeout_keep_alive=300,
     )

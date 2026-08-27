@@ -597,7 +597,7 @@ def _reply_dict(r: Reply) -> dict:
         "subject": r.subject, "body": r.body,
         "classification": r.classification, "sentiment": r.sentiment,
         "ai_summary": r.ai_summary, "crm_stage": r.crm_stage,
-        "received_at": r.received_at.isoformat() if r.received_at else None,
+        "received_at": (r.received_at.isoformat() + "Z") if (r.received_at and not r.received_at.isoformat().endswith("Z") and not ("+" in r.received_at.isoformat())) else (r.received_at.isoformat() if r.received_at else None),
     }
 
 

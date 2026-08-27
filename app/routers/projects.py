@@ -359,6 +359,7 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         creator_email = (body.creatorEmail or "").strip()
         admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
         base_frontend = (settings.FRONTEND_URL or "http://localhost:3001").rstrip("/")
+        admin_project_link = f"{base_frontend}/launch?section=section2&project={proj.id}"
         portal_magic_link = f"{base_frontend}/portal?token={proj.portal_token}&project={proj.id}"
 
         email_subject = f"🚀 Project Initialized: {proj.product_name} with {proj.creator_name or proj.creator_handle} (Section 2 Live)"
@@ -371,6 +372,8 @@ A new Co-Launch Software Venture has been initialized into Section 2:
 • Creator Partner: {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})
 • Creator Email: {creator_email or 'Pending'}
 • Target Presale Milestone: ${int(proj.presale_target):,}
+
+• Admin Project OS Dashboard: {admin_project_link}
 • Creator Portal Magic Link: {portal_magic_link}
 
 Phase 1 (Validate) is now active and ready for execution.
@@ -378,13 +381,37 @@ Phase 1 (Validate) is now active and ready for execution.
 Best regards,
 Creator Forge Studio Operations"""
 
+        admin_email_html = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0c0e14; color: #f1f5f9; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
+            <h2 style="color: #a855f7; margin-top: 0;">🚀 Co-Launch Venture Initialized (Section 2 Live)</h2>
+            <p style="color: #94a3b8; font-size: 14px;">A new Co-Launch Software Venture has moved into Section 2:</p>
+            <ul style="line-height: 1.8; font-size: 14px; color: #cbd5e1;">
+                <li><strong>Product:</strong> {proj.product_name}</li>
+                <li><strong>Tagline:</strong> {proj.product_tagline}</li>
+                <li><strong>Partner:</strong> {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})</li>
+                <li><strong>Creator Email:</strong> {creator_email or 'Pending'}</li>
+                <li><strong>Presale Milestone:</strong> ${int(proj.presale_target):,}</li>
+            </ul>
+            <div style="margin: 24px 0; padding: 16px; background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); border-radius: 12px;">
+                <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: bold; color: #c084fc;">🛠️ ADMIN DASHBOARD (PROJECT OS):</p>
+                <a href="{admin_project_link}" style="display: inline-block; padding: 10px 20px; background: #a855f7; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 13px; border-radius: 8px;">Open Co-Launch Project OS →</a>
+                <p style="margin: 8px 0 0 0; font-size: 11px; color: #94a3b8; word-break: break-all;">{admin_project_link}</p>
+            </div>
+            <div style="margin: 16px 0; padding: 14px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px;">
+                <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #34d399;">👤 CREATOR PORTAL MAGIC LINK (Shared with Creator):</p>
+                <a href="{portal_magic_link}" style="color: #6ee7b7; font-size: 12px; word-break: break-all;">{portal_magic_link}</a>
+            </div>
+            <p style="color: #64748b; font-size: 12px; margin-top: 24px;">Phase 1 (Validate) is active and ready for execution.</p>
+        </div>
+        """
+
         # 1. Dispatch Briefing to Admin (elishadamu97@gmail.com)
         if admin_email and "@" in admin_email:
             try:
                 email_provider.send(
                     to_email=admin_email,
                     subject=f"[ADMIN BRIEFING] {email_subject}",
-                    body_html=admin_email_body.replace("\n", "<br>"),
+                    body_html=admin_email_html,
                     body_text=admin_email_body
                 )
                 logger.info(f"Dispatched Section 2 Admin Briefing to {admin_email}")

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def generate_step6_question_answer(creator_name: str, first_name: str, concepts: list, question_body: str) -> tuple[str, str]:
     """Generates an authoritative, helpful response to a creator's questions regarding benefits, tech stack, revenue split, time commitment, and IP."""
-    subject = f"Re: Answers to your questions regarding co-founding software ({concepts[0]['name']})"
+    subject = f"Re: [STEP 6: ANSWERS] Co-founding questions regarding {concepts[0]['name']}"
     clean_q = (question_body or "").strip()
 
     concepts_summary = "\n".join(
@@ -141,9 +141,9 @@ def generate_step6_persuasion_email(creator_name: str, first_name: str, concepts
     is_confused = any(w in clean_obj.lower() for w in ["confus", "complicat", "unclear", "dont understand", "don't understand", "reject"])
 
     subject = (
-        f"Re: Simplifying our co-founder partnership for {creator_name} ({top_c.get('name', 'SaaS')})"
+        f"Re: [STEP 6: PARTNERSHIP] Simplifying our co-founder partnership for {creator_name} ({top_c.get('name', 'SaaS')})"
         if is_confused
-        else f"Re: Zero-effort co-founder model for {creator_name} ({top_c.get('name', 'SaaS')})"
+        else f"Re: [STEP 6: PARTNERSHIP] Zero-effort co-founder model for {creator_name} ({top_c.get('name', 'SaaS')})"
     )
 
     try:
@@ -335,7 +335,7 @@ def run_autonomous_creator_progression(db: Session, reply: Reply):
         creator.status = "qualified"
         db.commit()
 
-        pitch_subject = f"Co-founder partnership blueprint for {c_name} [#{clean_handle}]"
+        pitch_subject = f"[STEP 6: OPPORTUNITY PITCH] Top 3 Software Concepts & Deck for {c_name}"
         pitch_body = f"""Hi {first_name},
 
 Thrilled to hear from you! As promised, our studio analyzed your channel and designed 3 custom software co-launch concepts tailored for your community:
@@ -355,7 +355,7 @@ Best regards,
 Creator Forge Studio Team
 
 ---
-Ref: [CF-CID:{c_id} | Handle:@{clean_handle}]"""
+Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
 
         try:
             email_provider.send(
@@ -382,20 +382,43 @@ Ref: [CF-CID:{c_id} | Handle:@{clean_handle}]"""
         return
 
     # ── STAGE B: Reply to Opportunity Pitch -> Strictly Validate Before Launch ──
-    # Check if this reply is specifically addressed to the Step 6 Opportunity Pitch thread
-    is_step6_pitch_thread = any(k in reply_subj for k in ["blueprint", "opportunity deck", "concepts", "option", "thoughts"])
+    # Check if this reply is specifically addressed to the Step 6 Opportunity Pitch or Dialog thread
+    reply_body_lower = (reply.body or "").lower()
+    is_step6_pitch_thread = (
+        "step 6" in reply_subj or "step6" in reply_subj or "step6" in reply_body_lower or
+        "cf-stage:step6" in reply_body_lower or
+        any(k in reply_subj for k in ["opportunity pitch", "opportunity deck", "concepts", "option", "thoughts", "answers", "blueprint"])
+    )
     
-    # If the reply is to the initial inquiry thread ("inquiry"), this is NOT a Step 6 response!
-    if "inquiry" in reply_subj and not is_step6_pitch_thread:
+    # If the reply is to the initial inquiry thread and has NO Step 6 indicators, this is NOT a Step 6 response!
+    if ("inquiry" in reply_subj or "step 3" in reply_subj or "step3" in reply_subj or "cf-stage:step3" in reply_body_lower) and not is_step6_pitch_thread:
         logger.info(f"[Autonomous Pipeline] Reply {reply.id} is for initial inquiry thread, not Step 6 pitch. Ignoring for Stage B.")
         return
 
-    # 1. Ensure the incoming reply arrived AFTER the pitch was sent
-    if pitch_msg.sent_at and reply.received_at:
-        p_time = pitch_msg.sent_at.replace(tzinfo=None) if getattr(pitch_msg.sent_at, 'tzinfo', None) else pitch_msg.sent_at
+    # 1. Ensure the incoming reply arrived AFTER our latest outbound communication (Pitch, Answers, or Persuasion)
+    latest_outbound = (
+        db.query(OutreachMessage)
+        .filter(
+            OutreachMessage.creator_id == c_id,
+            or_(
+                OutreachMessage.subject.ilike("%opportunity pitch%"),
+                OutreachMessage.subject.ilike("%blueprint%"),
+                OutreachMessage.subject.ilike("%opportunity deck%"),
+                OutreachMessage.subject.ilike("%concepts%"),
+                OutreachMessage.subject.ilike("%answers%"),
+                OutreachMessage.subject.ilike("%simplifying%"),
+                OutreachMessage.subject.ilike("%zero-effort%")
+            )
+        )
+        .order_by(OutreachMessage.sent_at.desc())
+        .first()
+    )
+    latest_sent_time = latest_outbound.sent_at if latest_outbound else pitch_msg.sent_at
+    if latest_sent_time and reply.received_at:
+        p_time = latest_sent_time.replace(tzinfo=None) if getattr(latest_sent_time, 'tzinfo', None) else latest_sent_time
         r_time = reply.received_at.replace(tzinfo=None) if getattr(reply.received_at, 'tzinfo', None) else reply.received_at
         if r_time <= p_time:
-            logger.info(f"[Autonomous Pipeline] Reply {reply.id} was received BEFORE the opportunity pitch was sent. Ignoring for Stage B.")
+            logger.info(f"[Autonomous Pipeline] Reply {reply.id} was received BEFORE our latest outbound email ({p_time}). Waiting for fresh creator reply.")
             return
 
     # 2. Retrieve concepts
@@ -485,7 +508,7 @@ Ref: [CF-CID:{c_id} | Handle:@{clean_handle}]"""
     if is_question:
         logger.info(f"[Autonomous Pipeline] Creator {creator.handle} asked a question in Step 6: '{reply.body[:80]}'. Generating and dispatching AI answer...")
         ans_subject, ans_body = generate_step6_question_answer(c_name, first_name, concepts, reply.body)
-        ans_body_with_token = f"{ans_body}\n\n---\nRef: [CF-CID:{c_id} | Handle:@{clean_handle}]"
+        ans_body_with_token = f"{ans_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_ANSWER | CF-CID:{c_id} | Handle:@{clean_handle}]"
 
         try:
             email_provider.send(
@@ -529,7 +552,7 @@ Ref: [CF-CID:{c_id} | Handle:@{clean_handle}]"""
         if not already_persuaded:
             logger.info(f"[Autonomous Pipeline] Creator {creator.handle} expressed hesitation/confusion ('{reply.body[:80]}'). Dispatched AI persuasion recovery email...")
             per_subject, per_body = generate_step6_persuasion_email(c_name, first_name, concepts, reply.body)
-            per_body_with_token = f"{per_body}\n\n---\nRef: [CF-CID:{c_id} | Handle:@{clean_handle}]"
+            per_body_with_token = f"{per_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_PERSUADE | CF-CID:{c_id} | Handle:@{clean_handle}]"
 
             try:
                 email_provider.send(

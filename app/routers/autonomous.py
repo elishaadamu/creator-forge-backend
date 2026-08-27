@@ -457,7 +457,32 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         }
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        enriched_list = list(executor.map(enrich_candidate, unique_candidates))
+        futures = {executor.submit(enrich_candidate, cand): cand for cand in unique_candidates}
+        enriched_list = []
+        for future in futures:
+            try:
+                result = future.result(timeout=90)  # 90s max per creator enrichment
+                enriched_list.append(result)
+            except Exception as enrich_err:
+                cand = futures[future]
+                logger.warning(f"[Autonomous Discovery] Enrichment failed for @{cand.get('handle', '?')}: {enrich_err}")
+                # Return the raw candidate data so we don't lose them
+                enriched_list.append({
+                    "handle": cand.get("handle", ""),
+                    "platform": cand.get("platform", "youtube"),
+                    "display_name": cand.get("display_name", cand.get("handle", "")),
+                    "bio": cand.get("bio", ""),
+                    "avatar_url": cand.get("avatar_url", ""),
+                    "email_public": cand.get("email_public", ""),
+                    "follower_count": cand.get("follower_count", 0),
+                    "profile_url": cand.get("profile_url", ""),
+                    "niche": cand.get("niche", ["Tech"]),
+                    "engagement": 4.5,
+                    "score": 80,
+                    "hunter_score": None,
+                    "hunter_verification": None,
+                    "email_verified": False,
+                })
 
     discovered_results = []
     for cand_info in enriched_list:
@@ -488,7 +513,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                 avatar_url=avatar_url,
                 actor="autonomous_engine"
             )
-            creator_obj.status = "qualified"
+            creator_obj.status = "discovered"
             creator_obj.engagement_score = round(engagement, 1)
             db.commit()
             db.refresh(creator_obj)
@@ -573,7 +598,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             "creatorScore": score,
             "email": email_public,
             "email_public": email_public,
-            "status": "qualified",
+            "status": "discovered",
             "replyClassification": None,
             "replySubject": None,
             "replyText": None,
