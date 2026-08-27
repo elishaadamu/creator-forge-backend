@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def generate_step6_question_answer(creator_name: str, first_name: str, concepts: list, question_body: str) -> tuple[str, str]:
     """Generates an authoritative, helpful response to a creator's questions regarding benefits, tech stack, revenue split, time commitment, and IP."""
-    subject = f"Re: [STEP 6: ANSWERS] Co-founding questions regarding {concepts[0]['name']}"
+    subject = f"Re: Co-founding questions regarding {concepts[0]['name']}"
     clean_q = (question_body or "").strip()
 
     concepts_summary = "\n".join(
@@ -99,15 +99,15 @@ Keep it concise, compelling, and free of placeholders.
             "The partnership operates as a joint venture. You retain 100% ownership of your brand, likeness, and content. The software itself is owned jointly under our co-founder agreement."
         )
 
-    # F. Thoughts / General Opinion ("thoughts?", "what are your thoughts?", "what do you think?")
+    # F. Strategic Perspective / Recommendations
     if any(w in q_lower for w in ["thought", "think", "opinion", "feedback", "view", "perspective"]):
         sections.append(
-            "Here are our strategic thoughts on why this co-founder partnership and these 3 concepts make immense sense for your channel:\n\n"
-            f"1. Tailored Community Fit: We analyzed your audience demographics and identified that your community has high demand for specialized tools in {concepts[0].get('tagline', 'this space')}.\n\n"
-            "2. Compounding 50% Lifetime Net Recurring Revenue: Traditional sponsorships are transactional and temporary. With software, you build an enduring, recurring monthly cashflow (MRR) where you receive 50% net share deposited automatically via Stripe.\n\n"
-            "3. Zero Capital & Zero Tech Burden: Creator Forge Studio finances 100% of the build, servers, security, and customer support. You never write code or handle tickets.\n\n"
-            "4. Minimal Time Commitment (< 2 Hours/Month): Your role is purely strategic feedback and sharing the tool with your community during your regular content releases.\n\n"
-            f"We strongly recommend starting with {concepts[0]['name']} for our 14-day pre-order validation sprint."
+            f"Here are our strategic thoughts on why this co-founder partnership and these 3 concepts make immense sense for your audience:\n\n"
+            f"1. Tailored Community Fit: We analyzed your channel and community discussions, and identified that automated workflow and specialized tools in {concepts[0].get('tagline', 'this niche')} solve their biggest bottleneck.\n\n"
+            f"2. Compounding 50% Lifetime Net Recurring Revenue: Unlike one-off sponsorships where payment ends when the video goes live, software produces compounding monthly subscription revenue (MRR) where you receive 50% net share deposited automatically via Stripe.\n\n"
+            f"3. Zero Capital & Zero Technical Management: Creator Forge Studio finances and builds 100% of the software, servers, security, and customer support. You never write code or handle tickets.\n\n"
+            f"4. Minimal Time Commitment (< 2 Hours/Month): Your role is purely strategic product feedback and sharing the launch with your audience during your regular content schedule.\n\n"
+            f"We strongly recommend starting with {concepts[0].get('name', 'Concept 1')} for our 14-day pre-order validation sprint."
         )
 
     if not sections:
@@ -116,21 +116,15 @@ Keep it concise, compelling, and free of placeholders.
             "Creator Forge Studio funds, builds, and supports 100% of the software product at zero cost to you, while you receive 50% of all net subscription revenue from day one. You provide audience distribution and product feedback under 2 hours/month."
         )
 
-    faq_text = "\n\n".join(sections)
-
-    body = f"""Hi {first_name},
-
-Thanks for asking — that is the most important question to clarify before we build anything together!
-
-{faq_text}
-
-Here are the concepts we specifically engineered for your community:
-{concepts_summary}
-
-Which of these concepts do you think solves the biggest bottleneck for your audience? Let us know, and we will initialize your private partner portal and launch validation.
-
-Best regards,
-Creator Forge Studio Team"""
+    body = (
+        f"Hi {first_name},\n\n"
+        f"Thanks for asking — that is the most important question to clarify before we build anything together!\n\n"
+        + "\n\n".join(sections) +
+        f"\n\nHere are the 3 concepts we specifically engineered for your community:\n"
+        f"{concepts_summary}\n\n"
+        f"Which of these 3 concepts do you think solves the biggest bottleneck for your audience? Let us know, and we will initialize your private partner portal and launch validation.\n\n"
+        f"Best regards,\nCreator Forge Studio Team"
+    )
     return subject, body
 
 
@@ -141,9 +135,9 @@ def generate_step6_persuasion_email(creator_name: str, first_name: str, concepts
     is_confused = any(w in clean_obj.lower() for w in ["confus", "complicat", "unclear", "dont understand", "don't understand", "reject"])
 
     subject = (
-        f"Re: [STEP 6: PARTNERSHIP] Simplifying our co-founder partnership for {creator_name} ({top_c.get('name', 'SaaS')})"
+        f"Re: Simplifying our co-founder partnership for {creator_name} ({top_c.get('name', 'SaaS')})"
         if is_confused
-        else f"Re: [STEP 6: PARTNERSHIP] Zero-effort co-founder model for {creator_name} ({top_c.get('name', 'SaaS')})"
+        else f"Re: Zero-effort co-founder model for {creator_name} ({top_c.get('name', 'SaaS')})"
     )
 
     try:
@@ -335,7 +329,7 @@ def run_autonomous_creator_progression(db: Session, reply: Reply):
         creator.status = "qualified"
         db.commit()
 
-        pitch_subject = f"[STEP 6: OPPORTUNITY PITCH] Top 3 Software Concepts & Deck for {c_name}"
+        pitch_subject = f"Top 3 Software Concepts & Opportunity Deck for {c_name}"
         pitch_body = f"""Hi {first_name},
 
 Thrilled to hear from you! As promised, our studio analyzed your channel and designed 3 custom software co-launch concepts tailored for your community:
@@ -479,28 +473,32 @@ Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
     ]
     is_soft_decline = any(p in body_lower for p in soft_decline_patterns)
 
-    # 4. Check for Questions / Inquiries (e.g. 'thoughts?', 'what tech?', 'how does it work?')
+    # 4. Check for Questions / Inquiries / Request for further details
     is_question = "?" in body_lower or any(
         q in body_lower for q in [
-            "what tech", "what stack", "how does", "how do you", "revenue split",
-            "who owns", "cost", "pricing", "how much", "can you tell", "tell me more",
-            "what are the", "can you explain", "explain how", "who builds", "what is the timeline",
-            "give me more", "send more details", "thoughts", "thought", "think", "what do you think",
-            "what are your thoughts", "feedback"
+            "further explanation", "further explaination", "more details", "need more details",
+            "give me more details", "tell me more", "can you tell", "can you explain", "explain how",
+            "explain further", "send details", "send more details", "send the details", "share more",
+            "what tech", "what stack", "how does", "how do you", "revenue split", "how it works",
+            "how this works", "who owns", "cost", "pricing", "how much", "what are the",
+            "who builds", "what is the timeline", "thoughts", "thought", "think", "what do you think",
+            "what are your thoughts", "feedback", "need more info", "more information", "more info",
+            "can we get more details", "elaboration", "elaborate", "clarify", "clarification"
         ]
     )
 
     # 5. Check for Explicit Affirmative Confirmation / Agreement
     affirmative_patterns = [
-        "let's do it", "lets do it", "sounds great", "sounds good", "love this", "love it",
+        "interested", "i am interested", "i'm interested", "im interested", "we are interested", "we're interested",
+        "definitely interested", "very interested", "would be interested", "let's do it", "lets do it",
+        "sounds great", "sounds good", "love this", "love it", "i'm in", "im in",
         "let's build", "lets build", "count me in", "ready to move forward", "let's partner", "lets partner",
         "yes let's", "yes lets", "i choose", "i prefer", "let's go with", "go ahead",
         "concept 1", "concept 2", "concept 3", "option 1", "option 2", "option 3",
         "#1", "#2", "#3", "first one", "second one", "third one",
-        "let's talk", "lets talk", "let's do this", "lets do this", "let's proceed", "lets proceed"
+        "let's talk", "lets talk", "let's do this", "lets do this", "let's proceed", "lets proceed",
+        "let's connect", "lets connect", "happy to chat", "yes", "definitely"
     ]
-    # NOTE: DO NOT use reply.classification == 'interested' here! A creator asking "thoughts?" or "what tech?"
-    # might be classified as interested, but they have NOT agreed to build yet!
     has_affirmative = any(p in body_lower for p in affirmative_patterns)
     has_concept_mention = any(c["name"].lower() in body_lower for c in concepts)
 

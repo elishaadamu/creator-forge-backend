@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -198,10 +199,20 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     Initializes the 5-step validation architecture and sends dual notifications to Creator and Admin.
     Can be called directly by background autonomous pipeline without HTTP context.
     """
+    # ── Strict Deduplication Guard: Check if project already exists for this creator ──
+    existing_creator_proj = None
+    if body.creatorId:
+        existing_creator_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == body.creatorId).first()
+    if not existing_creator_proj and body.creatorEmail:
+        existing_creator_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_email == body.creatorEmail).first()
+
+    if existing_creator_proj:
+        logger.info(f"[execute_create_co_launch_project] Project {existing_creator_proj.id} already exists for creator {body.creatorId or body.creatorEmail}. Returning existing project to prevent duplicate emails.")
+        return _format_project_response(existing_creator_proj)
+
     proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
 
-
-    # Clean existing if ID exists
+    # Clean existing if exact ID exists
     existing = db.get(CoLaunchProject, proj_id)
     if existing:
         db.delete(existing)
@@ -358,23 +369,24 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
 
         creator_email = (body.creatorEmail or "").strip()
         admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
-        base_frontend = (settings.FRONTEND_URL or "http://localhost:3001").rstrip("/")
+        base_frontend = (settings.FRONTEND_URL or "https://creator-forge-frontend.vercel.app").rstrip("/")
+        portal_slug = (proj.creator_handle or proj.creator_name or "creator").replace("@", "").replace(" ", "").strip().lower()
         admin_project_link = f"{base_frontend}/launch?section=section2&project={proj.id}"
-        portal_magic_link = f"{base_frontend}/portal?token={proj.portal_token}&project={proj.id}"
+        portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token={proj.portal_token}&project={proj.id}"
 
-        email_subject = f"🚀 Project Initialized: {proj.product_name} with {proj.creator_name or proj.creator_handle} (Section 2 Live)"
+        email_subject = f"[PROJECT INITIALIZED] {proj.product_name} with {proj.creator_name or proj.creator_handle} (Section 2 Live)"
         admin_email_body = f"""Hello Admin,
 
 A new Co-Launch Software Venture has been initialized into Section 2:
 
-• Product Name: {proj.product_name}
-• Tagline: {proj.product_tagline}
-• Creator Partner: {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})
-• Creator Email: {creator_email or 'Pending'}
-• Target Presale Milestone: ${int(proj.presale_target):,}
+- Product Name: {proj.product_name}
+- Tagline: {proj.product_tagline}
+- Creator Partner: {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})
+- Creator Email: {creator_email or 'Pending'}
+- Target Presale Milestone: ${int(proj.presale_target):,}
 
-• Admin Project OS Dashboard: {admin_project_link}
-• Creator Portal Magic Link: {portal_magic_link}
+- Admin Project OS Dashboard: {admin_project_link}
+- Creator Portal Magic Link: {portal_magic_link}
 
 Phase 1 (Validate) is now active and ready for execution.
 
@@ -383,7 +395,7 @@ Creator Forge Studio Operations"""
 
         admin_email_html = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0c0e14; color: #f1f5f9; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
-            <h2 style="color: #a855f7; margin-top: 0;">🚀 Co-Launch Venture Initialized (Section 2 Live)</h2>
+            <h2 style="color: #a855f7; margin-top: 0;">Co-Launch Venture Initialized (Section 2 Live)</h2>
             <p style="color: #94a3b8; font-size: 14px;">A new Co-Launch Software Venture has moved into Section 2:</p>
             <ul style="line-height: 1.8; font-size: 14px; color: #cbd5e1;">
                 <li><strong>Product:</strong> {proj.product_name}</li>
@@ -393,12 +405,12 @@ Creator Forge Studio Operations"""
                 <li><strong>Presale Milestone:</strong> ${int(proj.presale_target):,}</li>
             </ul>
             <div style="margin: 24px 0; padding: 16px; background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); border-radius: 12px;">
-                <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: bold; color: #c084fc;">🛠️ ADMIN DASHBOARD (PROJECT OS):</p>
-                <a href="{admin_project_link}" style="display: inline-block; padding: 10px 20px; background: #a855f7; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 13px; border-radius: 8px;">Open Co-Launch Project OS →</a>
+                <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: bold; color: #c084fc;">[ADMIN DASHBOARD - PROJECT OS]:</p>
+                <a href="{admin_project_link}" style="display: inline-block; padding: 10px 20px; background: #a855f7; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 13px; border-radius: 8px;">Open Co-Launch Project OS -&gt;</a>
                 <p style="margin: 8px 0 0 0; font-size: 11px; color: #94a3b8; word-break: break-all;">{admin_project_link}</p>
             </div>
             <div style="margin: 16px 0; padding: 14px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px;">
-                <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #34d399;">👤 CREATOR PORTAL MAGIC LINK (Shared with Creator):</p>
+                <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #34d399;">[CREATOR PORTAL MAGIC LINK]:</p>
                 <a href="{portal_magic_link}" style="color: #6ee7b7; font-size: 12px; word-break: break-all;">{portal_magic_link}</a>
             </div>
             <p style="color: #64748b; font-size: 12px; margin-top: 24px;">Phase 1 (Validate) is active and ready for execution.</p>
@@ -427,7 +439,7 @@ Welcome to your software co-launch portal!
 
 We have officially initialized {proj.product_name} into Phase 1 (Validation). You can access your dedicated Creator Portal and track live progress here:
 
-👉 Access Portal: {portal_magic_link}
+Access Portal: {portal_magic_link}
 
 Best,
 Creator Forge Studio Team"""

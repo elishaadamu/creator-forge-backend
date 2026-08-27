@@ -74,8 +74,7 @@ class Settings:
     
     # Meta (Instagram) OAuth
     META_CLIENT_ID: str = os.getenv("META_CLIENT_ID", "YOUR_META_APP_ID_HERE")
-    META_CLIENT_SECRET: str = os.getenv("META_CLIENT_SECRET", "YOUR_META_APP_SECRET_HERE")
-    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "")
+    FRONTEND_URL: str = (os.getenv("FRONTEND_URL") or "https://creator-forge-frontend.vercel.app").rstrip("/")
     REDIRECT_URI: str = os.getenv("REDIRECT_URI", "")
 
     # Apify — enables accurate scraping for Instagram & TikTok
