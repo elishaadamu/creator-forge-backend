@@ -40,114 +40,37 @@ class ScrapeRequest(BaseModel):
     save: bool = True  # auto-save to DB after scraping
 
 
-class ScrapeCreatorsRequest(BaseModel):
-    platform: str = "tiktok"  # tiktok | instagram | youtube | twitter
-    handle: str
+class ApifyFindEmailRequest(BaseModel):
+    handle: Optional[str] = None
+    channel: Optional[str] = None
+    url: Optional[str] = None
     api_key: Optional[str] = None
-    save: bool = True
 
 
-@router.post("/scrapecreators")
-def scrape_with_scrapecreators_api(
-    body: ScrapeCreatorsRequest,
-    actor: str = "scrapecreators_api",
-    db: Session = Depends(get_db)
-):
-    """
-    Fetch profile data directly using ScrapeCreators API:
-    https://api.scrapecreators.com/v1/{platform}/profile?handle={handle}
-    Extracts followers, bio, and public business email, saving to Creator DB.
-    """
-    from app.services.scraper import scrapecreators_fetch_profile
-    from app.services.contact_discovery import add_contact
-
-    try:
-        scraped = scrapecreators_fetch_profile(body.platform, body.handle, body.api_key)
-        if "error" in scraped:
-            raise HTTPException(400, f"ScrapeCreators API failed: {scraped['error']}")
-
-        creator = None
-        if body.save:
-            try:
-                creator, created = discovery.create_or_get_creator(
-                    db=db,
-                    handle=scraped["handle"],
-                    platform=scraped["platform"],
-                    display_name=scraped.get("display_name"),
-                    bio=scraped.get("bio"),
-                    profile_url=scraped.get("profile_url"),
-                    avatar_url=scraped.get("avatar_url"),
-                    follower_count=scraped.get("follower_count", 0),
-                    email_public=scraped.get("email_public"),
-                    discovery_source="scrapecreators_api",
-                    actor=actor,
-                )
-                if scraped.get("email_public") and creator:
-                    try:
-                        add_contact(
-                            db, creator.id, "email",
-                            scraped["email_public"], "scrapecreators_api", actor=actor,
-                        )
-                    except Exception:
-                        pass
-            except ValueError as e:
-                raise HTTPException(400, str(e))
-
+@router.post("/apify/find-email")
+def apify_find_email_endpoint(body: ApifyFindEmailRequest):
+    """Apify Business Email Scraper: finds verified business email for a creator."""
+    from app.services.scraper import apify_scrape_youtube_channels
+    target = body.handle or body.channel or body.url
+    if not target:
+        raise HTTPException(400, "Handle, channel, or URL required")
+    
+    results = apify_scrape_youtube_channels([target], apify_token=body.api_key)
+    if not results or not results[0].get("email"):
         return {
-            "scraped": scraped,
-            "creator": _creator_dict(creator) if creator else None,
-            "created": creator is not None,
+            "success": False,
+            "error": "No business email found via Apify for this channel",
+            "data": results[0] if results else None
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        safe_msg = str(e).encode("ascii", "ignore").decode("ascii")
-        raise HTTPException(500, f"Internal Scrape Error: {safe_msg}")
-
-
-class HunterFindRequest(BaseModel):
-    full_name: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    domain: Optional[str] = None
-    company: Optional[str] = None
-    linkedin_handle: Optional[str] = None
-    api_key: Optional[str] = None
-
-
-class HunterVerifyRequest(BaseModel):
-    email: str
-    api_key: Optional[str] = None
-
-
-@router.post("/hunter/find-email")
-def hunter_find_email_endpoint(body: HunterFindRequest):
-    """Hunter.io Email Finder: finds verified email by name and domain/company."""
-    from app.services.hunter_service import find_email
-    res = find_email(
-        full_name=body.full_name,
-        first_name=body.first_name,
-        last_name=body.last_name,
-        domain=body.domain,
-        company=body.company,
-        linkedin_handle=body.linkedin_handle,
-        api_key=body.api_key,
-    )
-    if not res.get("success"):
-        raise HTTPException(400, res.get("error", "Email not found via Hunter.io"))
-    return res
-
-
-@router.post("/hunter/verify-email")
-def hunter_verify_email_endpoint(body: HunterVerifyRequest):
-    """Hunter.io Email Verifier: checks email deliverability and score."""
-    from app.services.hunter_service import verify_email
-    res = verify_email(email=body.email, api_key=body.api_key)
-    if not res.get("success"):
-        raise HTTPException(400, res.get("error", "Email verification failed via Hunter.io"))
-    return res
-
-
+    
+    res = results[0]
+    return {
+        "success": True,
+        "email": res["email"],
+        "score": 100,
+        "verification_status": "verified",
+        "data": res
+    }
 
 
 @router.post("/scrape")

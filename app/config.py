@@ -54,8 +54,14 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
     APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
-    SCRAPECREATORS_API_KEY: str = os.getenv("SCRAPECREATORS_API_KEY", "")
-    HUNTER_API_KEY: str = os.getenv("HUNTER_API_KEY", "")
+    APIFY_YOUTUBE_EMAIL_ACTOR: str = os.getenv(
+        "APIFY_YOUTUBE_EMAIL_ACTOR",
+        "dataovercoffee~youtube-channel-business-email-scraper",
+    )
+    APIFY_INSTAGRAM_EMAIL_ACTOR: str = os.getenv(
+        "APIFY_INSTAGRAM_EMAIL_ACTOR",
+        "scrapers-hub~instagram-profile-email-scraper",
+    )
     ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "openai")
     AI_MODEL: str = "gpt-4o"
 
@@ -76,13 +82,6 @@ class Settings:
     META_CLIENT_ID: str = os.getenv("META_CLIENT_ID", "YOUR_META_APP_ID_HERE")
     FRONTEND_URL: str = (os.getenv("FRONTEND_URL") or "https://creator-forge-frontend.vercel.app").rstrip("/")
     REDIRECT_URI: str = os.getenv("REDIRECT_URI", "")
-
-    # Apify — enables accurate scraping for Instagram & TikTok
-    APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
-
-    # ScrapeCreators API — https://api.scrapecreators.com/v1/{platform}/profile?handle={handle}
-    SCRAPECREATORS_API_KEY: str = os.getenv("SCRAPECREATORS_API_KEY", "")
-
 
 settings = Settings()
 

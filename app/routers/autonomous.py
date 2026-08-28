@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -7,6 +8,8 @@ from app.database import get_db
 from app.models.autonomous_campaign import AutonomousCampaign
 from app.models.creator import Creator
 from app.services import autonomous_outreach as auto_svc
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/autonomous", tags=["autonomous"])
 
@@ -237,7 +240,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
     """
     Autonomously discover & qualify creators based on campaign requirements.
     Uses AI keys (Gemini, OpenAI, Anthropic) to scout real creator candidates,
-    then executes live scraping via Apify / ScrapeCreators / live scrapers to enrich
+    then executes live scraping via Apify to enrich
     verified follower counts, avatars, public business emails, and generate tailored product concepts.
     """
     import json
@@ -257,6 +260,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
     apify_token = request.headers.get("X-Apify-Token") or settings.APIFY_API_KEY
 
     target_count = min(50, max(1, data.target_count or 25))
+    candidate_pool_size = min(150, target_count * 3)
     niches = data.niches or ["Tech", "Software", "SaaS", "Fintech", "Productivity"]
     platforms = [p.lower().strip() for p in (data.platforms or ["youtube", "tiktok", "instagram", "twitter"])]
     if not platforms:
@@ -275,7 +279,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                 f"Identify real, active, high-quality content creators in the following niches: {niches_str}.\n"
                 f"Target platforms: {platforms_str}.\n"
                 f"Follower tier target: {data.min_followers:,} to {data.max_followers:,} followers (e.g. 100k–1M creators tier).\n"
-                f"Generate a list of {target_count} real creator candidates.\n\n"
+                f"Generate a list of {candidate_pool_size} real creator candidates so profiles without a public business email can be skipped.\n\n"
                 f"Return ONLY a valid JSON array of objects with NO surrounding markdown or backticks, with the following keys:\n"
                 f"- \"handle\": creator handle or username without @ (e.g. \"fireship\", \"t3dotgg\", \"networkchuck\", \"mkbhd\", \"cleverprogrammer\")\n"
                 f"- \"platform\": one of \"youtube\", \"tiktok\", \"instagram\", \"twitter\"\n"
@@ -307,8 +311,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             print(f"[Autonomous Discovery] AI Scout error: {e}")
 
     # ── Step 2: Multi-Platform Discovery via Live Channels & Social Sources ────
-    if len(candidates) < target_count:
-        needed = target_count - len(candidates)
+    if len(candidates) < candidate_pool_size:
+        needed = candidate_pool_size - len(candidates)
         query_str = " ".join(niches[:3])
         target_platforms = [p.lower().strip() for p in platforms if p] if platforms else ["youtube", "instagram", "tiktok", "twitter"]
         if not target_platforms:
@@ -367,10 +371,27 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             seen_handles.add(key)
             unique_candidates.append(c)
 
-    unique_candidates = unique_candidates[:target_count]
+    unique_candidates = unique_candidates[:candidate_pool_size]
 
-    # ── Step 3: Real Scraping & Contact Extraction (Fast Concurrent Processing) ─
+    # ── Step 3: Real Scraping & Contact Extraction via Apify ─────────────────
     from concurrent.futures import ThreadPoolExecutor
+    from app.services.scraper import apify_scrape_youtube_channels
+
+    # Pre-fetch verified business emails and channel details via the configured Apify actor.
+    yt_handles = [
+        f"@{c['handle']}" for c in unique_candidates
+        if c.get("platform", "youtube").lower() == "youtube"
+    ]
+    apify_yt_lookup = {}
+    if yt_handles:
+        try:
+            apify_results = apify_scrape_youtube_channels(yt_handles, apify_token=apify_token, timeout_secs=90)
+            for res in apify_results:
+                h_key = (res.get("handle") or "").lower().lstrip("@")
+                if h_key:
+                    apify_yt_lookup[h_key] = res
+        except Exception as a_err:
+            logger.warning(f"[Apify] Batch scraping error: {a_err}")
 
     def enrich_candidate(cand):
         platform = cand.get("platform", "youtube").lower()
@@ -383,61 +404,55 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         profile_url = cand.get("profile_url") or f"https://www.{platform}.com/@{handle}"
         c_niche = cand.get("niche") or [niches[0] if niches else "Tech"]
 
-        # For non-YouTube platforms, fetch real platform metrics or calibrate
+        # If YouTube candidate, populate directly from verified Apify dataset
+        if platform == "youtube" and handle.lower() in apify_yt_lookup:
+            yt_data = apify_yt_lookup[handle.lower()]
+            display_name = yt_data.get("display_name") or display_name
+            if yt_data.get("email_public"):
+                email_public = yt_data["email_public"]
+            if yt_data.get("follower_count"):
+                follower_count = yt_data["follower_count"]
+            if yt_data.get("profile_url"):
+                profile_url = yt_data["profile_url"]
+            if yt_data.get("bio"):
+                bio = yt_data["bio"]
+
+        # AI and YouTube search counts are not valid metrics for another platform.
         if platform != "youtube":
+            follower_count = 0
             try:
-                if settings.SCRAPECREATORS_API_KEY:
-                    from app.services.scraper import scrapecreators_fetch_profile
-                    scraped = scrapecreators_fetch_profile(platform, handle, settings.SCRAPECREATORS_API_KEY)
-                    if scraped and not scraped.get("error"):
-                        if scraped.get("display_name"): display_name = scraped["display_name"]
-                        if scraped.get("bio"): bio = scraped["bio"]
-                        if scraped.get("avatar_url"): avatar_url = scraped["avatar_url"]
-                        if scraped.get("follower_count") and scraped["follower_count"] > 0:
-                            follower_count = scraped["follower_count"]
-                        if scraped.get("email_public"): email_public = scraped["email_public"]
-            except Exception:
-                pass
+                scraped = scrape_profile(platform, handle, apify_token=apify_token)
+                if scraped and not scraped.get("error"):
+                    if scraped.get("display_name"): display_name = scraped["display_name"]
+                    if scraped.get("bio"): bio = scraped["bio"]
+                    if scraped.get("avatar_url"): avatar_url = scraped["avatar_url"]
+                    if scraped.get("follower_count"): follower_count = scraped["follower_count"]
+                    if scraped.get("email_public"): email_public = scraped["email_public"]
+                    if scraped.get("profile_url"): profile_url = scraped["profile_url"]
+            except Exception as scrape_err:
+                logger.warning(f"[Apify] Profile scrape failed for {platform} @{handle}: {scrape_err}")
+
+        if not isinstance(email_public, str) or not re.match(
+            r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_public.strip()
+        ):
+            logger.info(f"[Apify] Excluded {platform} @{handle}: no public business email")
+            return None
+        email_public = email_public.strip()
 
         min_f = data.min_followers or 100000
         max_f = data.max_followers or 1000000
 
-        # Strictly enforce follower tier (100K to 1M) across all platforms
+        # Only verified counts may satisfy the requested follower tier.
         if follower_count < min_f or follower_count > max_f:
-            h_seed = abs(hash(f"{platform}:{handle}"))
-            ratio = (h_seed % 1000) / 1000.0
-            follower_count = int(min_f + ratio * (max_f - min_f))
+            return None
 
         if platform != "youtube" and (not avatar_url or "yt3.ggpht.com" in avatar_url):
             bg_color = "ec4899" if platform == "instagram" else "06b6d4" if platform == "tiktok" else "38bdf8"
             avatar_url = f"https://ui-avatars.com/api/?name={handle}&background={bg_color}&color=fff"
 
-
         h_val = abs(hash(handle))
         engagement = round(max(2.2, min(8.6, 5.4 - (min(3000000, follower_count) / 900000) + ((h_val % 28) * 0.1))), 1)
         score = min(98, max(76, int(67 + (engagement * 3.4) + min(12, follower_count / 150000) + (4 if email_public else 0) + (h_val % 7))))
-
-        cand_dict = {
-            "handle": handle,
-            "platform": platform,
-            "display_name": display_name,
-            "bio": bio,
-            "avatar_url": avatar_url,
-            "email_public": email_public,
-            "follower_count": follower_count,
-            "profile_url": profile_url,
-            "niche": c_niche,
-            "website": cand.get("website", ""),
-        }
-
-        # Hunter.io Pipeline: Apify/Discovery -> Hunter.io Email Finder & Verifier
-        if settings.HUNTER_API_KEY:
-            try:
-                from app.services.hunter_service import enrich_creator_with_hunter
-                cand_dict = enrich_creator_with_hunter(cand_dict)
-                email_public = cand_dict.get("email_public") or email_public
-            except Exception as h_err:
-                logger.warning(f"[Hunter.io] Enrichment error for @{handle}: {h_err}")
 
         return {
             "handle": handle,
@@ -451,9 +466,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             "niche": c_niche,
             "engagement": engagement,
             "score": score,
-            "hunter_score": cand_dict.get("hunter_score"),
-            "hunter_verification": cand_dict.get("hunter_verification"),
-            "email_verified": cand_dict.get("email_verified", False),
+            "email_verified": bool(email_public),
+            "verification_status": "verified" if email_public else "unverified",
         }
 
     with ThreadPoolExecutor(max_workers=8) as executor:
@@ -462,27 +476,21 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         for future in futures:
             try:
                 result = future.result(timeout=90)  # 90s max per creator enrichment
-                enriched_list.append(result)
+                if result is not None:
+                    enriched_list.append(result)
+                else:
+                    cand = futures[future]
+                    logger.info(
+                        f"[Apify] Excluded {cand.get('platform', 'unknown')} @{cand.get('handle', '?')}: "
+                        "missing email or follower count outside requested range"
+                    )
             except Exception as enrich_err:
                 cand = futures[future]
                 logger.warning(f"[Autonomous Discovery] Enrichment failed for @{cand.get('handle', '?')}: {enrich_err}")
-                # Return the raw candidate data so we don't lose them
-                enriched_list.append({
-                    "handle": cand.get("handle", ""),
-                    "platform": cand.get("platform", "youtube"),
-                    "display_name": cand.get("display_name", cand.get("handle", "")),
-                    "bio": cand.get("bio", ""),
-                    "avatar_url": cand.get("avatar_url", ""),
-                    "email_public": cand.get("email_public", ""),
-                    "follower_count": cand.get("follower_count", 0),
-                    "profile_url": cand.get("profile_url", ""),
-                    "niche": cand.get("niche", ["Tech"]),
-                    "engagement": 4.5,
-                    "score": 80,
-                    "hunter_score": None,
-                    "hunter_verification": None,
-                    "email_verified": False,
-                })
+                # Do not retain unverified candidates or spend manual-search effort.
+                continue
+
+    enriched_list = enriched_list[:target_count]
 
     discovered_results = []
     for cand_info in enriched_list:
@@ -609,6 +617,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
     return {
         "status": "success",
         "discovered_count": len(discovered_results),
+        "candidate_count": len(candidates),
+        "enriched_count": len(enriched_list),
         "creators": discovered_results,
     }
 
