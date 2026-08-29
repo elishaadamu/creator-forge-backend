@@ -180,13 +180,52 @@ def run_campaign_batch(
 
 
 @router.post("/run-followups")
-def run_autonomous_followups(campaign_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Trigger processing of unreplied threads for 7-day follow-ups."""
+def run_autonomous_followups(
+    campaign_id: Optional[str] = Query(None),
+    delay_hours: Optional[int] = Query(None, description="Override delay in hours. If omitted, uses FOLLOWUP_DELAY_HOURS from settings (default 1h for testing, 168h = 7 days for production)."),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually trigger autonomous follow-ups.
+
+    Targets:
+      - Open threads (no reply) past the delay window
+      - Threads with a not_interested reply classification (one re-engagement attempt)
+
+    Query params:
+      campaign_id   - restrict to a specific campaign (optional)
+      delay_hours   - override the minimum hours before follow-up fires (optional)
+    """
     try:
-        res = auto_svc.process_autonomous_followups(db, campaign_id=campaign_id)
+        res = auto_svc.process_autonomous_followups(
+            db,
+            campaign_id=campaign_id,
+            delay_hours_override=delay_hours,
+        )
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/followup-scheduler/status")
+def followup_scheduler_status():
+    """
+    Returns current follow-up scheduler configuration.
+    Toggle between testing (1h) and production (168h) by setting env vars and restarting.
+    """
+    from app.config import settings
+    return {
+        "status": "running",
+        "check_interval_hours": settings.FOLLOWUP_CHECK_INTERVAL_HOURS,
+        "delay_hours": settings.FOLLOWUP_DELAY_HOURS,
+        "mode": "testing" if settings.FOLLOWUP_DELAY_HOURS < 24 else "production",
+        "next_check_approx": f"every {settings.FOLLOWUP_CHECK_INTERVAL_HOURS}h",
+        "followup_fires_after": f"{settings.FOLLOWUP_DELAY_HOURS}h after original outreach",
+        "production_switch": "Set FOLLOWUP_DELAY_HOURS=168 in .env and restart to switch to 7-day intervals",
+        "targets": ["open threads (no reply)", "not_interested reply threads (one re-engagement)"],
+    }
+
+
 
 
 @router.post("/preview")
@@ -232,7 +271,7 @@ class DiscoverCreatorsSchema(BaseModel):
     max_followers: int = 1000000
     min_engagement_rate: float = 2.0
     target_count: int = 25
-    platforms: Optional[List[str]] = Field(default_factory=lambda: ["youtube", "tiktok", "instagram", "twitter"])
+    platforms: Optional[List[str]] = Field(default_factory=lambda: ["youtube", "tiktok", "instagram"])
 
 
 @router.post("/discover-creators")
@@ -262,9 +301,9 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
     target_count = min(50, max(1, data.target_count or 25))
     candidate_pool_size = min(150, target_count * 3)
     niches = data.niches or ["Tech", "Software", "SaaS", "Fintech", "Productivity"]
-    platforms = [p.lower().strip() for p in (data.platforms or ["youtube", "tiktok", "instagram", "twitter"])]
+    platforms = [p.lower().strip() for p in (data.platforms or ["youtube", "tiktok", "instagram"])]
     if not platforms:
-        platforms = ["youtube", "tiktok", "instagram", "twitter"]
+        platforms = ["youtube", "tiktok", "instagram"]
 
     candidates = []
 
@@ -282,7 +321,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                 f"Generate a list of {candidate_pool_size} real creator candidates so profiles without a public business email can be skipped.\n\n"
                 f"Return ONLY a valid JSON array of objects with NO surrounding markdown or backticks, with the following keys:\n"
                 f"- \"handle\": creator handle or username without @ (e.g. \"fireship\", \"t3dotgg\", \"networkchuck\", \"mkbhd\", \"cleverprogrammer\")\n"
-                f"- \"platform\": one of \"youtube\", \"tiktok\", \"instagram\", \"twitter\"\n"
+                f"- \"platform\": one of \"youtube\", \"tiktok\", \"instagram\"\n"
                 f"- \"display_name\": creator full name or channel name\n"
                 f"- \"primary_niche\": specific niche\n"
                 f"- \"estimated_followers\": estimated follower count as integer\n"
@@ -314,9 +353,9 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
     if len(candidates) < candidate_pool_size:
         needed = candidate_pool_size - len(candidates)
         query_str = " ".join(niches[:3])
-        target_platforms = [p.lower().strip() for p in platforms if p] if platforms else ["youtube", "instagram", "tiktok", "twitter"]
+        target_platforms = [p.lower().strip() for p in platforms if p] if platforms else ["youtube", "instagram", "tiktok"]
         if not target_platforms:
-            target_platforms = ["youtube", "instagram", "tiktok", "twitter"]
+            target_platforms = ["youtube", "instagram", "tiktok"]
 
         try:
             print(f"[Autonomous Discovery] Supplementing with live search for '{query_str}' across {target_platforms}...")
@@ -340,8 +379,6 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                     prof_url = f"https://www.instagram.com/{h}"
                 elif chosen_platform == "tiktok":
                     prof_url = f"https://www.tiktok.com/@{h}"
-                elif chosen_platform == "twitter":
-                    prof_url = f"https://x.com/{h}"
                 else:
                     prof_url = item.get("profile_url") or f"https://www.youtube.com/@{h}"
 
@@ -432,19 +469,9 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             except Exception as scrape_err:
                 logger.warning(f"[Apify] Profile scrape failed for {platform} @{handle}: {scrape_err}")
 
-        if not isinstance(email_public, str) or not re.match(
-            r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_public.strip()
-        ):
-            logger.info(f"[Apify] Excluded {platform} @{handle}: no public business email")
-            return None
-        email_public = email_public.strip()
-
-        min_f = data.min_followers or 100000
-        max_f = data.max_followers or 1000000
-
-        # Only verified counts may satisfy the requested follower tier.
-        if follower_count < min_f or follower_count > max_f:
-            return None
+        # ── Pass through all scraped data — no email or follower gate ────────────
+        # Normalise email to a plain string (may be empty — that's fine)
+        email_public = (email_public or "").strip()
 
         if platform != "youtube" and (not avatar_url or "yt3.ggpht.com" in avatar_url):
             bg_color = "ec4899" if platform == "instagram" else "06b6d4" if platform == "tiktok" else "38bdf8"
@@ -467,7 +494,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             "engagement": engagement,
             "score": score,
             "email_verified": bool(email_public),
-            "verification_status": "verified" if email_public else "unverified",
+            "verification_status": "verified" if email_public else "no_email",
         }
 
     with ThreadPoolExecutor(max_workers=8) as executor:

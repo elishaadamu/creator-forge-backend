@@ -69,7 +69,7 @@ def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int =
 
 def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrape_fresh: bool = False, timeout_secs: int = 90) -> list:
     """
-    Run Apify Actor dataovercoffee~youtube-channel-business-email-scraper.
+    Run Apify Actor Xa3Un5HYidE8VMKZu (YouTube Channel Business Email Scraper).
     Accepts channel handles (@channel), URLs, or Channel IDs.
     Returns list of normalized creator dicts with verified business emails.
     """
@@ -93,7 +93,7 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrap
     actor_id = getattr(
         settings,
         "APIFY_YOUTUBE_EMAIL_ACTOR",
-        "dataovercoffee~youtube-channel-business-email-scraper",
+        "Xa3Un5HYidE8VMKZu",
     )
     run_input = {
         "channels": cleaned_channels,
@@ -101,6 +101,12 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrap
     }
 
     raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
+
+    # ── Debug: print raw Apify response so you can verify what the actor returns ──
+    print(f"\n[Apify] Actor={actor_id} | channels={cleaned_channels} | raw item count={len(raw_items)}")
+    for _i, _raw in enumerate(raw_items):
+        print(f"  [Apify raw #{_i}] {_raw}")
+
     results = []
 
     for item in raw_items:
@@ -109,7 +115,7 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrap
 
         raw_handle = item.get("ChannelHandle") or item.get("Query") or ""
         clean_handle = raw_handle.split("/")[-1].lstrip("@").strip()
-        
+
         email = (item.get("Email") or "").strip()
         status = item.get("Status") or ("EMAIL_AVAILABLE" if email else "NO_EMAIL")
         subs = item.get("SubscriberCount") or 0
@@ -121,6 +127,8 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrap
 
         profile_url = f"https://www.youtube.com/@{clean_handle}" if clean_handle else (f"https://www.youtube.com/channel/{channel_id}" if channel_id else "")
         avatar_url = f"https://ui-avatars.com/api/?name={clean_handle or 'YouTube'}&background=ef4444&color=fff"
+
+        print(f"  [Apify parsed] handle=@{clean_handle} | email={email!r} | status={status} | subs={subs:,}")
 
         results.append({
             "handle": clean_handle,
@@ -141,7 +149,9 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrap
             "raw_apify_data": item,
         })
 
+    print(f"[Apify] Returning {len(results)} parsed results\n")
     return results
+
 
 
 def innertube_fetch_channel(handle_or_query: str) -> dict:

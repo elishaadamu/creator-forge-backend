@@ -370,61 +370,102 @@ def run_autonomous_batch(
     db.commit()
 
     return results
-
-
 def process_autonomous_followups(
     db: Session,
     campaign_id: Optional[str] = None,
     actor: str = "autonomous_engine",
+    delay_hours_override: Optional[int] = None,
 ) -> Dict:
     """
-    Process 1-week (7-day) follow-ups for open threads with no reply.
+    Autonomous follow-up engine — runs on schedule.
+
+    Sends follow-up emails for threads that:
+      1. Are OPEN (no reply at all) and the delay window has passed.
+      2. Have a NOT_INTERESTED reply — one polite re-engagement attempt is made.
+
+    delay_hours_override: if set, overrides the campaign's followup_delay_days for testing.
+                          When None, the campaign's followup_delay_days (default 7) is used.
     """
+    from app.config import settings
+
     campaign_query = db.query(AutonomousCampaign)
     if campaign_id:
         campaign_query = campaign_query.filter(AutonomousCampaign.id == campaign_id)
-    
+
     campaigns = campaign_query.filter(AutonomousCampaign.status == "active").all()
     if not campaigns:
         return {"processed": 0, "sent": 0, "message": "No active autonomous campaigns found"}
 
-    results = {"processed": 0, "sent": 0, "queued": 0, "errors": []}
+    # Resolve delay — use override (hours) or fall back to settings then campaign days
+    effective_delay_hours = (
+        delay_hours_override
+        if delay_hours_override is not None
+        else settings.FOLLOWUP_DELAY_HOURS
+    )
+
+    results = {"processed": 0, "sent": 0, "queued": 0, "skipped_already_sent": 0, "errors": []}
 
     for campaign in campaigns:
-        delay_days = campaign.followup_delay_days or 7
-        cutoff_date = datetime.utcnow() - timedelta(days=delay_days)
+        # Convert to hours — honour override, else use campaign days setting
+        if effective_delay_hours is not None:
+            delay_h = effective_delay_hours
+        else:
+            delay_h = (campaign.followup_delay_days or 7) * 24
 
-        # Query open threads for messages in this campaign created before cutoff_date
-        threads = (
+        cutoff = datetime.utcnow() - timedelta(hours=delay_h)
+
+        logger.info(
+            f"[FollowUp] Campaign={campaign.id} | delay={delay_h}h | cutoff={cutoff.isoformat()} | "
+            f"checking open + not_interested threads"
+        )
+
+        # ── 1. Open threads (no reply at all) past the delay window ──────────────
+        open_threads = (
             db.query(Thread)
             .join(OutreachMessage, Thread.outreach_message_id == OutreachMessage.id)
             .filter(
                 OutreachMessage.campaign_id == campaign.id,
                 Thread.status == "open",
-                Thread.created_at <= cutoff_date,
+                Thread.created_at <= cutoff,
             )
             .all()
         )
 
-        for thread in threads:
-            # Check if creator already replied
-            has_reply = db.query(Reply).filter(Reply.thread_id == thread.id).first()
-            if has_reply:
-                thread.status = "replied"
-                db.commit()
-                continue
+        # ── 2. Threads with a not_interested reply (one re-engagement attempt) ───
+        not_interested_threads = (
+            db.query(Thread)
+            .join(OutreachMessage, Thread.outreach_message_id == OutreachMessage.id)
+            .join(Reply, Reply.thread_id == Thread.id)
+            .filter(
+                OutreachMessage.campaign_id == campaign.id,
+                Thread.status == "replied",
+                Reply.classification == "not_interested",
+            )
+            .all()
+        )
 
-            # Check if a follow-up already exists
+        eligible_threads = open_threads + not_interested_threads
+        logger.info(
+            f"[FollowUp] Campaign={campaign.id} | open={len(open_threads)} | "
+            f"not_interested={len(not_interested_threads)} | total eligible={len(eligible_threads)}"
+        )
+
+        for thread in eligible_threads:
+            # Skip if a non-skipped follow-up already exists for this thread
             existing_fu = db.query(FollowUp).filter(
                 FollowUp.thread_id == thread.id,
                 FollowUp.status != "skipped",
             ).first()
             if existing_fu:
+                results["skipped_already_sent"] += 1
                 continue
 
             creator = db.get(Creator, thread.creator_id)
             if not creator:
                 continue
+
+            # Determine if this is a re-engagement or a standard follow-up
+            is_not_interested = thread.status == "replied"
 
             try:
                 rec = db.query(ProductRecommendation).filter(
@@ -432,8 +473,22 @@ def process_autonomous_followups(
                 ).first()
                 product_name = rec.product_name if rec else "Creator Academy"
 
-                fu_subject = render_template(campaign.followup_template_subject, creator, product_name)
-                fu_body = render_template(campaign.followup_template_body, creator, product_name)
+                if is_not_interested:
+                    # Softer re-engagement subject/body for not_interested threads
+                    fu_subject = render_template(
+                        campaign.followup_template_subject or "Re: {{display_name}} — one last thought",
+                        creator, product_name
+                    )
+                    re_engage_body = (
+                        campaign.followup_template_body
+                        + "\n\nP.S. Completely understand if this isn't for you — just wanted to share "
+                        "one last thought before closing off. No pressure at all."
+                    )
+                    fu_body = render_template(re_engage_body, creator, product_name)
+                else:
+                    fu_subject = render_template(campaign.followup_template_subject, creator, product_name)
+                    fu_body = render_template(campaign.followup_template_body, creator, product_name)
+
                 full_draft = f"Subject: {fu_subject}\n\n{fu_body}"
 
                 fu_status = "approved" if campaign.auto_send else "draft"
@@ -449,7 +504,7 @@ def process_autonomous_followups(
 
                 results["processed"] += 1
 
-                # If auto-send enabled, attempt sending email
+                # Resolve contact email
                 original_msg = db.get(OutreachMessage, thread.outreach_message_id)
                 contact = db.get(Contact, original_msg.contact_id) if (original_msg and original_msg.contact_id) else None
                 if not contact and creator.email_public:
@@ -469,8 +524,13 @@ def process_autonomous_followups(
                         campaign.total_followups_sent = (campaign.total_followups_sent or 0) + 1
                         db.commit()
                         results["sent"] += 1
+                        logger.info(
+                            f"[FollowUp] Sent follow-up to @{creator.handle} <{contact.value}> "
+                            f"({'re-engage' if is_not_interested else 'no-reply'})"
+                        )
                     except Exception as fu_err:
-                        results["errors"].append({"thread_id": thread.id, "error": f"Followup send error: {fu_err}"})
+                        logger.error(f"[FollowUp] Send error for @{creator.handle}: {fu_err}")
+                        results["errors"].append({"thread_id": thread.id, "error": f"Send error: {fu_err}"})
                 else:
                     results["queued"] += 1
 
@@ -480,23 +540,82 @@ def process_autonomous_followups(
                     entity_type="follow_up",
                     entity_id=fu.id,
                     actor=actor,
-                    details={"thread_id": thread.id, "creator_handle": creator.handle},
+                    details={
+                        "thread_id": thread.id,
+                        "creator_handle": creator.handle,
+                        "followup_type": "re_engage" if is_not_interested else "no_reply",
+                        "delay_hours": delay_h,
+                    },
                 )
 
             except Exception as e:
+                logger.error(f"[FollowUp] Error processing thread {thread.id}: {e}")
                 results["errors"].append({"thread_id": thread.id, "error": str(e)})
 
+    logger.info(f"[FollowUp] Run complete: {results}")
     return results
 
 
+# ── Dedicated Follow-up Scheduler Loop ───────────────────────────────────────
+
+_FOLLOWUP_SCHEDULER_RUNNING = False
+
+
+async def start_followup_scheduler_loop():
+    """
+    Dedicated background loop for autonomous follow-ups.
+
+    Interval and delay are read from settings on every tick so you can change
+    them in .env and restart without touching code:
+
+      FOLLOWUP_CHECK_INTERVAL_HOURS=1   # how often this loop fires (testing: 1h)
+      FOLLOWUP_DELAY_HOURS=1            # min hours after outreach before follow-up fires
+                                         # Production: set to 168 (7 days)
+    """
+    global _FOLLOWUP_SCHEDULER_RUNNING
+    _FOLLOWUP_SCHEDULER_RUNNING = True
+    from app.config import settings
+
+    logger.info(
+        f"[FollowUp Scheduler] Started — "
+        f"check every {settings.FOLLOWUP_CHECK_INTERVAL_HOURS}h, "
+        f"delay {settings.FOLLOWUP_DELAY_HOURS}h before follow-up fires"
+    )
+
+    while _FOLLOWUP_SCHEDULER_RUNNING:
+        try:
+            db = SessionLocal()
+            try:
+                result = process_autonomous_followups(
+                    db,
+                    actor="followup_scheduler",
+                    delay_hours_override=settings.FOLLOWUP_DELAY_HOURS,
+                )
+                logger.info(f"[FollowUp Scheduler] Tick complete: {result}")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[FollowUp Scheduler] Unhandled error: {e}")
+
+        await asyncio.sleep(settings.FOLLOWUP_CHECK_INTERVAL_HOURS * 3600)
+
+
+def stop_followup_scheduler_loop():
+    global _FOLLOWUP_SCHEDULER_RUNNING
+    _FOLLOWUP_SCHEDULER_RUNNING = False
+    logger.info("[FollowUp Scheduler] Stopped.")
+
+
+# ── Main Outreach Scheduler Loop (batch sending) ─────────────────────────────
+
 async def start_autonomous_scheduler_loop(interval_hours: int = 24):
     """
-    Background scheduler loop:
-    Runs active autonomous batch outreach campaigns and 7-day follow-ups automatically.
+    Background scheduler loop for autonomous batch OUTREACH (new emails).
+    Follow-ups are handled separately by start_followup_scheduler_loop.
     """
     global _SCHEDULER_RUNNING
     _SCHEDULER_RUNNING = True
-    logger.info("Starting Autonomous Outreach Scheduler loop...")
+    logger.info("[Outreach Scheduler] Started — batch outreach loop running...")
     while _SCHEDULER_RUNNING:
         try:
             db = SessionLocal()
@@ -504,11 +623,10 @@ async def start_autonomous_scheduler_loop(interval_hours: int = 24):
                 active_camps = db.query(AutonomousCampaign).filter(AutonomousCampaign.status == "active").all()
                 for camp in active_camps:
                     run_autonomous_batch(db, campaign_id=camp.id, actor="autonomous_scheduler")
-                process_autonomous_followups(db, actor="autonomous_scheduler")
             finally:
                 db.close()
         except Exception as e:
-            logger.error(f"Error in autonomous scheduler loop: {e}")
+            logger.error(f"[Outreach Scheduler] Error: {e}")
 
         await asyncio.sleep(interval_hours * 3600)
 
@@ -516,5 +634,4 @@ async def start_autonomous_scheduler_loop(interval_hours: int = 24):
 def stop_autonomous_scheduler_loop():
     global _SCHEDULER_RUNNING
     _SCHEDULER_RUNNING = False
-    logger.info("Stopping Autonomous Outreach Scheduler loop...")
-
+    logger.info("[Outreach Scheduler] Stopped.")

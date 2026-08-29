@@ -48,6 +48,14 @@ class Settings:
     MIN_FOLLOWERS_THRESHOLD: int = 100_000
     MIN_ENGAGEMENT_SCORE: float = 3.0  # minimum quality score (0-10)
 
+    # Follow-up Scheduler
+    # FOLLOWUP_CHECK_INTERVAL_HOURS: how often the background loop checks for eligible threads.
+    #   Testing: 1  |  Production: 1 (checking hourly is fine; the DELAY controls when follow-ups fire)
+    FOLLOWUP_CHECK_INTERVAL_HOURS: int = int(os.getenv("FOLLOWUP_CHECK_INTERVAL_HOURS", "1"))
+    # FOLLOWUP_DELAY_HOURS: minimum time after the original outreach before a follow-up is sent.
+    #   Testing: 1 hour  |  Production: set to 168 (7 days) or leave per-campaign followup_delay_days
+    FOLLOWUP_DELAY_HOURS: int = int(os.getenv("FOLLOWUP_DELAY_HOURS", "1"))
+
     # AI
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -56,7 +64,7 @@ class Settings:
     APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
     APIFY_YOUTUBE_EMAIL_ACTOR: str = os.getenv(
         "APIFY_YOUTUBE_EMAIL_ACTOR",
-        "dataovercoffee~youtube-channel-business-email-scraper",
+        "Xa3Un5HYidE8VMKZu",
     )
     APIFY_INSTAGRAM_EMAIL_ACTOR: str = os.getenv(
         "APIFY_INSTAGRAM_EMAIL_ACTOR",

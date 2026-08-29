@@ -39,7 +39,10 @@ app.add_middleware(
 
 import asyncio
 from app.services.inbox_poller import start_poller_loop, stop_poller_loop
-from app.services.autonomous_outreach import start_autonomous_scheduler_loop, stop_autonomous_scheduler_loop
+from app.services.autonomous_outreach import (
+    start_autonomous_scheduler_loop, stop_autonomous_scheduler_loop,
+    start_followup_scheduler_loop, stop_followup_scheduler_loop,
+)
 
 # ── Database init ────────────────────────────────────────────────────────────
 @app.on_event("startup")
@@ -49,13 +52,18 @@ async def startup():
     from app.models.autonomous_campaign import AutonomousCampaign
     # Start the IMAP poller loop in the background (polls every 15s for instant autonomous execution)
     asyncio.create_task(start_poller_loop(interval_seconds=15))
-    # Start the Autonomous Outreach Scheduler loop in the background
+    # Start the Autonomous Outreach Scheduler loop (new batch emails, runs every 24h)
     asyncio.create_task(start_autonomous_scheduler_loop(interval_hours=24))
+    # Start the dedicated Follow-up Scheduler loop (runs every FOLLOWUP_CHECK_INTERVAL_HOURS)
+    # Testing default: 1h check interval, 1h delay before follow-up fires
+    # Production: set FOLLOWUP_DELAY_HOURS=168 (7 days) in .env
+    asyncio.create_task(start_followup_scheduler_loop())
 
 @app.on_event("shutdown")
 def shutdown():
     stop_poller_loop()
     stop_autonomous_scheduler_loop()
+    stop_followup_scheduler_loop()
 
 
 # ── Static files + templates (only mount if the directory exists) ─────────────
