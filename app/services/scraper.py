@@ -5,6 +5,9 @@ Only reads publicly visible page data. No login, no private info.
 import json
 import re
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -50,108 +53,292 @@ def _first_value(data: dict, *keys):
     return 0
 
 
-def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int = 60) -> list:
-    """Run an Apify actor synchronously and return dataset items."""
+def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int = 150) -> list:
+    """
+    Run an Apify actor and return dataset items.
+    Uses POST /runs with waitForFinish and dataset items extraction,
+    with run-sync fallback.
+    """
     import urllib.parse
+    import time
     if not api_key:
         return []
     safe_actor = actor_id.replace("/", "~")
-    url = f"https://api.apify.com/v2/acts/{urllib.parse.quote(safe_actor)}/run-sync-get-dataset-items?token={api_key.strip()}"
+    token_str = api_key.strip()
+
+    # 1. Start run with waitForFinish parameter (official Apify pattern)
     try:
-        r = httpx.post(url, json=run_input, timeout=float(timeout_secs))
+        run_url = f"https://api.apify.com/v2/acts/{urllib.parse.quote(safe_actor)}/runs?token={token_str}&waitForFinish={int(timeout_secs)}"
+        r = httpx.post(run_url, json=run_input, timeout=float(timeout_secs + 20))
+        if r.status_code in (200, 201):
+            run_data = r.json().get("data", {})
+            status = run_data.get("status")
+            dataset_id = run_data.get("defaultDatasetId")
+            run_id = run_data.get("id")
+
+            if status == "SUCCEEDED" and dataset_id:
+                items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={token_str}"
+                ir = httpx.get(items_url, timeout=30.0)
+                if ir.status_code == 200:
+                    items = ir.json()
+                    if isinstance(items, list) and len(items) > 0:
+                        return items
+
+            # If still running asynchronously, poll until completion
+            if run_id and dataset_id and status not in ("FAILED", "ABORTED", "TIMED-OUT"):
+                start_t = time.time()
+                while time.time() - start_t < timeout_secs:
+                    time.sleep(3.0)
+                    poll_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={token_str}"
+                    pr = httpx.get(poll_url, timeout=15.0)
+                    if pr.status_code == 200:
+                        p_status = pr.json().get("data", {}).get("status")
+                        if p_status == "SUCCEEDED":
+                            items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={token_str}"
+                            ir = httpx.get(items_url, timeout=30.0)
+                            if ir.status_code == 200:
+                                items = ir.json()
+                                if isinstance(items, list) and len(items) > 0:
+                                    return items
+                        elif p_status in ("FAILED", "ABORTED", "TIMED-OUT"):
+                            break
+    except Exception as e:
+        logger.warning(f"[Apify Run] Notice for {actor_id}: {e}")
+
+    # 2. Fallback: Direct run-sync-get-dataset-items
+    try:
+        sync_url = f"https://api.apify.com/v2/acts/{urllib.parse.quote(safe_actor)}/run-sync-get-dataset-items?token={token_str}&timeout={int(timeout_secs)}"
+        r = httpx.post(sync_url, json=run_input, timeout=float(timeout_secs + 20))
         if r.status_code in (200, 201):
             data = r.json()
-            return data if isinstance(data, list) else [data]
+            if isinstance(data, list) and len(data) > 0:
+                return data
+            elif isinstance(data, dict) and "items" in data:
+                return data["items"]
     except Exception as e:
-        print(f"[Apify] Error running {actor_id}: {e}")
+        logger.debug(f"[Apify Fallback] Sync notice: {e}")
+
     return []
 
 
-def apify_scrape_youtube_channels(channels: list, apify_token: str = None, scrape_fresh: bool = False, timeout_secs: int = 90) -> list:
+def apify_scrape_tiktok_profiles(handles: list, apify_token: str = None, timeout_secs: int = 90) -> list:
     """
-    Run Apify Actor Xa3Un5HYidE8VMKZu (YouTube Channel Business Email Scraper).
-    Accepts channel handles (@channel), URLs, or Channel IDs.
-    Returns list of normalized creator dicts with verified business emails.
+    Run Apify TikTok Profile Scraper (clockworks/tiktok-profile-scraper / 0FXVyOXXEmdGcV88a).
+    """
+    from app.config import settings
+    token = apify_token or settings.APIFY_API_KEY
+    if not token or not handles:
+        return []
+
+    actor_id = getattr(settings, "APIFY_TIKTOK_ACTOR", "0FXVyOXXEmdGcV88a")
+    cleaned_profiles = [str(h).lstrip("@").strip() for h in handles if str(h).strip()]
+    if not cleaned_profiles:
+        return []
+
+    run_input = {
+        "profiles": cleaned_profiles,
+        "profileScrapeSections": ["videos"],
+        "profileSorting": "latest",
+        "resultsPerPage": 10,
+        "excludePinnedPosts": False,
+        "shouldDownloadVideos": False,
+        "shouldDownloadCovers": False,
+        "shouldDownloadAvatars": False,
+    }
+
+    raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
+    results = []
+    seen = set()
+
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+
+        meta = item.get("authorMeta") or item
+        raw_h = meta.get("name") or meta.get("username") or item.get("name") or ""
+        clean_h = str(raw_h).lstrip("@").strip()
+        if not clean_h or clean_h in seen:
+            continue
+        seen.add(clean_h)
+
+        display_name = meta.get("nickName") or meta.get("nickname") or item.get("nickname") or clean_h
+        fans = int(meta.get("fans") or meta.get("followerCount") or item.get("followerCount") or 0)
+        bio = meta.get("signature") or item.get("signature") or meta.get("bio") or ""
+        avatar = meta.get("avatar") or meta.get("avatarLarger") or meta.get("avatarMedium") or ""
+
+        # Extract public email from bio or meta
+        contacts = _extract_contacts_from_text(bio)
+        email = meta.get("email") or meta.get("publicEmail") or (contacts["emails"][0] if contacts["emails"] else "")
+
+        digg_count = int(meta.get("digg") or meta.get("heart") or item.get("heart") or 0)
+        video_count = int(meta.get("video") or item.get("videoCount") or 0)
+
+        results.append({
+            "handle": clean_h,
+            "platform": "tiktok",
+            "display_name": display_name,
+            "follower_count": fans,
+            "followerStr": f"{fans/1_000_000:.1f}M" if fans >= 1_000_000 else f"{fans/1_000:.0f}K" if fans >= 1000 else str(fans),
+            "bio": bio,
+            "avatar_url": avatar or f"https://ui-avatars.com/api/?name={clean_h}&background=06b6d4&color=fff",
+            "email_public": email,
+            "email": email,
+            "profile_url": f"https://www.tiktok.com/@{clean_h}",
+            "video_count": video_count,
+            "raw_apify_data": item,
+        })
+
+    return results
+
+
+def apify_scrape_instagram_profiles(handles: list, apify_token: str = None, timeout_secs: int = 90) -> list:
+    """
+    Run Apify Instagram Profile Scraper (apify/instagram-profile-scraper / dSCLg0C3YEZ83HzYX).
+    """
+    from app.config import settings
+    token = apify_token or settings.APIFY_API_KEY
+    if not token or not handles:
+        return []
+
+    actor_id = getattr(settings, "APIFY_INSTAGRAM_ACTOR", "dSCLg0C3YEZ83HzYX")
+    cleaned_handles = [str(h).lstrip("@").strip() for h in handles if str(h).strip()]
+    if not cleaned_handles:
+        return []
+
+    run_input = {
+        "usernames": cleaned_handles,
+        "includeAboutSection": False,
+    }
+
+    raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
+    results = []
+    seen = set()
+
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+
+        raw_h = item.get("username") or item.get("name") or ""
+        clean_h = str(raw_h).lstrip("@").strip()
+        if not clean_h or clean_h in seen:
+            continue
+        seen.add(clean_h)
+
+        display_name = item.get("fullName") or item.get("name") or clean_h
+        bio = item.get("biography") or item.get("bio") or ""
+        followers = int(item.get("followersCount") or item.get("followers") or 0)
+        avatar = item.get("profilePicUrlHD") or item.get("profilePicUrl") or ""
+
+        # Extract email
+        contacts = _extract_contacts_from_text(bio)
+        email = (
+            item.get("businessEmail")
+            or item.get("publicEmail")
+            or item.get("externalEmail")
+            or (contacts["emails"][0] if contacts["emails"] else "")
+        )
+
+        posts_count = int(item.get("postsCount") or item.get("mediaCount") or 0)
+
+        results.append({
+            "handle": clean_h,
+            "platform": "instagram",
+            "display_name": display_name,
+            "follower_count": followers,
+            "followerStr": f"{followers/1_000_000:.1f}M" if followers >= 1_000_000 else f"{followers/1_000:.0f}K" if followers >= 1000 else str(followers),
+            "bio": bio,
+            "avatar_url": avatar or f"https://ui-avatars.com/api/?name={clean_h}&background=ec4899&color=fff",
+            "email_public": email,
+            "email": email,
+            "profile_url": f"https://www.instagram.com/{clean_h}",
+            "video_count": posts_count,
+            "raw_apify_data": item,
+        })
+
+    return results
+
+
+def apify_scrape_youtube_channels(channels: list, apify_token: str = None, timeout_secs: int = 90) -> list:
+    """
+    Run Apify YouTube Channel Scraper (streamers/youtube-channel-scraper / 67Q6fmd8iedTVcCwY).
     """
     from app.config import settings
     token = apify_token or settings.APIFY_API_KEY
     if not token or not channels:
         return []
 
-    cleaned_channels = []
+    actor_id = getattr(settings, "APIFY_YOUTUBE_ACTOR", "67Q6fmd8iedTVcCwY")
+    start_urls = []
     for ch in channels:
         if not ch:
             continue
         c_str = str(ch).strip()
-        if not c_str.startswith("http") and not c_str.startswith("@") and not c_str.startswith("UC"):
-            c_str = f"@{c_str}"
-        cleaned_channels.append(c_str)
+        if c_str.startswith("http"):
+            start_urls.append({"url": c_str})
+        else:
+            clean_h = c_str.lstrip("@").strip()
+            start_urls.append({"url": f"https://www.youtube.com/@{clean_h}"})
 
-    if not cleaned_channels:
+    if not start_urls:
         return []
 
-    actor_id = getattr(
-        settings,
-        "APIFY_YOUTUBE_EMAIL_ACTOR",
-        "Xa3Un5HYidE8VMKZu",
-    )
     run_input = {
-        "channels": cleaned_channels,
-        "scrape_fresh_emails": scrape_fresh,
+        "startUrls": start_urls,
+        "maxResults": 10,
+        "maxResultsShorts": 5,
+        "maxResultStreams": 0,
+        "sortVideosBy": "NEWEST",
     }
 
     raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
-
-    # ── Debug: print raw Apify response so you can verify what the actor returns ──
-    print(f"\n[Apify] Actor={actor_id} | channels={cleaned_channels} | raw item count={len(raw_items)}")
-    for _i, _raw in enumerate(raw_items):
-        print(f"  [Apify raw #{_i}] {_raw}")
-
     results = []
+    seen = set()
 
     for item in raw_items:
         if not isinstance(item, dict):
             continue
 
-        raw_handle = item.get("ChannelHandle") or item.get("Query") or ""
-        clean_handle = raw_handle.split("/")[-1].lstrip("@").strip()
+        raw_url = item.get("channelUrl") or item.get("url") or ""
+        clean_h = ""
+        if "/@" in raw_url:
+            clean_h = raw_url.split("/@")[-1].split("/")[0].split("?")[0].strip()
+        elif raw_url:
+            clean_h = raw_url.split("/")[-1].split("?")[0].lstrip("@").strip()
 
-        email = (item.get("Email") or "").strip()
-        status = item.get("Status") or ("EMAIL_AVAILABLE" if email else "NO_EMAIL")
-        subs = item.get("SubscriberCount") or 0
-        name = item.get("ChannelName") or clean_handle
-        channel_id = item.get("ChannelId") or ""
-        country = item.get("Country") or ""
-        total_views = item.get("TotalViews") or 0
-        video_count = item.get("TotalVideosCount") or 0
+        if not clean_h:
+            clean_h = str(item.get("channelName") or item.get("name") or "").replace(" ", "").lower()
 
-        profile_url = f"https://www.youtube.com/@{clean_handle}" if clean_handle else (f"https://www.youtube.com/channel/{channel_id}" if channel_id else "")
-        avatar_url = f"https://ui-avatars.com/api/?name={clean_handle or 'YouTube'}&background=ef4444&color=fff"
+        if not clean_h or clean_h in seen:
+            continue
+        seen.add(clean_h)
 
-        print(f"  [Apify parsed] handle=@{clean_handle} | email={email!r} | status={status} | subs={subs:,}")
+        display_name = item.get("channelName") or item.get("name") or clean_h
+        bio = item.get("channelDescription") or item.get("description") or ""
+        subs = _follower_count(item.get("numberOfSubscribers") or item.get("subscribers") or item.get("subscriberCount") or 0)
+        avatar = item.get("channelAvatarUrl") or item.get("avatarUrl") or ""
+        total_views = int(item.get("channelTotalViews") or 0)
+        total_videos = int(item.get("channelTotalVideos") or 0)
+
+        contacts = _extract_contacts_from_text(bio)
+        email = item.get("email") or (contacts["emails"][0] if contacts["emails"] else "")
 
         results.append({
-            "handle": clean_handle,
+            "handle": clean_h,
             "platform": "youtube",
-            "display_name": name,
-            "channel_id": channel_id,
-            "email": email,
+            "display_name": display_name,
+            "follower_count": subs,
+            "followerStr": f"{subs/1_000_000:.1f}M" if subs >= 1_000_000 else f"{subs/1_000:.0f}K" if subs >= 1000 else str(subs),
+            "bio": bio,
+            "avatar_url": avatar or f"https://ui-avatars.com/api/?name={clean_h}&background=ef4444&color=fff",
             "email_public": email,
-            "email_verified": bool(email and status == "EMAIL_AVAILABLE"),
-            "status": status,
-            "follower_count": int(subs) if subs else 0,
-            "country": country,
+            "email": email,
+            "profile_url": f"https://www.youtube.com/@{clean_h}",
             "total_views": total_views,
-            "video_count": video_count,
-            "profile_url": profile_url,
-            "avatar_url": avatar_url,
-            "bio": f"{name} ({country}) • {int(subs):,} subscribers" if subs else name,
+            "video_count": total_videos,
             "raw_apify_data": item,
         })
 
-    print(f"[Apify] Returning {len(results)} parsed results\n")
     return results
-
 
 
 def innertube_fetch_channel(handle_or_query: str) -> dict:
@@ -260,161 +447,33 @@ def scrape_youtube(handle: str) -> dict:
         "social_links": [],
     }
 
-    # First attempt: Innertube live extraction (fast & 100% accurate live subscribers)
+    # Step 1: Live Profile Extraction via Innertube API (fast & accurate live stats/avatar)
     tube_res = innertube_fetch_channel(clean_h)
-    if tube_res and tube_res.get("follower_count", 0) > 0:
-        result.update(tube_res)
-        return result
-
-    if settings.APIFY_API_KEY:
-        try:
-            apify_items = apify_scrape_youtube_channels([f"@{clean_h}"], settings.APIFY_API_KEY, timeout_secs=45)
-            if apify_items:
-                d = apify_items[0]
-                result["display_name"] = d.get("display_name") or clean_h
-                result["bio"]           = d.get("bio") or ""
-                result["follower_count"]= d.get("follower_count") or 0
-                result["avatar_url"]    = d.get("avatar_url") or ""
-                result["email_public"]  = d.get("email_public") or ""
-                result["email_verified"]= d.get("email_verified", False)
-                result["channel_id"]    = d.get("channel_id") or ""
-                return result
-        except Exception as e:
-            result["error"] = f"Apify: {e}"
-
     if tube_res:
         result.update(tube_res)
-        return result
 
-    # ── Direct scrape fallback ──────────────────────────────────────────────────
-    try:
-        r = httpx.get(url, headers=HEADERS, timeout=15, follow_redirects=True)
-        html = r.text
-    except Exception as e:
-        return {"error": str(e), "handle": handle, "platform": "youtube"}
-
-    # ── Extract ytInitialData JSON ──
-    m = re.search(r"var ytInitialData\s*=\s*(\{.+?\});\s*(?:var|</script)", html, re.DOTALL)
-    if m:
+    # Step 2: Direct scrape fallback if Innertube didn't return profile stats
+    if not result.get("follower_count"):
         try:
-            data = json.loads(m.group(1))
-
-            # Channel name
-            try:
-                result["display_name"] = (
-                    data["header"]["pageHeaderRenderer"]["pageTitle"]
-                    or data["metadata"]["channelMetadataRenderer"]["title"]
-                )
-            except Exception:
-                try:
-                    result["display_name"] = data["metadata"]["channelMetadataRenderer"]["title"]
-                except Exception:
-                    pass
-
-            # Description / bio
-            try:
-                result["bio"] = data["metadata"]["channelMetadataRenderer"]["description"]
-            except Exception:
-                pass
-
-            # Avatar
-            try:
-                avatars = (
-                    data["header"]["pageHeaderRenderer"]["content"]
-                    ["pageHeaderViewModel"]["image"]["decoratedAvatarViewModel"]
-                    ["avatar"]["avatarViewModel"]["image"]["sources"]
-                )
-                result["avatar_url"] = avatars[-1]["url"] if avatars else ""
-            except Exception:
-                try:
-                    result["avatar_url"] = (
-                        data["metadata"]["channelMetadataRenderer"]
-                        ["avatar"]["thumbnails"][-1]["url"]
-                    )
-                except Exception:
-                    pass
-
-            # Subscriber count — try multiple paths
-            sub_text = ""
-            try:
-                rows = (
-                    data["header"]["pageHeaderRenderer"]["content"]
-                    ["pageHeaderViewModel"]["metadata"]
-                    ["contentMetadataViewModel"]["metadataRows"]
-                )
-                for row in rows:
-                    for part in row.get("metadataParts", []):
-                        txt = part.get("text", {}).get("content", "")
-                        if "subscriber" in txt.lower() or any(c in txt for c in ["K", "M", "B"]):
-                            sub_text = txt
-                            break
-            except Exception:
-                pass
-
-            if not sub_text:
-                try:
-                    sub_text = (
-                        data["header"]["c4TabbedHeaderRenderer"]
-                        ["subscriberCountText"]["simpleText"]
-                    )
-                except Exception:
-                    pass
-
-            if sub_text:
-                result["follower_count"] = _num(sub_text)
-
-            # Website / social links from channel
-            try:
-                links = (
-                    data["header"]["pageHeaderRenderer"]["content"]
-                    ["pageHeaderViewModel"]["metadata"]
-                    ["contentMetadataViewModel"]["metadataRows"]
-                )
-                for row in links:
-                    for part in row.get("metadataParts", []):
-                        url_val = part.get("tapEndpoint", {}).get("urlEndpoint", {}).get("url", "")
-                        if url_val and "youtube.com" not in url_val:
-                            # Decode Google redirect URL
-                            q = re.search(r"q=([^&]+)", url_val)
-                            if q:
-                                import urllib.parse
-                                decoded = urllib.parse.unquote(q.group(1))
-                                result["social_links"].append(decoded)
-                                if not result["website"]:
-                                    result["website"] = decoded
-            except Exception:
-                pass
-
-        except json.JSONDecodeError:
-            pass
-
-    # ── Fallback: regex scan for YouTube avatar CDN URLs in raw HTML ──
-    if not result["avatar_url"]:
-        m = re.search(r'(https://yt3\.(?:ggpht|googleusercontent)\.com/[^"\s\\]{20,})', html)
-        if m:
-            raw_url = m.group(1).split('"')[0]
-            result["avatar_url"] = raw_url
-
-    # ── Fallback: oEmbed for display name ──
-    if not result["display_name"] or result["display_name"] == handle:
-        try:
-            oe = httpx.get(
-                f"https://www.youtube.com/oembed?url=https://www.youtube.com/@{handle}&format=json",
-                headers=HEADERS, timeout=10,
-            )
-            if oe.status_code == 200:
-                oe_data = oe.json()
-                result["display_name"] = oe_data.get("author_name", handle)
-        except Exception:
-            pass
+            r = httpx.get(url, headers=HEADERS, timeout=15, follow_redirects=True)
+            html = r.text
+            m = re.search(r"var ytInitialData\s*=\s*(\{.+?\});\s*(?:var|</script)", html, re.DOTALL)
+            if m:
+                data = json.loads(m.group(1))
+                direct_res = _extract_channel_from_initial_data(data, clean_h)
+                if direct_res:
+                    result.update(direct_res)
+        except Exception as e:
+            print(f"[YouTube Scrape] Direct HTML fallback error: {e}")
 
 
-    # ── Guess niche from bio keywords ──
-    bio_lower = (result["bio"] or "").lower()
+
+    # Guess niche from bio keywords
+    bio_lower = (result.get("bio") or "").lower()
     niche_map = {
         "fitness": ["fitness", "workout", "gym", "health", "exercise"],
         "cooking": ["cook", "recipe", "food", "kitchen", "chef"],
-        "tech": ["tech", "software", "coding", "developer", "programming"],
+        "tech": ["tech", "software", "coding", "developer", "programming", "ai", "automation"],
         "finance": ["finance", "invest", "money", "wealth", "stock"],
         "gaming": ["gaming", "gamer", "twitch", "esport", "playthrough"],
         "beauty": ["beauty", "makeup", "skincare", "cosmetic"],
@@ -424,7 +483,7 @@ def scrape_youtube(handle: str) -> dict:
         "business": ["entrepreneur", "business", "startup", "founder"],
     }
     for tag, keywords in niche_map.items():
-        if any(k in bio_lower for k in keywords):
+        if any(k in bio_lower for k in keywords) and tag not in result["niche"]:
             result["niche"].append(tag)
 
     return result
@@ -1075,70 +1134,21 @@ def scrape_profile(platform: str, handle: str, api_key: str = None, apify_token:
         if m:
             clean_h = m.group(1)
 
-    # 1. Primary: Apify Actors (Direct real response from Apify)
+    # 1. Primary: Apify Actors for Platform Scraping (TikTok, Instagram, YouTube)
     if token:
         try:
             if p == "youtube":
-                apify_res = apify_scrape_youtube_channels([f"@{clean_h}"], apify_token=token, timeout_secs=45)
-                if apify_res:
-                    return apify_res[0]
+                res = apify_scrape_youtube_channels([clean_h], token, timeout_secs=60)
+                if res:
+                    return res[0]
             elif p == "instagram":
-                actor_id = getattr(
-                    settings,
-                    "APIFY_INSTAGRAM_EMAIL_ACTOR",
-                    "scrapers-hub~instagram-profile-email-scraper",
-                )
-                res = _apify_run(actor_id, {"usernames": [clean_h]}, token, timeout_secs=45)
-                if res and len(res) > 0:
-                    item = res[0]
-                    bio = item.get("biography") or item.get("bio") or ""
-                    email_pub = (
-                        item.get("email")
-                        or item.get("publicEmail")
-                        or item.get("businessEmail")
-                        or item.get("contactEmail")
-                        or item.get("externalEmail")
-                        or item.get("email_public")
-                        or ""
-                    )
-                    return {
-                        "handle": clean_h,
-                        "platform": "instagram",
-                        "display_name": item.get("fullName") or item.get("username") or clean_h,
-                        "bio": bio,
-                        "follower_count": _follower_count(_first_value(
-                            item, "followersCount", "followers_count", "followers", "followedBy"
-                        )),
-                        "avatar_url": item.get("profilePicUrlHD") or item.get("profilePicUrl") or "",
-                        "email_public": email_pub,
-                        "profile_url": f"https://www.instagram.com/{clean_h}",
-                        "raw_apify_data": item,
-                    }
+                res = apify_scrape_instagram_profiles([clean_h], token, timeout_secs=60)
+                if res:
+                    return res[0]
             elif p == "tiktok":
-                res = _apify_run("clockworks~tiktok-profile-scraper", {"profiles": [f"https://www.tiktok.com/@{clean_h}"], "resultsPerPage": 1}, token, timeout_secs=45)
-                if res and len(res) > 0:
-                    item = res[0]
-                    bio = item.get("signature") or ""
-                    email_pub = (
-                        item.get("email")
-                        or item.get("publicEmail")
-                        or item.get("authorMeta", {}).get("email")
-                        or item.get("authorMeta", {}).get("publicEmail")
-                        or ""
-                    )
-                    return {
-                        "handle": clean_h,
-                        "platform": "tiktok",
-                        "display_name": item.get("nickname") or clean_h,
-                        "bio": bio,
-                        "follower_count": _follower_count(_first_value(
-                            item, "followerCount", "followersCount", "followers", "fans"
-                        )),
-                        "avatar_url": item.get("avatarLarger") or item.get("avatarMedium") or "",
-                        "email_public": email_pub,
-                        "profile_url": f"https://www.tiktok.com/@{clean_h}",
-                        "raw_apify_data": item,
-                    }
+                res = apify_scrape_tiktok_profiles([clean_h], token, timeout_secs=60)
+                if res:
+                    return res[0]
             elif p == "twitter":
                 res = _apify_run("apify~twitter-scraper", {"twitterHandles": [clean_h], "maxItems": 1}, token, timeout_secs=45)
                 if res and len(res) > 0:
@@ -1165,7 +1175,7 @@ def scrape_profile(platform: str, handle: str, api_key: str = None, apify_token:
                         "raw_apify_data": item,
                     }
         except Exception as e:
-            print(f"[Apify Scraper] Fallback to direct scrapers due to: {e}")
+            logger.warning(f"[Apify Scraper] Fallback to direct scrapers for {p} @{clean_h}: {e}")
 
     # 2. Direct Fast Scrapers
     if p == "youtube":

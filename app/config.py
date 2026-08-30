@@ -62,14 +62,9 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
     APIFY_API_KEY: str = os.getenv("APIFY_API_KEY", "")
-    APIFY_YOUTUBE_EMAIL_ACTOR: str = os.getenv(
-        "APIFY_YOUTUBE_EMAIL_ACTOR",
-        "Xa3Un5HYidE8VMKZu",
-    )
-    APIFY_INSTAGRAM_EMAIL_ACTOR: str = os.getenv(
-        "APIFY_INSTAGRAM_EMAIL_ACTOR",
-        "scrapers-hub~instagram-profile-email-scraper",
-    )
+    APIFY_TIKTOK_ACTOR: str = os.getenv("APIFY_TIKTOK_ACTOR", "0FXVyOXXEmdGcV88a")
+    APIFY_INSTAGRAM_ACTOR: str = os.getenv("APIFY_INSTAGRAM_ACTOR", "dSCLg0C3YEZ83HzYX")
+    APIFY_YOUTUBE_ACTOR: str = os.getenv("APIFY_YOUTUBE_ACTOR", "67Q6fmd8iedTVcCwY")
     ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "openai")
     AI_MODEL: str = "gpt-4o"
 

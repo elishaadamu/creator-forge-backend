@@ -137,17 +137,31 @@ def classify_reply(
     ]
     more_info_patterns = [
         "can you tell me more", "more info", "send details", "send more", "send over details",
-        "send deck", "pitch deck", "more information", "what are the details"
+        "send deck", "pitch deck", "more information", "what are the details",
+        "check them out", "check it out", "check these out", "i'll check", "ill check", "i will check",
+        "will check", "checking", "take a look", "looking into", "looking over", "reviewing", "will review",
+        "let me review", "will look", "give me a few days", "let you know", "get back to you",
+        "can we continue", "how do we continue", "what's next", "whats next"
+    ]
+    question_patterns = [
+        "?", "what tech", "what stack", "how does", "how do you", "revenue split", "how it works",
+        "how this works", "who owns", "cost", "pricing", "how much", "what are the", "who builds",
+        "what is the timeline", "thoughts", "thought", "think", "what do you think", "what are your thoughts",
+        "benefit", "what do i get", "in it for me"
     ]
     pos_patterns = [
         "yes", "interested", "would be interested", "i would be interested", "i'm interested", "im interested",
-        "love to", "sounds great", "sounds good", "let's talk", "lets talk", "let's do it", "lets do it",
-        "let's connect", "lets connect", "count me in", "happy to chat", "open to", "schedule a call",
-        "thanks for reaching out", "let me know next steps", "ready to move forward"
+        "love to", "sounds great", "sounds good", "sounds awesome", "sounds amazing", "looks great", "looks good",
+        "sure", "sure thing", "sure, send it over", "send it over", "send over", "send it", "go ahead",
+        "let's talk", "lets talk", "let's do it", "lets do it", "let's connect", "lets connect",
+        "count me in", "happy to chat", "open to", "schedule a call", "thanks for reaching out",
+        "let me know next steps", "ready to move forward", "agreed", "agree", "deal", "i'm in", "im in",
+        "i'm down", "im down", "let's build", "lets build", "yes please", "yeah", "yep", "ok", "okay", "start building"
     ]
 
     is_explicit_negative = any(p in lower for p in neg_patterns)
-    is_explicit_more_info = any(p in lower for p in more_info_patterns)
+    is_explicit_question = not is_explicit_negative and any(p in lower for p in question_patterns)
+    is_explicit_more_info = not is_explicit_negative and any(p in lower for p in more_info_patterns)
     is_explicit_positive = not is_explicit_negative and any(p in lower for p in pos_patterns)
 
     if not raw:
@@ -161,16 +175,21 @@ def classify_reply(
             reply.sentiment = "positive"
             reply.crm_stage = "qualified"
             reply.ai_summary = "Creator expressed positive interest."
-        elif is_explicit_more_info:
-            reply.classification = "more_info"
+        elif is_explicit_question:
+            reply.classification = "question"
             reply.sentiment = "neutral"
             reply.crm_stage = "contacted"
-            reply.ai_summary = "Creator asking for more information."
+            reply.ai_summary = "Creator asked clarifying questions regarding terms or tech."
+        elif is_explicit_more_info:
+            reply.classification = "more_info"
+            reply.sentiment = "positive"
+            reply.crm_stage = "contacted"
+            reply.ai_summary = "Creator is reviewing software concepts / requesting more information."
         else:
             reply.classification = "other"
             reply.sentiment = "neutral"
             reply.crm_stage = "contacted"
-            reply.ai_summary = "Reply received — manual review needed."
+            reply.ai_summary = "Reply received — active dialog in progress."
         reply.processed_at = datetime.utcnow()
     else:
         try:

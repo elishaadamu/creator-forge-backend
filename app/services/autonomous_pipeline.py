@@ -206,6 +206,60 @@ Creator Forge Studio Team"""
     return subject, body
 
 
+def generate_step6_review_preview_nudge(creator_name: str, first_name: str, concepts: list, reply_body: str) -> tuple[str, str]:
+    """Generates a responsive, helpful follow-up when the creator acknowledges review (e.g. 'Thanks, I'll check them out', 'I'll take a look')."""
+    top_c = concepts[0] if concepts else {"name": "Creator OS", "tagline": "Automated workspace", "pricing": "$29/mo"}
+    subject = f"Re: Quick 60-second preview: {top_c.get('name', 'Software Concepts')} for {creator_name}"
+    clean_reply = (reply_body or "").strip()
+
+    concepts_summary = "\n".join(
+        f"{idx+1}. {c.get('name', f'Concept {idx+1}')} — {c.get('tagline', 'Specialized tool')} ({c.get('pricing', '$29/mo')})"
+        for idx, c in enumerate(concepts[:3])
+    ) if concepts else f"1. {top_c.get('name')} — {top_c.get('tagline')} ({top_c.get('pricing')})"
+
+    try:
+        from app.services.llm import call_llm
+        system_prompt = (
+            "You are the managing director of Creator Forge Studio, a premier software venture studio that co-founds "
+            "SaaS applications with top creators under a 50/50 net revenue share model with zero upfront cost. "
+            "A creator replied saying they will check out or review the software concepts we sent them. "
+            "Write a warm, concise email thanking them, providing a 60-second quick summary/preview to make their review effortless, "
+            "highlighting that we take 100% of engineering and support, and asking which concept sounds most promising to validate first."
+        )
+        prompt = f"""
+Creator Name: {creator_name}
+Their Response: "{clean_reply}"
+Proposed Concepts:
+{concepts_summary}
+
+Write a short, engaging email response from 'Creator Forge Studio Team'.
+"""
+        llm_reply = call_llm(prompt, system_prompt=system_prompt, max_tokens=600)
+        if llm_reply and len(llm_reply.strip()) > 80:
+            return subject, llm_reply.strip()
+    except Exception as e:
+        logger.warning(f"[Autonomous Pipeline] LLM review nudge generation fallback: {e}")
+
+    body = f"""Hi {first_name},
+
+Thanks for taking a look! To make your review as quick and easy as possible, here is a 60-second breakdown of our engineered concepts for your community:
+
+{concepts_summary}
+
+Key Co-Founding Terms:
+• 50/50 Revenue Split: Deposited directly via Stripe Connect.
+• Zero Build Cost: Creator Forge covers 100% of engineering, hosting, security, and customer support.
+• Minimal Time (< 2 hrs/mo): You provide product feedback and announce the tool to your audience.
+
+Which of these 3 resonates most with what your followers ask for? Let us know, or feel free to ask any questions!
+
+Best regards,
+Creator Forge Studio Team"""
+
+    return subject, body
+
+
+
 def run_autonomous_creator_progression(db: Session, reply: Reply):
     """
     Called whenever an incoming creator reply is recorded and classified.
@@ -483,7 +537,7 @@ Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
             "how this works", "who owns", "cost", "pricing", "how much", "what are the",
             "who builds", "what is the timeline", "thoughts", "thought", "think", "what do you think",
             "what are your thoughts", "feedback", "need more info", "more information", "more info",
-            "can we get more details", "elaboration", "elaborate", "clarify", "clarification"
+            "can we get more details"
         ]
     )
 
@@ -491,13 +545,18 @@ Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
     affirmative_patterns = [
         "interested", "i am interested", "i'm interested", "im interested", "we are interested", "we're interested",
         "definitely interested", "very interested", "would be interested", "let's do it", "lets do it",
-        "sounds great", "sounds good", "love this", "love it", "i'm in", "im in",
-        "let's build", "lets build", "count me in", "ready to move forward", "let's partner", "lets partner",
-        "yes let's", "yes lets", "i choose", "i prefer", "let's go with", "go ahead",
+        "sounds great", "sounds good", "sounds awesome", "sounds amazing", "sounds cool",
+        "looks great", "looks good", "looks awesome", "looks amazing",
+        "sure", "sure thing", "sure, send it over", "send it over", "send over", "send it",
+        "go ahead", "let's go", "lets go", "let's do this", "lets do this", "let's proceed", "lets proceed",
+        "agreed", "agree", "deal", "i'm down", "im down", "down for this", "sign me up", "count me in",
+        "count on me", "i'm in", "im in", "let's build", "lets build", "ready to move forward", "move forward",
+        "let's partner", "lets partner", "yes let's", "yes lets", "i choose", "i prefer", "let's go with", "lets go with",
+        "let's start", "lets start", "love to", "love this", "love it", "let's talk", "lets talk",
+        "let's connect", "lets connect", "happy to chat", "open to", "yes please", "yes", "yeah", "yep", "ok", "okay",
+        "start building", "create project", "approved", "approve",
         "concept 1", "concept 2", "concept 3", "option 1", "option 2", "option 3",
         "#1", "#2", "#3", "first one", "second one", "third one",
-        "let's talk", "lets talk", "let's do this", "lets do this", "let's proceed", "lets proceed",
-        "let's connect", "lets connect", "happy to chat", "yes", "definitely"
     ]
     has_affirmative = any(p in body_lower for p in affirmative_patterns)
     has_concept_mention = any(c["name"].lower() in body_lower for c in concepts)
@@ -577,18 +636,92 @@ Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
             logger.info(f"[Autonomous Pipeline] Creator {creator.handle} already received persuasion email. Halting progression.")
         return
 
-    # 8. Must have explicit confirmation or concept mention to initialize Section 2!
-    if not (has_affirmative or has_concept_mention):
-        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} reply ('{reply.body[:60]}') did not contain concrete agreement or concept choice. Awaiting explicit confirmation.")
+    # 8. PRIMARY GATE: If affirmative agreement or concept choice is confirmed -> ADVANCE TO SECTION 2!
+    if (has_affirmative or has_concept_mention) and not is_question:
+        pass
+    else:
+        # Review in Progress / Concept Review Acknowledgment -> Send 60s Concept Preview & Nudge!
+        review_patterns = [
+            "check them out", "check it out", "check these out", "i'll check", "ill check", "i will check",
+            "checking", "take a look", "looking into", "looking over", "reviewing", "will review",
+            "let me review", "will look", "give me a few days", "give me a moment", "let me read",
+            "let you know", "get back to you", "can we continue", "how do we continue", "what's next", "whats next"
+        ]
+        is_review_ack = any(p in body_lower for p in review_patterns)
+
+        if is_review_ack:
+            already_previewed = (
+                db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.creator_id == c_id,
+                    OutreachMessage.subject.ilike("%preview%")
+                )
+                .first()
+            )
+            if not already_previewed:
+                logger.info(f"[Autonomous Pipeline] Creator {creator.handle} acknowledged review in dialog ('{reply.body[:80]}'). Dispatched 60s preview & concept highlights...")
+                prev_subject, prev_body = generate_step6_review_preview_nudge(c_name, first_name, concepts, reply.body)
+                prev_body_with_token = f"{prev_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_PREVIEW | CF-CID:{c_id} | Handle:@{clean_handle}]"
+
+                try:
+                    email_provider.send(
+                        to_email=target_email,
+                        subject=prev_subject,
+                        body_html=prev_body_with_token.replace("\n", "<br>"),
+                        body_text=prev_body_with_token
+                    )
+                    prev_msg = OutreachMessage(
+                        creator_id=c_id,
+                        campaign_id="default",
+                        subject=prev_subject,
+                        body=prev_body_with_token,
+                        send_method="email",
+                        status="sent",
+                        sent_at=datetime.utcnow()
+                    )
+                    db.add(prev_msg)
+                    db.commit()
+                    logger.info(f"[Autonomous Pipeline] Successfully sent 60s concept preview to {creator.handle}!")
+                except Exception as e:
+                    logger.warning(f"[Autonomous Pipeline] Failed to send concept preview to {creator.handle}: {e}")
+            else:
+                logger.info(f"[Autonomous Pipeline] Creator {creator.handle} already received preview nudge. Awaiting concept choice.")
+            return
+
+        # Fallback: Conversational dialog reply
+        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} dialog reply ('{reply.body[:60]}'). Dispatching conversational AI response...")
+        ans_subject, ans_body = generate_step6_review_preview_nudge(c_name, first_name, concepts, reply.body)
+        ans_body_with_token = f"{ans_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_CONVERSATION | CF-CID:{c_id} | Handle:@{clean_handle}]"
+        try:
+            email_provider.send(
+                to_email=target_email,
+                subject=ans_subject,
+                body_html=ans_body_with_token.replace("\n", "<br>"),
+                body_text=ans_body_with_token
+            )
+            conv_msg = OutreachMessage(
+                creator_id=c_id,
+                campaign_id="default",
+                subject=ans_subject,
+                body=ans_body_with_token,
+                send_method="email",
+                status="sent",
+                sent_at=datetime.utcnow()
+            )
+            db.add(conv_msg)
+            db.commit()
+            logger.info(f"[Autonomous Pipeline] Dispatched conversational dialog reply to {creator.handle}.")
+        except Exception as e:
+            logger.warning(f"[Autonomous Pipeline] Failed to send conversational reply to {creator.handle}: {e}")
         return
 
-    # 8. Check if a CoLaunchProject already exists
+    # 10. Check if a CoLaunchProject already exists
     existing_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == c_id).first()
     if existing_proj:
         logger.info(f"[Autonomous Pipeline] Project {existing_proj.id} already exists for {creator.handle}. Skipping launch.")
         return
 
-    # 9. Concept Selection
+    # 11. Concept Selection
     chosen_concept = concepts[0]
     if len(concepts) > 1 and ("flow" in body_lower or "2" in body_lower or "second" in body_lower or "#2" in body_lower):
         chosen_concept = concepts[1]

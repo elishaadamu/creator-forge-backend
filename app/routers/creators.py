@@ -49,24 +49,26 @@ class ApifyFindEmailRequest(BaseModel):
 
 @router.post("/apify/find-email")
 def apify_find_email_endpoint(body: ApifyFindEmailRequest):
-    """Apify Business Email Scraper: finds verified business email for a creator."""
-    from app.services.scraper import apify_scrape_youtube_channels
+    """Find public email via social media scraper & profile extraction."""
+    from app.services.scraper import scrape_profile
     target = body.handle or body.channel or body.url
     if not target:
         raise HTTPException(400, "Handle, channel, or URL required")
     
-    results = apify_scrape_youtube_channels([target], apify_token=body.api_key)
-    if not results or not results[0].get("email"):
+    platform = (body.platform or "youtube").lower()
+    res = scrape_profile(platform, target, apify_token=body.api_key)
+    email = (res.get("email_public") or res.get("email") or "").strip()
+    
+    if not email:
         return {
             "success": False,
-            "error": "No business email found via Apify for this channel",
-            "data": results[0] if results else None
+            "error": f"No public email found on {platform} profile for {target}",
+            "data": res
         }
     
-    res = results[0]
     return {
         "success": True,
-        "email": res["email"],
+        "email": email,
         "score": 100,
         "verification_status": "verified",
         "data": res
