@@ -33,40 +33,30 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None, api
         if p == "gemini":
             if not gemini_api_key:
                 continue
-            try:
-                from google import genai
-                client = genai.Client(api_key=gemini_api_key)
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                )
-                if response and response.text:
-                    print("\n" + "="*50)
-                    print(f"🤖 [AI GENERATED RESPONSE - GEMINI]:\n{response.text.strip()}")
-                    print("="*50 + "\n")
-                    return response.text.strip()
-                else:
-                    raise ValueError("Gemini returned empty response text")
-            except Exception as e:
-                # Fallback to direct HTTP post if google-genai package fails / has issue
+            gemini_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro"]
+            for g_model in gemini_models:
                 try:
                     import httpx
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{g_model}:generateContent?key={gemini_api_key}"
                     payload = {
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {"maxOutputTokens": max_tokens}
                     }
-                    r = httpx.post(url, json=payload, timeout=60)
+                    if system_prompt:
+                        payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+                    r = httpx.post(url, json=payload, timeout=45)
                     if r.status_code == 200:
                         raw = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        import re
+                        raw = re.sub(r"^Subject:\s*[^\n]*\n+", "", raw, flags=re.IGNORECASE).strip()
                         print("\n" + "="*50)
-                        print(f"🤖 [AI GENERATED RESPONSE - GEMINI HTTP]:\n{raw}")
+                        print(f"🤖 [AI GENERATED RESPONSE - GEMINI ({g_model})]:\n{raw}")
                         print("="*50 + "\n")
                         return raw
                     else:
-                        raise ValueError(f"HTTP Post Gemini API error: {r.text}")
+                        errors.append(f"Gemini {g_model} HTTP {r.status_code}: {r.text[:120]}")
                 except Exception as inner_e:
-                    errors.append(f"Gemini error: {e} | HTTP Fallback error: {inner_e}")
+                    errors.append(f"Gemini {g_model} error: {inner_e}")
                     
         elif p == "openai":
             if not openai_api_key:

@@ -327,123 +327,96 @@ def run_autonomous_creator_progression(db: Session, reply: Reply):
         .first()
     )
 
-    # ── STAGE A: First Positive Reply -> Send Step 6 Opportunity Pitch ───────
+    # ── STAGE A: First Positive Reply -> Prepare Concepts For Human Review in Step 4/5 ──
     if not pitch_msg:
-        # Only send pitch if reply was positive / interested
+        # If reply is positive/interested, generate and save product concepts for human review
         classification = (reply.classification or "").lower()
         sentiment = (reply.sentiment or "").lower()
-        if classification not in ("interested", "qualified") and sentiment != "positive":
-            logger.info(f"[Autonomous Pipeline] Reply from {creator.handle} classified as '{classification}' (not interested). Skipping pitch.")
-            return
+        if classification in ("interested", "qualified") or sentiment == "positive":
+            logger.info(f"[Autonomous Pipeline] Creator {creator.handle} replied interested. Product concepts prepared for Human Review in Step 4/5.")
+            concepts = [
+                {
+                    "id": f"p1_{c_id}",
+                    "name": f"{first_name} OS",
+                    "tagline": f"Automated SaaS workspace for {niche} community",
+                    "problem": f"Workflow friction & monetization for {niche} audience",
+                    "pricing": "$29/mo Starter • $79/mo Pro",
+                    "mvpDifficulty": "Low (2 weeks)",
+                    "opportunityScore": 96,
+                    "rationale": f"High audience intent identified in {niche} community."
+                },
+                {
+                    "id": f"p2_{c_id}",
+                    "name": f"{first_name} Flow AI",
+                    "tagline": f"AI-powered operating system for {niche}",
+                    "problem": "Audience retention & automated digital delivery",
+                    "pricing": "$49/mo Pro",
+                    "mvpDifficulty": "Medium (3 weeks)",
+                    "opportunityScore": 92,
+                    "rationale": "Strong engagement on recent video uploads and tutorial series."
+                },
+                {
+                    "id": f"p3_{c_id}",
+                    "name": f"{first_name} Pro Hub",
+                    "tagline": f"Private template & tools community for {niche}",
+                    "problem": "Resource fragmentation and lack of unified tools",
+                    "pricing": "$79/mo Executive",
+                    "mvpDifficulty": "Medium (3-4 weeks)",
+                    "opportunityScore": 89,
+                    "rationale": "Dedicated following ready for premium software access."
+                }
+            ]
 
-        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} qualified with positive reply. Generating 3 concepts and dispatching Opportunity Pitch...")
-
-        concepts = [
-            {
-                "id": f"p1_{c_id}",
-                "name": f"{first_name} OS",
-                "tagline": f"Automated SaaS workspace for {niche} community",
-                "problem": f"Workflow friction & monetization for {niche} audience",
-                "pricing": "$29/mo Starter • $79/mo Pro",
-                "mvpDifficulty": "Low (2 weeks)",
-                "opportunityScore": 96,
-                "rationale": f"High audience intent identified in {niche} community."
-            },
-            {
-                "id": f"p2_{c_id}",
-                "name": f"{first_name} Flow AI",
-                "tagline": f"AI-powered operating system for {niche}",
-                "problem": "Audience retention & automated digital delivery",
-                "pricing": "$49/mo Pro",
-                "mvpDifficulty": "Medium (3 weeks)",
-                "opportunityScore": 92,
-                "rationale": "Strong engagement on recent video uploads and tutorial series."
-            },
-            {
-                "id": f"p3_{c_id}",
-                "name": f"{first_name} Pro Hub",
-                "tagline": f"Private template & tools community for {niche}",
-                "problem": "Resource fragmentation and lack of unified tools",
-                "pricing": "$79/mo Executive",
-                "mvpDifficulty": "Medium (3-4 weeks)",
-                "opportunityScore": 89,
-                "rationale": "Dedicated following ready for premium software access."
-            }
-        ]
-
-        # Save concepts into creator.discovery_notes
-        notes_dict = {}
-        if creator.discovery_notes:
-            try:
-                notes_dict = json.loads(creator.discovery_notes)
-            except:
-                notes_dict = {"raw": creator.discovery_notes}
-        notes_dict["product_concepts"] = concepts
-        creator.discovery_notes = json.dumps(notes_dict)
-        creator.status = "qualified"
-        db.commit()
-
-        pitch_subject = f"Top 3 Software Concepts & Opportunity Deck for {c_name}"
-        pitch_body = f"""Hi {first_name},
-
-Thrilled to hear from you! As promised, our studio analyzed your channel and designed 3 custom software co-launch concepts tailored for your community:
-
-1. {concepts[0]['name']} — {concepts[0]['tagline']} ({concepts[0]['pricing']})
-2. {concepts[1]['name']} — {concepts[1]['tagline']} ({concepts[1]['pricing']})
-3. {concepts[2]['name']} — {concepts[2]['tagline']} ({concepts[2]['pricing']})
-
-Our Co-Founder Terms:
-• 50/50 Revenue Split
-• We handle 100% of engineering, server infrastructure, Stripe billing, and user support.
-• You provide audience distribution and product feedback. Zero upfront cost to you.
-
-Which of these three concepts resonates most with you? Once you reply, we'll initialize your private Co-Founder Portal and validation campaign.
-
-Best regards,
-Creator Forge Studio Team
-
----
-Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
-
-        try:
-            email_provider.send(
-                to_email=target_email,
-                subject=pitch_subject,
-                body_html=pitch_body.replace("\n", "<br>"),
-                body_text=pitch_body
-            )
-            msg = OutreachMessage(
-                creator_id=c_id,
-                campaign_id="default",
-                subject=pitch_subject,
-                body=pitch_body,
-                send_method="email",
-                status="sent",
-                sent_at=datetime.utcnow()
-            )
-            db.add(msg)
+            notes_dict = {}
+            if creator.discovery_notes:
+                try:
+                    notes_dict = json.loads(creator.discovery_notes)
+                except:
+                    notes_dict = {"raw": creator.discovery_notes}
+            notes_dict["product_concepts"] = concepts
+            creator.discovery_notes = json.dumps(notes_dict)
             db.commit()
-            logger.info(f"[Autonomous Pipeline] Successfully dispatched Opportunity Pitch to {target_email} for creator {clean_handle}")
-        except Exception as e:
-            logger.warning(f"[Autonomous Pipeline] Failed to dispatch Opportunity Pitch: {e}")
-
+        else:
+            logger.info(f"[Autonomous Pipeline] Reply from {creator.handle} classified as '{classification}'. Awaiting human review in Step 4.")
+        
+        # Human approval required before pitch is dispatched
         return
 
     # ── STAGE B: Reply to Opportunity Pitch -> Strictly Validate Before Launch ──
-    # Check if this reply is specifically addressed to the Step 6 Opportunity Pitch or Dialog thread
     reply_body_lower = (reply.body or "").lower()
+    
+    # 1. Initial Outreach / Step 4 Subject Indicators (MUST NEVER be treated as Step 6)
+    is_initial_inquiry_reply = (
+        "quick idea for" in reply_subj or
+        "partnership inquiry" in reply_subj or
+        "partnership update" in reply_subj or
+        "partnership accepted" in reply_subj or
+        "initial inquiry" in reply_subj or
+        "step 3" in reply_subj or "step3" in reply_subj or "cf-stage:step3" in reply_body_lower or
+        "cf-stage:step4" in reply_body_lower
+    )
+    
+    has_explicit_concept_choice = any(k in reply_body_lower for k in [
+        "concept 1", "concept 2", "concept 3", "option 1", "option 2", "option 3", "#1", "#2", "#3"
+    ])
+    
+    if is_initial_inquiry_reply and not has_explicit_concept_choice:
+        logger.info(f"[Autonomous Pipeline] Reply {reply.id} is an initial outreach / Step 4 response ('{reply.subject}'). Ignoring for Step 6.")
+        return
+
+    # 2. Check if this reply is specifically addressed to the Step 6 Opportunity Pitch or Dialog thread
     is_step6_pitch_thread = (
         "step 6" in reply_subj or "step6" in reply_subj or "step6" in reply_body_lower or
         "cf-stage:step6" in reply_body_lower or
-        any(k in reply_subj for k in ["opportunity pitch", "opportunity deck", "concepts", "option", "thoughts", "answers", "blueprint"])
+        any(k in reply_subj for k in ["opportunity pitch", "opportunity deck", "concepts", "answers", "blueprint", "preview", "questions", "simplifying", "zero-effort"]) or
+        has_explicit_concept_choice
     )
     
-    # If the reply is to the initial inquiry thread and has NO Step 6 indicators, this is NOT a Step 6 response!
-    if ("inquiry" in reply_subj or "step 3" in reply_subj or "step3" in reply_subj or "cf-stage:step3" in reply_body_lower) and not is_step6_pitch_thread:
-        logger.info(f"[Autonomous Pipeline] Reply {reply.id} is for initial inquiry thread, not Step 6 pitch. Ignoring for Stage B.")
+    if not is_step6_pitch_thread:
+        logger.info(f"[Autonomous Pipeline] Reply {reply.id} ('{reply.subject}') does not match Step 6 proposal thread. Ignoring for Step 6.")
         return
 
-    # 1. Ensure the incoming reply arrived AFTER our latest outbound communication (Pitch, Answers, or Persuasion)
+    # 3. Ensure the incoming reply arrived AFTER our latest outbound communication (Pitch, Answers, or Persuasion)
     latest_outbound = (
         db.query(OutreachMessage)
         .filter(
@@ -561,195 +534,115 @@ Ref: [CF-STAGE:STEP6_PITCH | CF-CID:{c_id} | Handle:@{clean_handle}]"""
     has_affirmative = any(p in body_lower for p in affirmative_patterns)
     has_concept_mention = any(c["name"].lower() in body_lower for c in concepts)
 
-    # 6. CRITICAL GATE: If creator asked a question, ALWAYS answer their question first and NEVER launch Section 2!
+    # 6. If creator asked a question -> Generate AI suggestion for operator
     if is_question:
-        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} asked a question in Step 6: '{reply.body[:80]}'. Generating and dispatching AI answer...")
+        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} asked a question in Step 6: '{reply.body[:80]}'. Generated AI answer suggestion.")
         ans_subject, ans_body = generate_step6_question_answer(c_name, first_name, concepts, reply.body)
-        ans_body_with_token = f"{ans_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_ANSWER | CF-CID:{c_id} | Handle:@{clean_handle}]"
-
-        try:
-            email_provider.send(
-                to_email=target_email,
-                subject=ans_subject,
-                body_html=ans_body_with_token.replace("\n", "<br>"),
-                body_text=ans_body_with_token
-            )
-            ans_msg = OutreachMessage(
-                creator_id=c_id,
-                campaign_id="default",
-                subject=ans_subject,
-                body=ans_body_with_token,
-                send_method="email",
-                status="sent",
-                sent_at=datetime.utcnow()
-            )
-            db.add(ans_msg)
-            db.commit()
-            logger.info(f"[Autonomous Pipeline] Successfully sent answers to {creator.handle}'s questions. Awaiting their concept choice before Section 2.")
-        except Exception as e:
-            logger.warning(f"[Autonomous Pipeline] Failed to send question answers to {creator.handle}: {e}")
-        return
-
-    # 7. CRITICAL GATE: If creator expressed hesitation, confusion, or soft rejection -> Send AI Persuasion Recovery Email!
-    if is_soft_decline:
-        # Check if persuasion was already sent to avoid duplicate spamming
-        already_persuaded = (
-            db.query(OutreachMessage)
-            .filter(
-                OutreachMessage.creator_id == c_id,
-                or_(
-                    OutreachMessage.subject.ilike("%simplifying%"),
-                    OutreachMessage.subject.ilike("%zero-effort%"),
-                    OutreachMessage.subject.ilike("%hesitation%")
-                )
-            )
-            .first()
-        )
-
-        if not already_persuaded:
-            logger.info(f"[Autonomous Pipeline] Creator {creator.handle} expressed hesitation/confusion ('{reply.body[:80]}'). Dispatched AI persuasion recovery email...")
-            per_subject, per_body = generate_step6_persuasion_email(c_name, first_name, concepts, reply.body)
-            per_body_with_token = f"{per_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_PERSUADE | CF-CID:{c_id} | Handle:@{clean_handle}]"
-
+        notes_dict = {}
+        if creator.discovery_notes:
             try:
-                email_provider.send(
-                    to_email=target_email,
-                    subject=per_subject,
-                    body_html=per_body_with_token.replace("\n", "<br>"),
-                    body_text=per_body_with_token
-                )
-                per_msg = OutreachMessage(
-                    creator_id=c_id,
-                    campaign_id="default",
-                    subject=per_subject,
-                    body=per_body_with_token,
-                    send_method="email",
-                    status="sent",
-                    sent_at=datetime.utcnow()
-                )
-                db.add(per_msg)
-                db.commit()
-                logger.info(f"[Autonomous Pipeline] Successfully dispatched persuasion recovery email to {creator.handle}!")
-            except Exception as e:
-                logger.warning(f"[Autonomous Pipeline] Failed to send persuasion recovery email to {creator.handle}: {e}")
-        else:
-            logger.info(f"[Autonomous Pipeline] Creator {creator.handle} already received persuasion email. Halting progression.")
+                notes_dict = json.loads(creator.discovery_notes)
+            except:
+                notes_dict = {"raw": creator.discovery_notes}
+        notes_dict["suggested_response"] = {
+            "type": "answer_question",
+            "subject": ans_subject,
+            "body": ans_body,
+            "intent": "Clarification / Answer Questions",
+        }
+        creator.discovery_notes = json.dumps(notes_dict)
+        reply.ai_summary = f"Question asked: {clean_q[:80]}... Suggested answer ready for human review."
+        db.commit()
         return
 
-    # 8. PRIMARY GATE: If affirmative agreement or concept choice is confirmed -> ADVANCE TO SECTION 2!
+    # 7. If creator expressed hesitation, confusion, or soft rejection -> Generate AI Persuasion suggestion
+    if is_soft_decline:
+        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} expressed hesitation ('{reply.body[:80]}'). Generated AI persuasion suggestion.")
+        per_subject, per_body = generate_step6_persuasion_email(c_name, first_name, concepts, reply.body)
+        notes_dict = {}
+        if creator.discovery_notes:
+            try:
+                notes_dict = json.loads(creator.discovery_notes)
+            except:
+                notes_dict = {"raw": creator.discovery_notes}
+        notes_dict["suggested_response"] = {
+            "type": "persuade",
+            "subject": per_subject,
+            "body": per_body,
+            "intent": "Hesitation Recovery / Persuasion",
+        }
+        creator.discovery_notes = json.dumps(notes_dict)
+        reply.ai_summary = f"Soft decline: {reply.body[:80]}... Suggested persuasion draft ready for human review."
+        db.commit()
+        return
+
+    # 8. Check for Review In Progress / Acknowledgment
+    review_patterns = [
+        "check them out", "check it out", "check these out", "i'll check", "ill check", "i will check",
+        "will check", "checking", "take a look", "looking into", "looking over", "reviewing", "will review",
+        "let me review", "will look", "give me a few days", "give me a moment", "let me read",
+        "let you know", "get back to you", "can we continue", "how do we continue", "what's next", "whats next"
+    ]
+    is_review_ack = any(p in body_lower for p in review_patterns)
+
+    if is_review_ack:
+        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} acknowledged review in dialog ('{reply.body[:80]}'). Generated 60s preview suggestion.")
+        prev_subject, prev_body = generate_step6_review_preview_nudge(c_name, first_name, concepts, reply.body)
+        notes_dict = {}
+        if creator.discovery_notes:
+            try:
+                notes_dict = json.loads(creator.discovery_notes)
+            except:
+                notes_dict = {"raw": creator.discovery_notes}
+        notes_dict["suggested_response"] = {
+            "type": "review_preview",
+            "subject": prev_subject,
+            "body": prev_body,
+            "intent": "60-Second Concept Preview Nudge",
+        }
+        creator.discovery_notes = json.dumps(notes_dict)
+        reply.ai_summary = f"Reviewing concepts: {reply.body[:80]}... Suggested 60s preview draft ready for human review."
+        db.commit()
+        return
+
+    # 9. PRIMARY GATE: If affirmative agreement or concept choice is confirmed
     if (has_affirmative or has_concept_mention) and not is_question:
-        pass
-    else:
-        # Review in Progress / Concept Review Acknowledgment -> Send 60s Concept Preview & Nudge!
-        review_patterns = [
-            "check them out", "check it out", "check these out", "i'll check", "ill check", "i will check",
-            "checking", "take a look", "looking into", "looking over", "reviewing", "will review",
-            "let me review", "will look", "give me a few days", "give me a moment", "let me read",
-            "let you know", "get back to you", "can we continue", "how do we continue", "what's next", "whats next"
-        ]
-        is_review_ack = any(p in body_lower for p in review_patterns)
+        chosen_concept = concepts[0]
+        if len(concepts) > 1 and ("flow" in body_lower or "2" in body_lower or "second" in body_lower or "#2" in body_lower):
+            chosen_concept = concepts[1]
+        elif len(concepts) > 2 and ("hub" in body_lower or "3" in body_lower or "third" in body_lower or "#3" in body_lower or "pro" in body_lower):
+            chosen_concept = concepts[2]
 
-        if is_review_ack:
-            already_previewed = (
-                db.query(OutreachMessage)
-                .filter(
-                    OutreachMessage.creator_id == c_id,
-                    OutreachMessage.subject.ilike("%preview%")
-                )
-                .first()
-            )
-            if not already_previewed:
-                logger.info(f"[Autonomous Pipeline] Creator {creator.handle} acknowledged review in dialog ('{reply.body[:80]}'). Dispatched 60s preview & concept highlights...")
-                prev_subject, prev_body = generate_step6_review_preview_nudge(c_name, first_name, concepts, reply.body)
-                prev_body_with_token = f"{prev_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_PREVIEW | CF-CID:{c_id} | Handle:@{clean_handle}]"
+        logger.info(f"[Autonomous Pipeline] 🎯 Creator {creator.handle} confirmed concept choice: {chosen_concept['name']} ('{reply.body[:60]}'). Surfaced in Step 6 for operator project initialization.")
+        creator.reply_classification = "ready_for_launch"
+        notes_dict = {}
+        if creator.discovery_notes:
+            try:
+                notes_dict = json.loads(creator.discovery_notes)
+            except:
+                notes_dict = {"raw": creator.discovery_notes}
+        notes_dict["selected_concept"] = chosen_concept
+        creator.discovery_notes = json.dumps(notes_dict)
+        reply.ai_summary = f"Selected concept: {chosen_concept['name']}. Ready for human operator to click 'Create Project'."
+        db.commit()
+        return
 
-                try:
-                    email_provider.send(
-                        to_email=target_email,
-                        subject=prev_subject,
-                        body_html=prev_body_with_token.replace("\n", "<br>"),
-                        body_text=prev_body_with_token
-                    )
-                    prev_msg = OutreachMessage(
-                        creator_id=c_id,
-                        campaign_id="default",
-                        subject=prev_subject,
-                        body=prev_body_with_token,
-                        send_method="email",
-                        status="sent",
-                        sent_at=datetime.utcnow()
-                    )
-                    db.add(prev_msg)
-                    db.commit()
-                    logger.info(f"[Autonomous Pipeline] Successfully sent 60s concept preview to {creator.handle}!")
-                except Exception as e:
-                    logger.warning(f"[Autonomous Pipeline] Failed to send concept preview to {creator.handle}: {e}")
-            else:
-                logger.info(f"[Autonomous Pipeline] Creator {creator.handle} already received preview nudge. Awaiting concept choice.")
-            return
-
-        # Fallback: Conversational dialog reply
-        logger.info(f"[Autonomous Pipeline] Creator {creator.handle} dialog reply ('{reply.body[:60]}'). Dispatching conversational AI response...")
-        ans_subject, ans_body = generate_step6_review_preview_nudge(c_name, first_name, concepts, reply.body)
-        ans_body_with_token = f"{ans_body}\n\n---\nRef: [CF-STAGE:STEP6_DIALOG_CONVERSATION | CF-CID:{c_id} | Handle:@{clean_handle}]"
+    # 10. Fallback: Conversational dialog reply suggestion
+    logger.info(f"[Autonomous Pipeline] Creator {creator.handle} dialog reply ('{reply.body[:60]}'). Generated conversational AI suggestion.")
+    ans_subject, ans_body = generate_step6_review_preview_nudge(c_name, first_name, concepts, reply.body)
+    notes_dict = {}
+    if creator.discovery_notes:
         try:
-            email_provider.send(
-                to_email=target_email,
-                subject=ans_subject,
-                body_html=ans_body_with_token.replace("\n", "<br>"),
-                body_text=ans_body_with_token
-            )
-            conv_msg = OutreachMessage(
-                creator_id=c_id,
-                campaign_id="default",
-                subject=ans_subject,
-                body=ans_body_with_token,
-                send_method="email",
-                status="sent",
-                sent_at=datetime.utcnow()
-            )
-            db.add(conv_msg)
-            db.commit()
-            logger.info(f"[Autonomous Pipeline] Dispatched conversational dialog reply to {creator.handle}.")
-        except Exception as e:
-            logger.warning(f"[Autonomous Pipeline] Failed to send conversational reply to {creator.handle}: {e}")
-        return
-
-    # 10. Check if a CoLaunchProject already exists
-    existing_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == c_id).first()
-    if existing_proj:
-        logger.info(f"[Autonomous Pipeline] Project {existing_proj.id} already exists for {creator.handle}. Skipping launch.")
-        return
-
-    # 11. Concept Selection
-    chosen_concept = concepts[0]
-    if len(concepts) > 1 and ("flow" in body_lower or "2" in body_lower or "second" in body_lower or "#2" in body_lower):
-        chosen_concept = concepts[1]
-    elif len(concepts) > 2 and ("hub" in body_lower or "3" in body_lower or "third" in body_lower or "#3" in body_lower or "pro" in body_lower):
-        chosen_concept = concepts[2]
-
-    logger.info(f"[Autonomous Pipeline] 🎯 Concrete agreement confirmed for {creator.handle}! Selected: {chosen_concept['name']}. Initializing Section 2...")
-
-    from app.routers.projects import execute_create_co_launch_project, CreateProjectRequest
-    req = CreateProjectRequest(
-        creatorId=c_id,
-        creatorHandle=creator.handle,
-        creatorName=creator.display_name or creator.handle,
-        creatorAvatar=creator.avatar_url,
-        creatorEmail=creator.email_public,
-        niche=niche,
-        followers=str(creator.follower_count or 100000),
-        productName=chosen_concept["name"],
-        productTagline=chosen_concept.get("tagline", ""),
-        targetAudience=f"{niche} creators and community",
-        customer=f"{niche} community members",
-        problem=chosen_concept.get("problem", "Workflow inefficiencies"),
-        pricing=chosen_concept.get("pricing", "$29/mo Starter • $79/mo Pro"),
-        presaleTarget=5000.0,
-        selectedConcept=chosen_concept
-    )
-    try:
-        proj_data = execute_create_co_launch_project(db, req)
-        logger.info(f"[Autonomous Pipeline] 🚀 Autonomously created Co-Launch Project {proj_data.get('id')} in Section 2 for creator {clean_handle} with concrete validation confirmation!")
-    except Exception as e:
-        logger.error(f"[Autonomous Pipeline] Error auto-creating project: {e}")
+            notes_dict = json.loads(creator.discovery_notes)
+        except:
+            notes_dict = {"raw": creator.discovery_notes}
+    notes_dict["suggested_response"] = {
+        "type": "conversation",
+        "subject": ans_subject,
+        "body": ans_body,
+        "intent": "Conversational Follow-up",
+    }
+    creator.discovery_notes = json.dumps(notes_dict)
+    reply.ai_summary = f"Conversational reply from creator: {reply.body[:80]}... Suggested draft ready for human review."
+    db.commit()
+    return
