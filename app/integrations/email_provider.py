@@ -54,18 +54,32 @@ class EmailProvider:
         msg.attach(MIMEText(body_text, "plain"))
         msg.attach(MIMEText(body_html, "html"))
 
+        last_err = None
+
+        # 1. Primary: Connect via Port 587 with STARTTLS (Standard for cloud platforms e.g. Render/AWS/Vercel)
         try:
-            # Connect and send via Gmail SMTP
-            server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+            server = smtplib.SMTP("smtp.gmail.com", 587, timeout=12)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
             server.login(smtp_user, smtp_password)
             server.sendmail(smtp_user, to_email, msg.as_string())
             server.quit()
-            
-            # Generate a unique message ID for audit logs
-            message_id = str(uuid.uuid4())
-            return {"message_id": message_id, "status": "sent"}
-        except Exception as e:
-            raise IntegrationError(f"Failed to send email via Google SMTP: {str(e)}")
+            return {"message_id": str(uuid.uuid4()), "status": "sent"}
+        except Exception as e587:
+            last_err = e587
+
+        # 2. Fallback: Connect via Port 465 SSL
+        try:
+            server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=12)
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, to_email, msg.as_string())
+            server.quit()
+            return {"message_id": str(uuid.uuid4()), "status": "sent"}
+        except Exception as e465:
+            last_err = e465
+
+        raise IntegrationError(f"Failed to send email via Google SMTP: {str(last_err)}")
 
     def check_bounce_status(self, email: str) -> bool:
         """Returns True if email is on bounce list."""
