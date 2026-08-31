@@ -473,6 +473,15 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
     """Fetch complete co-launch project with all 5 validation steps."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
+        # Also resolve by creator_id, creator_handle, or clean slug (e.g. 'codanics')
+        clean_target = project_id.replace("@", "").lower().strip()
+        proj = db.query(CoLaunchProject).filter(
+            (CoLaunchProject.creator_id == project_id) |
+            (CoLaunchProject.creator_handle.ilike(f"%{clean_target}%")) |
+            (CoLaunchProject.creator_name.ilike(f"%{clean_target}%")) |
+            (CoLaunchProject.creator_email.ilike(f"%{clean_target}%"))
+        ).first()
+    if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
     return _format_project_response(proj)
 
