@@ -239,7 +239,16 @@ def update_creator_details(
 ):
     c = db.get(Creator, creator_id)
     if not c:
-        raise HTTPException(404, "Creator not found")
+        clean_handle = creator_id.lstrip("@").strip().lower()
+        c = db.query(Creator).filter(
+            (Creator.handle.ilike(clean_handle)) |
+            (Creator.handle.ilike(f"@{clean_handle}")) |
+            (Creator.email_public.ilike(creator_id.strip())) |
+            (Creator.display_name.ilike(creator_id.strip()))
+        ).first()
+
+    if not c:
+        raise HTTPException(404, f"Creator {creator_id} not found")
     
     data = body.model_dump(exclude_unset=True)
     for field, val in data.items():
@@ -369,57 +378,114 @@ def suppress_creator(
 @router.delete("/all")
 def delete_all_creators(db: Session = Depends(get_db)):
     """Delete all creators and all associated contacts, outreach messages, threads, and replies."""
-    from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
-    from app.models.creator import (
-        Contact, Analysis, ContentSample, Deck,
-        MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
-    )
-    from app.models.project import (
-        CoLaunchProject, ValidationPlan, ValidationCampaign,
-        CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
-    )
+    from sqlalchemy import text
     try:
-        db.query(Reply).delete(synchronize_session=False)
-        db.query(FollowUp).delete(synchronize_session=False)
-        db.query(Thread).delete(synchronize_session=False)
-        db.query(OutreachMessage).delete(synchronize_session=False)
-        db.query(SuppressionList).delete(synchronize_session=False)
-        db.query(Contact).delete(synchronize_session=False)
-        db.query(Analysis).delete(synchronize_session=False)
-        db.query(ContentSample).delete(synchronize_session=False)
-        db.query(Deck).delete(synchronize_session=False)
-        db.query(MetricsSnapshot).delete(synchronize_session=False)
-        db.query(Partnership).delete(synchronize_session=False)
-        db.query(PostSuggestion).delete(synchronize_session=False)
-        db.query(ProductRecommendation).delete(synchronize_session=False)
-
-        # Completely delete all CoLaunchProjects and child tables
-        db.query(ValidationGateDecision).delete(synchronize_session=False)
-        db.query(ValidationTelemetry).delete(synchronize_session=False)
-        db.query(CreatorCampaignTask).delete(synchronize_session=False)
-        db.query(ValidationCampaign).delete(synchronize_session=False)
-        db.query(ValidationPlan).delete(synchronize_session=False)
-        db.query(CoLaunchProject).delete(synchronize_session=False)
-
-        deleted_count = db.query(Creator).delete(synchronize_session=False)
-        db.commit()
-        return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and all venture projects"}
+        bind_url = str(db.bind.url) if db.bind else ""
+        if "postgresql" in bind_url or "postgres" in bind_url:
+            db.execute(text("""
+                TRUNCATE TABLE 
+                    validation_gate_decisions, validation_telemetry, creator_campaign_tasks,
+                    validation_campaigns, validation_plans, co_launch_projects,
+                    replies, follow_ups, threads, outreach_messages, suppression_list,
+                    contacts, analyses, content_samples, decks, metrics_snapshots,
+                    partnerships, post_suggestions, product_recommendations, creators
+                CASCADE;
+            """))
+            db.commit()
+            return {"success": True, "deleted_count": 0, "message": "Successfully wiped all creators and projects"}
+        else:
+            from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
+            from app.models.creator import (
+                Contact, Analysis, ContentSample, Deck,
+                MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
+            )
+            from app.models.project import (
+                CoLaunchProject, ValidationPlan, ValidationCampaign,
+                CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
+            )
+            db.query(Reply).delete(synchronize_session=False)
+            db.query(FollowUp).delete(synchronize_session=False)
+            db.query(Thread).delete(synchronize_session=False)
+            db.query(OutreachMessage).delete(synchronize_session=False)
+            db.query(SuppressionList).delete(synchronize_session=False)
+            db.query(Contact).delete(synchronize_session=False)
+            db.query(Analysis).delete(synchronize_session=False)
+            db.query(ContentSample).delete(synchronize_session=False)
+            db.query(Deck).delete(synchronize_session=False)
+            db.query(MetricsSnapshot).delete(synchronize_session=False)
+            db.query(Partnership).delete(synchronize_session=False)
+            db.query(PostSuggestion).delete(synchronize_session=False)
+            db.query(ProductRecommendation).delete(synchronize_session=False)
+            db.query(ValidationGateDecision).delete(synchronize_session=False)
+            db.query(ValidationTelemetry).delete(synchronize_session=False)
+            db.query(CreatorCampaignTask).delete(synchronize_session=False)
+            db.query(ValidationCampaign).delete(synchronize_session=False)
+            db.query(ValidationPlan).delete(synchronize_session=False)
+            db.query(CoLaunchProject).delete(synchronize_session=False)
+            deleted_count = db.query(Creator).delete(synchronize_session=False)
+            db.commit()
+            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and all venture projects"}
     except Exception as e:
         db.rollback()
-        raise HTTPException(500, f"Failed to delete all creators: {str(e)}")
+        try:
+            from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
+            from app.models.creator import (
+                Contact, Analysis, ContentSample, Deck,
+                MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
+            )
+            from app.models.project import (
+                CoLaunchProject, ValidationPlan, ValidationCampaign,
+                CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
+            )
+            db.query(Reply).delete(synchronize_session=False)
+            db.query(FollowUp).delete(synchronize_session=False)
+            db.query(Thread).delete(synchronize_session=False)
+            db.query(OutreachMessage).delete(synchronize_session=False)
+            db.query(SuppressionList).delete(synchronize_session=False)
+            db.query(Contact).delete(synchronize_session=False)
+            db.query(Analysis).delete(synchronize_session=False)
+            db.query(ContentSample).delete(synchronize_session=False)
+            db.query(Deck).delete(synchronize_session=False)
+            db.query(MetricsSnapshot).delete(synchronize_session=False)
+            db.query(Partnership).delete(synchronize_session=False)
+            db.query(PostSuggestion).delete(synchronize_session=False)
+            db.query(ProductRecommendation).delete(synchronize_session=False)
+            db.query(ValidationGateDecision).delete(synchronize_session=False)
+            db.query(ValidationTelemetry).delete(synchronize_session=False)
+            db.query(CreatorCampaignTask).delete(synchronize_session=False)
+            db.query(ValidationCampaign).delete(synchronize_session=False)
+            db.query(ValidationPlan).delete(synchronize_session=False)
+            db.query(CoLaunchProject).delete(synchronize_session=False)
+            deleted_count = db.query(Creator).delete(synchronize_session=False)
+            db.commit()
+            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators"}
+        except Exception as e2:
+            db.rollback()
+            raise HTTPException(500, f"Failed to delete all creators: {str(e2)}")
 
 
 @router.delete("/{creator_id}")
 def delete_creator(
     creator_id: str, actor: str = "ops_dashboard", db: Session = Depends(get_db)
 ):
-    """Ops dashboard — delete a creator entirely with all dependencies cascaded."""
+    """Ops dashboard — delete a creator entirely with all chats, threads, and dependencies cascaded."""
     if creator_id == "all":
         return delete_all_creators(db=db)
 
     creator = db.get(Creator, creator_id)
     if not creator:
+        clean_handle = creator_id.lstrip("@").strip().lower()
+        creator = db.query(Creator).filter(
+            (Creator.handle.ilike(clean_handle)) |
+            (Creator.handle.ilike(f"@{clean_handle}")) |
+            (Creator.email_public.ilike(creator_id.strip())) |
+            (Creator.display_name.ilike(creator_id.strip()))
+        ).first()
+
+    if not creator:
         raise HTTPException(404, "Creator not found")
+
+    real_id = creator.id
 
     from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
     from app.models.creator import (
@@ -429,26 +495,26 @@ def delete_creator(
     from app.models.project import CoLaunchProject
 
     try:
-        thread_ids = [t.id for t in db.query(Thread.id).filter(Thread.creator_id == creator_id).all()]
+        thread_ids = [t.id for t in db.query(Thread.id).filter(Thread.creator_id == real_id).all()]
         if thread_ids:
             db.query(Reply).filter(Reply.thread_id.in_(thread_ids)).delete(synchronize_session=False)
             db.query(FollowUp).filter(FollowUp.thread_id.in_(thread_ids)).delete(synchronize_session=False)
-        db.query(Thread).filter(Thread.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(OutreachMessage).filter(OutreachMessage.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(SuppressionList).filter(SuppressionList.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(Contact).filter(Contact.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(Analysis).filter(Analysis.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(ContentSample).filter(ContentSample.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(Deck).filter(Deck.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(MetricsSnapshot).filter(MetricsSnapshot.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(Partnership).filter(Partnership.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(PostSuggestion).filter(PostSuggestion.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == creator_id).delete(synchronize_session=False)
-        db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == creator_id).update({CoLaunchProject.creator_id: None}, synchronize_session=False)
+        db.query(Thread).filter(Thread.creator_id == real_id).delete(synchronize_session=False)
+        db.query(OutreachMessage).filter(OutreachMessage.creator_id == real_id).delete(synchronize_session=False)
+        db.query(SuppressionList).filter(SuppressionList.creator_id == real_id).delete(synchronize_session=False)
+        db.query(Contact).filter(Contact.creator_id == real_id).delete(synchronize_session=False)
+        db.query(Analysis).filter(Analysis.creator_id == real_id).delete(synchronize_session=False)
+        db.query(ContentSample).filter(ContentSample.creator_id == real_id).delete(synchronize_session=False)
+        db.query(Deck).filter(Deck.creator_id == real_id).delete(synchronize_session=False)
+        db.query(MetricsSnapshot).filter(MetricsSnapshot.creator_id == real_id).delete(synchronize_session=False)
+        db.query(Partnership).filter(Partnership.creator_id == real_id).delete(synchronize_session=False)
+        db.query(PostSuggestion).filter(PostSuggestion.creator_id == real_id).delete(synchronize_session=False)
+        db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == real_id).delete(synchronize_session=False)
+        db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == real_id).update({CoLaunchProject.creator_id: None}, synchronize_session=False)
 
         db.delete(creator)
         db.commit()
-        return {"deleted": True, "creator_id": creator_id}
+        return {"deleted": True, "creator_id": real_id}
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Failed to delete creator: {str(e)}")
@@ -471,7 +537,16 @@ def update_creator(
     """Update creator attributes, including email, status, and reply classification."""
     creator = db.get(Creator, creator_id)
     if not creator:
-        raise HTTPException(404, "Creator not found")
+        clean_handle = creator_id.lstrip("@").strip().lower()
+        creator = db.query(Creator).filter(
+            (Creator.handle.ilike(clean_handle)) |
+            (Creator.handle.ilike(f"@{clean_handle}")) |
+            (Creator.email_public.ilike(creator_id.strip())) |
+            (Creator.display_name.ilike(creator_id.strip()))
+        ).first()
+
+    if not creator:
+        raise HTTPException(404, f"Creator {creator_id} not found")
 
     if body.display_name is not None:
         creator.display_name = body.display_name
@@ -705,9 +780,9 @@ def send_outreach(
     )
     db.add(msg)
 
-    # Mark creator as approved (outreach sent)
-    if creator.status in ("discovered", "qualified", "in_review"):
-        creator.status = "approved"
+    # Mark creator as in_review (outreach sent, awaiting reply)
+    if creator.status in ("discovered", "qualified"):
+        creator.status = "in_review"
     creator.updated_at = datetime.utcnow()
 
     # Audit log

@@ -1,7 +1,7 @@
 from typing import Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -325,13 +325,13 @@ def list_threads(status: Optional[str] = None, skip: int = 0, limit: int = 50, d
 
 
 @router.post("/poll-inbox")
-def trigger_inbox_poll(db: Session = Depends(get_db)):
-    """Trigger an immediate IMAP fetch from Gmail to check for new creator replies."""
+def trigger_inbox_poll(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Trigger an immediate IMAP fetch in background and return updated threads immediately."""
     from app.services.inbox_poller import poll_inbox_sync
     try:
-        poll_inbox_sync()
+        background_tasks.add_task(poll_inbox_sync)
     except Exception as e:
-        logger.warning(f"IMAP poll sync exception: {e}")
+        logger.warning(f"Failed to queue background IMAP sync: {e}")
         
     try:
         threads = db.query(Thread).order_by(Thread.last_activity.desc()).all()

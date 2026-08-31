@@ -230,7 +230,7 @@ def classify_reply(
             creator = db.get(Creator, thread.creator_id)
             if creator:
                 if reply.classification == "interested":
-                    creator.status = "approved"
+                    creator.status = "in_review"
                 elif reply.classification == "not_interested":
                     creator.status = "rejected"
                 existing_notes = {}

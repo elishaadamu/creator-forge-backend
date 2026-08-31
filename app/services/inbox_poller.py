@@ -205,18 +205,18 @@ def poll_inbox_sync():
     db = SessionLocal()
     prev_timeout = socket.getdefaulttimeout()
     try:
-        socket.setdefaulttimeout(8)  # 8s fast socket timeout to prevent hang
-        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=8)
+        socket.setdefaulttimeout(5)  # 5s fast socket timeout to prevent hang
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=5)
         mail.login(settings.GOOGLE_EMAIL, settings.GOOGLE_APP_PASSWORD.replace(" ", ""))
         mail.select("INBOX")
         
-        # Search recent messages (fetch last 10 message IDs for instant response)
+        # Search recent messages (fetch last 15 message IDs for instant response)
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             return
             
         all_ids = messages[0].split()
-        email_ids = all_ids[-25:]  # Check last 25 emails for instant responsive sync
+        email_ids = all_ids[-15:]  # Check last 15 emails for instant responsive sync
         for e_id in email_ids:
             try:
                 status, msg_data = mail.fetch(e_id, "(RFC822)")
