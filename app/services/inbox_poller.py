@@ -149,8 +149,11 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
             if msg and msg.creator_id:
                 creator_id = msg.creator_id
 
+    admin_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "elishadamu97@gmail.com").lower().strip()
+    is_admin_email = from_email_clean == admin_email
+
     # 5. Match against Creator table (email_public) with multiple-creator disambiguation
-    if not creator_id:
+    if not creator_id and not is_admin_email:
         matching_creators = [c for c in all_creators if (c.email_public or "").lower().strip() == from_email_clean]
         if len(matching_creators) == 1:
             creator_id = matching_creators[0].id
@@ -165,7 +168,7 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
             creator_id = matching_creators[0].id
 
     # 6. Match against Contacts table
-    if not creator_id:
+    if not creator_id and not is_admin_email:
         contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email_clean}%"), Contact.contact_type == "email").first()
         if contact and contact.creator_id:
             creator_id = contact.creator_id
