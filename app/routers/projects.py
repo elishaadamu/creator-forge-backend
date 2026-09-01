@@ -80,6 +80,14 @@ class GateDecisionRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class TrackVisitRequest(BaseModel):
+    slug: Optional[str] = None
+    projectId: Optional[str] = None
+    channel: Optional[str] = "Direct / Other"
+    ref: Optional[str] = None
+    path: Optional[str] = None
+
+
 def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
     plan = proj.validation_plan
     campaign = proj.validation_campaign
@@ -111,7 +119,7 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             "notes": g.gate_notes,
             "decidedAt": g.decided_at.isoformat() if g.decided_at else None,
         }
-        for t in (proj.gate_decisions or [])
+        for g in (proj.gate_decisions or [])
     ]
 
     return {
@@ -172,6 +180,9 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             "reviewStatus": campaign.review_status,
             "approvedAt": campaign.approved_at.isoformat() if campaign.approved_at else None,
         } if campaign else None,
+        "campaignKit": campaign.product_assets if campaign else None,
+        "surveyData": campaign.research_survey if campaign else None,
+        "infrastructure": campaign.infrastructure if campaign else None,
         # Step 3
         "creatorTasks": tasks,
         # Step 4
@@ -512,6 +523,61 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         ).first()
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
+@router.patch("/{project_id}")
+@router.put("/{project_id}")
+def update_project_general(project_id: str, body: Dict[str, Any], db: Session = Depends(get_db)):
+    """Update co-launch project phase, step, status, or metadata attributes."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        clean_target = project_id.replace("@", "").lower().strip()
+        proj = db.query(CoLaunchProject).filter(
+            (CoLaunchProject.creator_id == project_id) |
+            (CoLaunchProject.creator_handle.ilike(f"%{clean_target}%")) |
+            (CoLaunchProject.creator_name.ilike(f"%{clean_target}%")) |
+            (CoLaunchProject.creator_email.ilike(f"%{clean_target}%"))
+        ).first()
+
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    phase = body.get("currentPhase") if body.get("currentPhase") is not None else body.get("current_phase")
+    if phase is not None:
+        proj.current_phase = int(phase)
+        if int(phase) == 2 and proj.status == "validating":
+            proj.status = "building"
+        elif int(phase) == 3:
+            proj.status = "launched"
+
+    step = body.get("currentStep") or body.get("current_step")
+    if step is not None:
+        proj.current_step = str(step)
+
+    status = body.get("status")
+    if status is not None:
+        proj.status = str(status)
+
+    if "productName" in body or "product_name" in body:
+        proj.product_name = str(body.get("productName") or body.get("product_name"))
+
+    if "productTagline" in body or "product_tagline" in body:
+        proj.product_tagline = str(body.get("productTagline") or body.get("product_tagline"))
+
+    if "pricing" in body:
+        proj.pricing = str(body.get("pricing"))
+
+    target = body.get("presaleTarget") if body.get("presaleTarget") is not None else body.get("presale_target")
+    if target is not None:
+        proj.presale_target = float(target)
+
+    meta = body.get("metadataInfo") or body.get("metadata_info")
+    if meta is not None:
+        cur_meta = dict(proj.metadata_info or {})
+        cur_meta.update(meta)
+        proj.metadata_info = cur_meta
+
+    proj.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(proj)
     return _format_project_response(proj)
 
 
@@ -705,6 +771,66 @@ def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session
     db.refresh(proj)
 
     return _format_project_response(proj)
+
+
+@router.post("/record-visit")
+def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db)):
+    """
+    Universal public page/preorder visit recorder.
+    Increments unique visitors, channel attribution count in DB, and updates live telemetry.
+    """
+    proj = None
+    if body.projectId:
+        proj = db.get(CoLaunchProject, body.projectId)
+    
+    if not proj and body.slug:
+        clean_slug = body.slug.lower().strip()
+        projects = db.query(CoLaunchProject).all()
+        for p in projects:
+            p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
+            c_slug = (p.creator_handle or "").lower().replace("@", "")
+            if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
+                proj = p
+                break
+    
+    if not proj:
+        proj = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).first()
+
+    if not proj:
+        return {"status": "ok", "message": "No active project"}
+
+    telemetry = proj.telemetry
+    if not telemetry:
+        telemetry = ValidationTelemetry(project_id=proj.id)
+        db.add(telemetry)
+
+    # Increment visitors & page views
+    telemetry.visitors = int(telemetry.visitors or 0) + 1
+    telemetry.views = int(telemetry.views or 0) + 1
+    proj.visitors = telemetry.visitors
+
+    # Map normalized channel
+    chan = body.channel or "Direct / Other"
+    cur_attr = dict(telemetry.channel_attribution or {})
+    cur_attr[chan] = cur_attr.get(chan, 0) + 1
+    telemetry.channel_attribution = cur_attr
+
+    # Recalculate conversion rate
+    res_count = len(telemetry.reservations or [])
+    if telemetry.visitors > 0:
+        telemetry.conversion_rate = round((res_count / telemetry.visitors) * 100, 1)
+        proj.conversion_rate = telemetry.conversion_rate
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.post("/{project_id}/track-visit")
+def track_project_visit(project_id: str, body: TrackVisitRequest, db: Session = Depends(get_db)):
+    """Track a visit for a specific project ID."""
+    body.projectId = project_id
+    return record_visit_universal(body, db)
 
 
 @router.post("/record-preorder")
