@@ -140,6 +140,14 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "portalLinkSentTo": proj.portal_link_sent_to,
         "portalLinkSentAt": proj.portal_link_sent_at.isoformat() if proj.portal_link_sent_at else None,
         "selectedConcept": proj.selected_concept,
+        "metadataInfo": proj.metadata_info or {},
+        "activityLogs": (proj.metadata_info or {}).get("activity_logs", []),
+        "adminActivity": (proj.metadata_info or {}).get("activity_logs", []),
+        "aiActivity": (proj.metadata_info or {}).get("activity_logs", []),
+        "reservations": (telemetry.reservations if telemetry else []) or [],
+        "currentPresales": float(proj.current_presales or 0.0),
+        "visitors": int(proj.visitors or 0),
+        "conversionRate": float(proj.conversion_rate or 0.0),
         "createdAt": proj.created_at.isoformat() if proj.created_at else None,
         "updatedAt": proj.updated_at.isoformat() if proj.updated_at else None,
         # Step 1
@@ -184,6 +192,27 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         # Step 5
         "gateDecisions": gate_decisions,
     }
+
+
+class RecordPreorderRequest(BaseModel):
+    projectId: Optional[str] = None
+    slug: Optional[str] = None
+    creatorHandle: Optional[str] = None
+    name: str
+    email: str
+    amount: float
+    tier: Optional[str] = "Founding Pass"
+    paymentMethod: Optional[str] = "Stripe"
+    channel: Optional[str] = "direct"
+    txId: Optional[str] = None
+
+
+class LogActivityRequest(BaseModel):
+    action: str
+    details: Optional[str] = None
+    category: Optional[str] = "admin_action"
+    step: Optional[str] = "plan"
+    phase: Optional[int] = 1
 
 
 @router.get("")
@@ -676,6 +705,142 @@ def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session
     db.refresh(proj)
 
     return _format_project_response(proj)
+
+
+@router.post("/record-preorder")
+def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends(get_db)):
+    """
+    Universal public pre-order recorder called by /preorder/:slug checkout.
+    Persists reservation, updates presales revenue, unique visitors, and logs activity in DB.
+    """
+    proj = None
+    if body.projectId:
+        proj = db.get(CoLaunchProject, body.projectId)
+    
+    if not proj and body.slug:
+        clean_slug = body.slug.lower().strip()
+        projects = db.query(CoLaunchProject).all()
+        for p in projects:
+            p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
+            c_slug = (p.creator_handle or "").lower().replace("@", "")
+            if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
+                proj = p
+                break
+    
+    if not proj:
+        # Fallback to the latest active project
+        proj = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).first()
+
+    if not proj:
+        raise HTTPException(404, "No active co-launch project found to record reservation")
+
+    telemetry = proj.telemetry
+    if not telemetry:
+        telemetry = ValidationTelemetry(project_id=proj.id)
+        db.add(telemetry)
+
+    res_id = f"res_{int(datetime.utcnow().timestamp()*1000)}"
+    timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    reservation_item = {
+        "id": res_id,
+        "name": body.name,
+        "email": body.email,
+        "amount": float(body.amount),
+        "tier": body.tier or "Founding Pass",
+        "paymentMethod": body.paymentMethod or "Stripe",
+        "channel": body.channel or "Direct / Other",
+        "txId": body.txId or f"tx_{res_id}",
+        "timestamp": timestamp_str,
+        "status": "Paid"
+    }
+
+    cur_res = list(telemetry.reservations or [])
+    cur_res.insert(0, reservation_item)
+    telemetry.reservations = cur_res
+
+    # Increment telemetry metrics
+    telemetry.presales_count = len(cur_res)
+    new_revenue = sum(float(r.get("amount", 0)) for r in cur_res)
+    telemetry.presales_revenue = new_revenue
+    proj.current_presales = new_revenue
+
+    # Update visitors and conversion rate
+    cur_visitors = max(int(telemetry.visitors or 0), len(cur_res) * 5, 1)
+    telemetry.visitors = cur_visitors
+    proj.visitors = cur_visitors
+    conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
+    telemetry.conversion_rate = conv
+    proj.conversion_rate = conv
+
+    # Attribution
+    cur_attr = dict(telemetry.channel_attribution or {})
+    chan = body.channel or "Direct / Other"
+    cur_attr[chan] = cur_attr.get(chan, 0) + 1
+    telemetry.channel_attribution = cur_attr
+
+    # Activity Log
+    meta = dict(proj.metadata_info or {})
+    act_logs = list(meta.get("activity_logs") or [])
+    act_item = {
+        "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
+        "action": "Customer Pre-Order Received",
+        "details": f"${body.amount:.0f} {body.tier} reserved by {body.name} ({body.email}) via {body.paymentMethod or 'Stripe'}",
+        "category": "revenue",
+        "timestamp": timestamp_str
+    }
+    act_logs.insert(0, act_item)
+    meta["activity_logs"] = act_logs[:50]
+    proj.metadata_info = meta
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.post("/{project_id}/log-activity")
+def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = Depends(get_db)):
+    """Record an audit trail action conducted by the admin or AI agent."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    meta = dict(proj.metadata_info or {})
+    act_logs = list(meta.get("activity_logs") or [])
+    timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    act_item = {
+        "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
+        "action": body.action,
+        "details": body.details or body.action,
+        "category": body.category or "admin_action",
+        "step": body.step or "plan",
+        "phase": body.phase or 1,
+        "timestamp": timestamp_str
+    }
+    act_logs.insert(0, act_item)
+    meta["activity_logs"] = act_logs[:50]
+    proj.metadata_info = meta
+
+    db.commit()
+    db.refresh(proj)
+    return {"status": "success", "activity": act_item, "activityLogs": meta["activity_logs"]}
+
+
+@router.get("/by-slug/{slug}")
+def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
+    """Lookup active co-launch project by slug or creator handle."""
+    clean_slug = slug.lower().strip()
+    projects = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).all()
+    for p in projects:
+        p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
+        c_slug = (p.creator_handle or "").lower().replace("@", "")
+        if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
+            return _format_project_response(p)
+    
+    if projects:
+        return _format_project_response(projects[0])
+    raise HTTPException(404, f"No project found matching slug '{slug}'")
 
 
 @router.delete("/{project_id}")
