@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import init_db
 from app.routers import (
     creators, discovery, outreach, campaigns, decks, suppression, analytics, audit,
-    public_portal, content_calendar, autonomous, projects
+    public_portal, content_calendar, autonomous, projects, workflow
 )
 from app.routers import agent as agent_router
 from app.routers import auth as auth_router
@@ -90,6 +90,7 @@ app.include_router(content_calendar.router)
 app.include_router(auth_router.router)
 app.include_router(autonomous.router)
 app.include_router(projects.router)
+app.include_router(workflow.router)
 
 
 
