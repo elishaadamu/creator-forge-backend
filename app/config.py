@@ -68,9 +68,11 @@ class Settings:
     ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "openai")
     AI_MODEL: str = "gpt-4o"
 
-    # Email / Outreach (stubs — real keys go in .env)
+    # Email / Outreach (HTTPS APIs & Google SMTP)
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
-    FROM_EMAIL: str = os.getenv("FROM_EMAIL", "partnerships@yourcompany.com")
+    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
+    FROM_EMAIL: str = os.getenv("FROM_EMAIL", "partnerships@creatorforge.com")
     FROM_NAME: str = os.getenv("FROM_NAME", "Creator Partnerships Team")
     GOOGLE_EMAIL: str = os.getenv("GOOGLE_EMAIL", "")
     GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
