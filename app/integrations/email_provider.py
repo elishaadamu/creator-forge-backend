@@ -34,13 +34,15 @@ def _connect_smtp_ipv4(host: str = "smtp.gmail.com", port: int = 587, timeout: i
     if use_ssl:
         ctx = ssl.create_default_context()
         sslsock = ctx.wrap_socket(sock, server_hostname=host)
-        server = smtplib.SMTP_SSL(host=host, port=port, timeout=timeout)
+        server = smtplib.SMTP_SSL()
+        server._host = host
         server.sock = sslsock
         server.file = sslsock.makefile("rb")
         server.getreply()
         return server
     else:
-        server = smtplib.SMTP(host=host, port=port, timeout=timeout)
+        server = smtplib.SMTP()
+        server._host = host
         server.sock = sock
         server.file = sock.makefile("rb")
         server.getreply()
