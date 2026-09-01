@@ -437,6 +437,15 @@ def delete_all_creators(db: Session = Depends(get_db)):
                 CoLaunchProject, ValidationPlan, ValidationCampaign,
                 CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
             )
+            # Purge all Cloudinary assets for all ventures
+            try:
+                from app.integrations.cloudinary_service import delete_all_files_for_project
+                all_projs = db.query(CoLaunchProject).all()
+                for p in all_projs:
+                    delete_all_files_for_project(p)
+            except Exception as cld_err:
+                logger.warning(f"[DeleteAllCreators] Cloudinary purge error: {cld_err}")
+
             db.query(Reply).delete(synchronize_session=False)
             db.query(FollowUp).delete(synchronize_session=False)
             db.query(Thread).delete(synchronize_session=False)
@@ -458,7 +467,7 @@ def delete_all_creators(db: Session = Depends(get_db)):
             db.query(CoLaunchProject).delete(synchronize_session=False)
             deleted_count = db.query(Creator).delete(synchronize_session=False)
             db.commit()
-            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators"}
+            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and all venture files from Cloudinary & DB"}
         except Exception as e2:
             db.rollback()
             raise HTTPException(500, f"Failed to delete all creators: {str(e2)}")
@@ -510,7 +519,22 @@ def delete_creator(
         db.query(Partnership).filter(Partnership.creator_id == real_id).delete(synchronize_session=False)
         db.query(PostSuggestion).filter(PostSuggestion.creator_id == real_id).delete(synchronize_session=False)
         db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == real_id).delete(synchronize_session=False)
-        db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == real_id).update({CoLaunchProject.creator_id: None}, synchronize_session=False)
+
+        # Purge all Cloudinary assets and co-launch projects associated with this creator
+        try:
+            from app.integrations.cloudinary_service import delete_all_files_for_project, delete_media_from_cloudinary
+            creator_projs = db.query(CoLaunchProject).filter(
+                (CoLaunchProject.creator_id == real_id) |
+                (CoLaunchProject.creator_handle.ilike(f"%{creator.handle or ''}%"))
+            ).all()
+            for p in creator_projs:
+                delete_all_files_for_project(p)
+                db.delete(p)
+
+            if creator.avatar_url and "cloudinary.com" in creator.avatar_url:
+                delete_media_from_cloudinary(url=creator.avatar_url)
+        except Exception as cld_err:
+            logger.warning(f"[DeleteCreator] Cloudinary purge error: {cld_err}")
 
         db.delete(creator)
         db.commit()

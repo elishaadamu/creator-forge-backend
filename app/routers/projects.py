@@ -149,6 +149,8 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "portalLinkSentAt": proj.portal_link_sent_at.isoformat() if proj.portal_link_sent_at else None,
         "selectedConcept": proj.selected_concept,
         "metadataInfo": proj.metadata_info or {},
+        "projectFiles": (proj.metadata_info or {}).get("project_files", []),
+        "messages": (proj.metadata_info or {}).get("messages", []),
         "activityLogs": (proj.metadata_info or {}).get("activity_logs", []),
         "adminActivity": (proj.metadata_info or {}).get("activity_logs", []),
         "aiActivity": (proj.metadata_info or {}).get("activity_logs", []),
@@ -575,6 +577,16 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         cur_meta.update(meta)
         proj.metadata_info = cur_meta
 
+    if "projectFiles" in body:
+        cur_meta = dict(proj.metadata_info or {})
+        cur_meta["project_files"] = body["projectFiles"]
+        proj.metadata_info = cur_meta
+
+    if "messages" in body:
+        cur_meta = dict(proj.metadata_info or {})
+        cur_meta["messages"] = body["messages"]
+        proj.metadata_info = cur_meta
+
     proj.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(proj)
@@ -971,10 +983,18 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
 
 @router.delete("/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db)):
-    """Delete a co-launch project and all validation phase child records."""
+    """Delete a co-launch project, all validation records, and all uploaded Cloudinary files."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
+    
+    try:
+        from app.integrations.cloudinary_service import delete_all_files_for_project
+        delete_all_files_for_project(proj)
+    except Exception as e:
+        logger.warning(f"[DeleteProject] Cloudinary purge error: {e}")
+
     db.delete(proj)
     db.commit()
-    return {"status": "success", "message": f"Project '{project_id}' deleted."}
+    return {"status": "success", "message": f"Project '{project_id}' and all associated Cloudinary files deleted."}
+

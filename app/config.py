@@ -83,10 +83,11 @@ class Settings:
     INSTAGRAM_ACCESS_TOKEN: str = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
     TIKTOK_API_KEY: str = os.getenv("TIKTOK_API_KEY", "")
     
-    # Meta (Instagram) OAuth
-    META_CLIENT_ID: str = os.getenv("META_CLIENT_ID", "YOUR_META_APP_ID_HERE")
-    FRONTEND_URL: str = (os.getenv("FRONTEND_URL") or "https://creator-forge-frontend.vercel.app").rstrip("/")
-    REDIRECT_URI: str = os.getenv("REDIRECT_URI", "")
+    # Cloudinary Integration (Images, Videos, Media)
+    CLOUDINARY_CLOUD_NAME: str = os.getenv("CLOUDINARY_CLOUD_NAME", "axk6onmw")
+    CLOUDINARY_API_KEY: str = os.getenv("CLOUDINARY_API_KEY", "343558271749965")
+    CLOUDINARY_API_SECRET: str = os.getenv("CLOUDINARY_API_SECRET", "")
+    CLOUDINARY_URL: str = os.getenv("CLOUDINARY_URL", "")
 
 settings = Settings()
 
