@@ -179,6 +179,7 @@ class EmailProvider:
                     headers={
                         "api-key": settings.BREVO_API_KEY.strip(),
                         "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                     },
                 )
                 with urllib.request.urlopen(req, timeout=12) as resp:
