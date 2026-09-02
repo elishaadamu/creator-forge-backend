@@ -155,6 +155,23 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "adminActivity": (proj.metadata_info or {}).get("activity_logs", []),
         "aiActivity": (proj.metadata_info or {}).get("activity_logs", []),
         "reservations": (telemetry.reservations if telemetry else []) or [],
+        "mvpBuildPlan": (proj.metadata_info or {}).get("mvp_build_plan") or (proj.metadata_info or {}).get("mvpBuildPlan"),
+        "engineeringTasks": (proj.metadata_info or {}).get("engineering_tasks") or (proj.metadata_info or {}).get("engineeringTasks", []),
+        "qaResults": (proj.metadata_info or {}).get("qa_results") or (proj.metadata_info or {}).get("qaResults"),
+        "betaFeedback": (proj.metadata_info or {}).get("beta_feedback") or (proj.metadata_info or {}).get("betaFeedback", []),
+        "feedbackClusters": (proj.metadata_info or {}).get("feedback_clusters") or (proj.metadata_info or {}).get("feedbackClusters") or (telemetry.feedback_clusters if telemetry else []) or [],
+        "readinessReport": (proj.metadata_info or {}).get("readiness_report") or (proj.metadata_info or {}).get("readinessReport"),
+        "appliedPatches": (proj.metadata_info or {}).get("applied_patches") or (proj.metadata_info or {}).get("appliedPatches", []),
+        "mvpVersion": (proj.metadata_info or {}).get("mvp_version") or (proj.metadata_info or {}).get("mvpVersion", "v1.0.0-MVP"),
+        "launchStrategy": (proj.metadata_info or {}).get("launch_strategy") or (proj.metadata_info or {}).get("launchStrategy"),
+        "creatorAssets": (proj.metadata_info or {}).get("creator_assets") or (proj.metadata_info or {}).get("creatorAssets"),
+        "launchTelemetry": (proj.metadata_info or {}).get("launch_telemetry") or (proj.metadata_info or {}).get("launchTelemetry"),
+        "channelStats": (proj.metadata_info or {}).get("channel_stats") or (proj.metadata_info or {}).get("channelStats", []),
+        "launchManagerData": (proj.metadata_info or {}).get("launch_manager_data") or (proj.metadata_info or {}).get("launchManagerData"),
+        "dispatchedActions": (proj.metadata_info or {}).get("dispatched_actions") or (proj.metadata_info or {}).get("dispatchedActions", []),
+        "launchReport": (proj.metadata_info or {}).get("launch_report") or (proj.metadata_info or {}).get("launchReport"),
+        "launchStatus": (proj.metadata_info or {}).get("launch_status") or (proj.metadata_info or {}).get("launchStatus", "PREP"),
+        "productInfrastructure": (proj.metadata_info or {}).get("product_infrastructure") or (proj.metadata_info or {}).get("productInfrastructure"),
         "currentPresales": float(proj.current_presales or 0.0),
         "visitors": int(proj.visitors or 0),
         "conversionRate": float(proj.conversion_rate or 0.0),
@@ -200,7 +217,7 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             "reservations": telemetry.reservations or [],
             "channelAttribution": telemetry.channel_attribution or {},
             "experiments": telemetry.experiments or [],
-            "feedbackClusters": telemetry.feedback_clusters or [],
+            "feedbackClusters": (proj.metadata_info or {}).get("feedback_clusters") or (telemetry.feedback_clusters if telemetry else []) or [],
         } if telemetry else None,
         # Step 5
         "gateDecisions": gate_decisions,
@@ -572,20 +589,71 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         proj.presale_target = float(target)
 
     meta = body.get("metadataInfo") or body.get("metadata_info")
+    cur_meta = dict(proj.metadata_info or {})
     if meta is not None:
-        cur_meta = dict(proj.metadata_info or {})
         cur_meta.update(meta)
-        proj.metadata_info = cur_meta
 
-    if "projectFiles" in body:
-        cur_meta = dict(proj.metadata_info or {})
-        cur_meta["project_files"] = body["projectFiles"]
-        proj.metadata_info = cur_meta
+    if "projectFiles" in body or "project_files" in body:
+        cur_meta["project_files"] = body.get("projectFiles") or body.get("project_files")
 
     if "messages" in body:
-        cur_meta = dict(proj.metadata_info or {})
         cur_meta["messages"] = body["messages"]
-        proj.metadata_info = cur_meta
+
+    if "mvpBuildPlan" in body or "mvp_build_plan" in body:
+        cur_meta["mvp_build_plan"] = body.get("mvpBuildPlan") or body.get("mvp_build_plan")
+
+    if "engineeringTasks" in body or "engineering_tasks" in body:
+        cur_meta["engineering_tasks"] = body.get("engineeringTasks") or body.get("engineering_tasks")
+
+    if "qaResults" in body or "qa_results" in body:
+        cur_meta["qa_results"] = body.get("qaResults") or body.get("qa_results")
+
+    if "betaFeedback" in body or "beta_feedback" in body:
+        cur_meta["beta_feedback"] = body.get("betaFeedback") or body.get("beta_feedback")
+
+    if "feedbackClusters" in body or "feedback_clusters" in body:
+        clusters = body.get("feedbackClusters") or body.get("feedback_clusters")
+        cur_meta["feedback_clusters"] = clusters
+        if proj.telemetry:
+            proj.telemetry.feedback_clusters = clusters
+
+    if "readinessReport" in body or "readiness_report" in body:
+        cur_meta["readiness_report"] = body.get("readinessReport") or body.get("readiness_report")
+
+    if "appliedPatches" in body or "applied_patches" in body:
+        cur_meta["applied_patches"] = body.get("appliedPatches") or body.get("applied_patches")
+
+    if "mvpVersion" in body or "mvp_version" in body:
+        cur_meta["mvp_version"] = body.get("mvpVersion") or body.get("mvp_version")
+
+    if "launchStrategy" in body or "launch_strategy" in body:
+        cur_meta["launch_strategy"] = body.get("launchStrategy") or body.get("launch_strategy")
+
+    if "creatorAssets" in body or "creator_assets" in body:
+        cur_meta["creator_assets"] = body.get("creatorAssets") or body.get("creator_assets")
+
+    if "launchTelemetry" in body or "launch_telemetry" in body:
+        cur_meta["launch_telemetry"] = body.get("launchTelemetry") or body.get("launch_telemetry")
+
+    if "channelStats" in body or "channel_stats" in body:
+        cur_meta["channel_stats"] = body.get("channelStats") or body.get("channel_stats")
+
+    if "launchManagerData" in body or "launch_manager_data" in body:
+        cur_meta["launch_manager_data"] = body.get("launchManagerData") or body.get("launch_manager_data")
+
+    if "dispatchedActions" in body or "dispatched_actions" in body:
+        cur_meta["dispatched_actions"] = body.get("dispatchedActions") or body.get("dispatched_actions")
+
+    if "launchReport" in body or "launch_report" in body:
+        cur_meta["launch_report"] = body.get("launchReport") or body.get("launch_report")
+
+    if "launchStatus" in body or "launch_status" in body:
+        cur_meta["launch_status"] = body.get("launchStatus") or body.get("launch_status")
+
+    if "productInfrastructure" in body or "product_infrastructure" in body:
+        cur_meta["product_infrastructure"] = body.get("productInfrastructure") or body.get("product_infrastructure")
+
+    proj.metadata_info = cur_meta
 
     proj.updated_at = datetime.utcnow()
     db.commit()

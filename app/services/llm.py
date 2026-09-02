@@ -33,7 +33,7 @@ def call_llm(prompt: str, max_tokens: int = 1000, system_prompt: str = None, api
         if p == "gemini":
             if not gemini_api_key:
                 continue
-            gemini_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro"]
+            gemini_models = ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-pro"]
             for g_model in gemini_models:
                 try:
                     import httpx
