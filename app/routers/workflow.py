@@ -23,6 +23,7 @@ class WorkflowStateUpdate(BaseModel):
     persuasion_sent_map: Optional[dict[str, Any]] = None
     creator_stage_map: Optional[dict[str, Any]] = None
     extra_state: Optional[dict[str, Any]] = None
+    replace: Optional[bool] = False
 
 
 def _format_state(state: WorkflowState) -> dict:
@@ -69,6 +70,26 @@ def get_workflow_state(db: Session = Depends(get_db)):
     return _format_state(state)
 
 
+@router.delete("")
+def reset_workflow_state(db: Session = Depends(get_db)):
+    """Reset global workflow state back to pristine empty baseline."""
+    state = _get_or_create_state(db)
+    state.active_section = "section1"
+    state.active_step = 1
+    state.selected_creator_id = None
+    state.active_project_id = None
+    state.pitch_sent_map = {}
+    state.ai_choice_map = {}
+    state.answer_sent_map = {}
+    state.persuasion_sent_map = {}
+    state.creator_stage_map = {}
+    state.extra_state = {}
+    state.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(state)
+    return _format_state(state)
+
+
 @router.post("")
 @router.patch("")
 @router.put("")
@@ -85,35 +106,49 @@ def update_workflow_state(body: WorkflowStateUpdate, db: Session = Depends(get_d
     if body.active_project_id is not None:
         state.active_project_id = body.active_project_id
 
-    if body.pitch_sent_map is not None:
-        merged = dict(state.pitch_sent_map or {})
-        merged.update(body.pitch_sent_map)
-        state.pitch_sent_map = merged
+    if body.replace:
+        if body.pitch_sent_map is not None:
+            state.pitch_sent_map = body.pitch_sent_map
+        if body.ai_choice_map is not None:
+            state.ai_choice_map = body.ai_choice_map
+        if body.answer_sent_map is not None:
+            state.answer_sent_map = body.answer_sent_map
+        if body.persuasion_sent_map is not None:
+            state.persuasion_sent_map = body.persuasion_sent_map
+        if body.creator_stage_map is not None:
+            state.creator_stage_map = body.creator_stage_map
+        if body.extra_state is not None:
+            state.extra_state = body.extra_state
+    else:
+        if body.pitch_sent_map is not None:
+            merged = dict(state.pitch_sent_map or {})
+            merged.update(body.pitch_sent_map)
+            state.pitch_sent_map = merged
 
-    if body.ai_choice_map is not None:
-        merged = dict(state.ai_choice_map or {})
-        merged.update(body.ai_choice_map)
-        state.ai_choice_map = merged
+        if body.ai_choice_map is not None:
+            merged = dict(state.ai_choice_map or {})
+            merged.update(body.ai_choice_map)
+            state.ai_choice_map = merged
 
-    if body.answer_sent_map is not None:
-        merged = dict(state.answer_sent_map or {})
-        merged.update(body.answer_sent_map)
-        state.answer_sent_map = merged
+        if body.answer_sent_map is not None:
+            merged = dict(state.answer_sent_map or {})
+            merged.update(body.answer_sent_map)
+            state.answer_sent_map = merged
 
-    if body.persuasion_sent_map is not None:
-        merged = dict(state.persuasion_sent_map or {})
-        merged.update(body.persuasion_sent_map)
-        state.persuasion_sent_map = merged
+        if body.persuasion_sent_map is not None:
+            merged = dict(state.persuasion_sent_map or {})
+            merged.update(body.persuasion_sent_map)
+            state.persuasion_sent_map = merged
 
-    if body.creator_stage_map is not None:
-        merged = dict(state.creator_stage_map or {})
-        merged.update(body.creator_stage_map)
-        state.creator_stage_map = merged
+        if body.creator_stage_map is not None:
+            merged = dict(state.creator_stage_map or {})
+            merged.update(body.creator_stage_map)
+            state.creator_stage_map = merged
 
-    if body.extra_state is not None:
-        merged = dict(state.extra_state or {})
-        merged.update(body.extra_state)
-        state.extra_state = merged
+        if body.extra_state is not None:
+            merged = dict(state.extra_state or {})
+            merged.update(body.extra_state)
+            state.extra_state = merged
 
     state.updated_at = datetime.utcnow()
     db.commit()

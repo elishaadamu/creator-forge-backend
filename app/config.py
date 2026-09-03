@@ -89,5 +89,8 @@ class Settings:
     CLOUDINARY_API_SECRET: str = os.getenv("CLOUDINARY_API_SECRET", "")
     CLOUDINARY_URL: str = os.getenv("CLOUDINARY_URL", "")
 
+    # Hunter.io Email Finder & Verifier
+    HUNTER_API_KEY: str = os.getenv("HUNTER_API_KEY", "2d8f925fa200e614d9bafa7ed28e2e25c0d2d71b")
+
 settings = Settings()
 

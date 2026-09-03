@@ -5,15 +5,36 @@ from app.config import settings, BASE_DIR
 
 fallback_sqlite_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
 
-try:
-    engine = create_engine(
-        settings.DATABASE_URL,
-        connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
+def create_configured_engine(url: str):
+    if "postgresql" in url or "postgres" in url:
+        return create_engine(
+            url,
+            pool_size=20,
+            max_overflow=20,
+            pool_timeout=30,
+            pool_recycle=60,
+            pool_pre_ping=True,
+            connect_args={
+                "connect_timeout": 10,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 5,
+            },
+            echo=False,
+        )
+    return create_engine(
+        url,
+        connect_args={"check_same_thread": False},
         echo=False,
     )
+
+
+try:
+    engine = create_configured_engine(settings.DATABASE_URL)
 except Exception as _e:
     print(f"[DB INIT] PostgreSQL driver/connection error: {_e}. Falling back to local SQLite database.")
-    engine = create_engine(fallback_sqlite_url, connect_args={"check_same_thread": False}, echo=False)
+    engine = create_configured_engine(fallback_sqlite_url)
 
 
 @event.listens_for(engine, "before_cursor_execute")
@@ -38,14 +59,23 @@ def get_db():
 def init_db():
     global engine, SessionLocal
     from app.models import creator, campaign, outreach, audit, project  # noqa: F401 — registers models
+    from sqlalchemy import text
     try:
+        table_exists = False
         with engine.connect() as conn:
-            pass
-        Base.metadata.create_all(bind=engine)
+            try:
+                conn.execute(text("SELECT 1 FROM creators LIMIT 1"))
+                table_exists = True
+            except Exception:
+                pass
+
+        if not table_exists:
+            print("[DB INIT] Creating missing schema tables...")
+            Base.metadata.create_all(bind=engine)
     except Exception as e:
         print(f"[DB INIT] Database connection failed: {e}.")
         print("[DB INIT] Gracefully falling back to local SQLite database to keep service online.")
-        engine = create_engine(fallback_sqlite_url, connect_args={"check_same_thread": False}, echo=False)
+        engine = create_configured_engine(fallback_sqlite_url)
         SessionLocal.configure(bind=engine)
         Base.metadata.create_all(bind=engine)
     

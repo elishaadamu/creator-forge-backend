@@ -13,8 +13,9 @@ from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.creator import Creator
+from app.models.creator import Creator, Contact
 from app.services import audit as audit_svc
+from app.services.send_queue import is_real_valid_email
 from app.services.suppression import is_suppressed
 
 
@@ -46,8 +47,6 @@ def create_or_get_creator(
         .first()
     )
     if existing:
-        from app.services.send_queue import is_real_valid_email
-        from app.models.creator import Contact
         updated = False
         if email_public and is_real_valid_email(email_public) and not existing.email_public:
             existing.email_public = email_public.strip()
@@ -111,7 +110,6 @@ def create_or_get_creator(
     db.refresh(creator)
 
     if creator.email_public and is_real_valid_email(creator.email_public):
-        from app.models.creator import Contact
         contact = Contact(creator_id=creator.id, contact_type="email", value=creator.email_public, source="discovery")
         db.add(contact)
         db.commit()

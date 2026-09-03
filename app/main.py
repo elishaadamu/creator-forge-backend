@@ -47,7 +47,7 @@ from app.services.autonomous_outreach import (
 # ── Database init ────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup():
-    init_db()
+    await asyncio.to_thread(init_db)
     # Ensure autonomous table is registered
     from app.models.autonomous_campaign import AutonomousCampaign
     # Start the IMAP poller loop in the background (polls every 15s for instant autonomous execution)

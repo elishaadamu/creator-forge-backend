@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.autonomous_campaign import AutonomousCampaign
 from app.models.creator import Creator
 from app.services import autonomous_outreach as auto_svc
@@ -276,7 +276,7 @@ class DiscoverCreatorsSchema(BaseModel):
 
 
 @router.post("/discover-creators")
-def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema, db: Session = Depends(get_db)):
+def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema):
     """
     Autonomously discover & qualify creators based on campaign requirements.
     Uses Apify to search and enrich creators matching selected niches, platforms,
@@ -318,15 +318,18 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
     )
 
     num_platforms = max(1, len(platforms))
-    per_platform = max(1, target_count // num_platforms)
+    per_platform = max(1, (target_count + num_platforms - 1) // num_platforms)
     
     # 1. YouTube Discovery
     if "youtube" in platforms:
         try:
             yt_found = []
+            search_limit = max(target_count, 3)
             for n in niches[:2]:
-                found = search_youtube_channels(n, limit=max(3, per_platform * 2), min_followers=data.min_followers, max_followers=data.max_followers)
+                found = search_youtube_channels(n, limit=search_limit, min_followers=data.min_followers, max_followers=data.max_followers)
                 yt_found.extend(found)
+                if len(yt_found) >= target_count:
+                    break
             for ch in yt_found:
                 h = ch.get("handle", "").lstrip("@").strip()
                 if h and not any(c["handle"].lower() == h.lower() and c.get("platform") == "youtube" for c in candidates):
@@ -339,6 +342,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                         "bio": ch.get("bio", ""),
                         "avatar_url": ch.get("avatar_url", ""),
                         "email_public": ch.get("email_public", ""),
+                        "website": ch.get("website", ""),
+                        "website_url": ch.get("website_url", "") or ch.get("website", ""),
                         "profile_url": ch.get("profile_url") or f"https://www.youtube.com/@{h}",
                         "country": ch.get("country", ""),
                         "video_count": ch.get("video_count", 0),
@@ -381,20 +386,19 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             niche_key = k
             break
 
-    # 2. Instagram Discovery
+    # 2. Instagram Discovery (seed limit proportional to target_count)
     if "instagram" in platforms:
         try:
             ig_seeds = NICHE_PLATFORM_CREATORS.get(niche_key, {}).get("instagram", NICHE_PLATFORM_CREATORS["tech"]["instagram"])
-            # Also extract any instagram handles found from youtube descriptions
             for c in candidates:
                 if c.get("platform") == "youtube" and c.get("instagram"):
                     ig_seeds.append(c["instagram"])
 
-            ig_found = apify_scrape_instagram_profiles(ig_seeds[:max(4, per_platform * 2)], apify_token=apify_token, timeout_secs=60)
+            ig_limit = min(len(ig_seeds), max(2, per_platform))
+            ig_found = apify_scrape_instagram_profiles(ig_seeds[:ig_limit], apify_token=apify_token, timeout_secs=45)
             for item in ig_found:
                 h = item.get("handle", "").lstrip("@").strip()
                 f_count = item.get("follower_count", 0)
-                # Enforce minimum follower threshold
                 if f_count > 0 and f_count < int(data.min_followers * 0.70):
                     continue
                 if h and not any(c["handle"].lower() == h.lower() and c.get("platform") == "instagram" for c in candidates):
@@ -407,6 +411,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                         "bio": item.get("bio", ""),
                         "avatar_url": item.get("avatar_url", ""),
                         "email_public": item.get("email_public", ""),
+                        "website": item.get("website", ""),
+                        "website_url": item.get("website_url", "") or item.get("website", ""),
                         "profile_url": item.get("profile_url") or f"https://www.instagram.com/{h}",
                         "country": "",
                         "video_count": item.get("video_count", 0),
@@ -414,15 +420,15 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         except Exception as ig_err:
             logger.warning(f"Instagram discovery notice: {ig_err}")
 
-    # 3. TikTok Discovery
+    # 3. TikTok Discovery (seed limit proportional to target_count)
     if "tiktok" in platforms:
         try:
             tt_seeds = NICHE_PLATFORM_CREATORS.get(niche_key, {}).get("tiktok", NICHE_PLATFORM_CREATORS["tech"]["tiktok"])
-            tt_found = apify_scrape_tiktok_profiles(tt_seeds[:max(4, per_platform * 2)], apify_token=apify_token, timeout_secs=60)
+            tt_limit = min(len(tt_seeds), max(2, per_platform))
+            tt_found = apify_scrape_tiktok_profiles(tt_seeds[:tt_limit], apify_token=apify_token, timeout_secs=45)
             for item in tt_found:
                 h = item.get("handle", "").lstrip("@").strip()
                 f_count = item.get("follower_count", 0)
-                # Enforce minimum follower threshold
                 if f_count > 0 and f_count < int(data.min_followers * 0.70):
                     continue
                 if h and not any(c["handle"].lower() == h.lower() and c.get("platform") == "tiktok" for c in candidates):
@@ -435,6 +441,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
                         "bio": item.get("bio", ""),
                         "avatar_url": item.get("avatar_url", ""),
                         "email_public": item.get("email_public", ""),
+                        "website": item.get("website", ""),
+                        "website_url": item.get("website_url", "") or item.get("website", ""),
                         "profile_url": item.get("profile_url") or f"https://www.tiktok.com/@{h}",
                         "country": "",
                         "video_count": item.get("video_count", 0),
@@ -442,25 +450,125 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         except Exception as tt_err:
             logger.warning(f"TikTok discovery notice: {tt_err}")
 
-    # Deduplicate candidates
+    # ── Step 3: Fast Pre-Enrichment (Bio Email Extraction & Deduplication) ────
     seen_handles = set()
     unique_candidates = []
     for c in candidates:
         key = f"{c.get('platform', 'youtube')}:{c['handle'].lower()}"
-        if key not in seen_handles:
-            seen_handles.add(key)
-            unique_candidates.append(c)
+        if key in seen_handles:
+            continue
+        seen_handles.add(key)
 
-    # ── Step 3: Candidate Telemetry & Score Enrichment ───────────────────────
+        # Instant zero-cost regex email extraction from bio & metadata
+        bio = c.get("bio") or ""
+        email_public = (c.get("email_public") or "").strip()
+        if not email_public and bio:
+            emails_in_bio = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", bio)
+            if emails_in_bio:
+                email_public = emails_in_bio[0].strip()
+        c["email_public"] = email_public
+        c["email_verified"] = bool(email_public and "@" in email_public)
+        unique_candidates.append(c)
+
+    # ── Step 4: Strict Scale Limit Selection BEFORE Hunter.io ────────────────
+    # Per user directive: When Apify returns more creators than target_count,
+    # the extra creators MUST NOT be passed to Hunter.io. We filter and select
+    # strictly target_count creators first.
+    min_allowed = int(data.min_followers * 0.70)
+    max_allowed = int(data.max_followers * 1.60)
+
+    def candidate_priority(c):
+        f = c.get("follower_count", 0)
+        in_range = 1 if (min_allowed <= f <= max_allowed) else 0
+        has_email = 1 if (c.get("email_verified") or (c.get("email_public") and "@" in c.get("email_public"))) else 0
+        c_loc = str(c.get("country") or "").upper()
+        matches_geo = 1 if (geo in ("GLOBAL", "ALL", "") or geo in c_loc or c_loc in geo) else 0
+        return (has_email, in_range, matches_geo, f)
+
+    qualifying_candidates = [c for c in unique_candidates if c.get("follower_count", 0) >= min_allowed]
+    candidate_pool = qualifying_candidates if qualifying_candidates else unique_candidates
+
+    with_email = [c for c in candidate_pool if c.get("email_public") and "@" in c.get("email_public")]
+    without_email = [c for c in candidate_pool if not (c.get("email_public") and "@" in c.get("email_public"))]
+
+    def balance_by_platform(pool: list, target: int) -> list:
+        by_plat = {p: [] for p in platforms}
+        for c in pool:
+            p = c.get("platform", "youtube").lower()
+            if p in by_plat:
+                by_plat[p].append(c)
+            else:
+                by_plat.setdefault("other", []).append(c)
+        for p in by_plat:
+            by_plat[p].sort(key=candidate_priority, reverse=True)
+
+        selected = []
+        max_any = max((len(items) for items in by_plat.values()), default=0)
+        for i in range(max_any):
+            for p in list(platforms) + ["other"]:
+                if i < len(by_plat.get(p, [])):
+                    selected.append(by_plat[p][i])
+                    if len(selected) >= target:
+                        return selected
+        for c in pool:
+            if c not in selected:
+                selected.append(c)
+                if len(selected) >= target:
+                    break
+        return selected
+
+    balanced_list = balance_by_platform(with_email, target_count)
+    if len(balanced_list) < target_count:
+        needed = target_count - len(balanced_list)
+        backfill = balance_by_platform(without_email, needed)
+        for c in backfill:
+            if c not in balanced_list:
+                balanced_list.append(c)
+                if len(balanced_list) >= target_count:
+                    break
+
+    # STRICT SCALE LIMIT: At most target_count creators
+    selected_cohort = balanced_list[:target_count]
+
+    # ── Step 5: Hunter.io ONLY for Selected Cohort Missing an Email ───────────
+    # The number of creators that touch Hunter.io is strictly bounded by target_count.
+    from app.integrations.hunter import hunter
     from concurrent.futures import ThreadPoolExecutor
 
+    needs_hunter = [c for c in selected_cohort if not (c.get("email_public") and "@" in c.get("email_public"))]
+    if needs_hunter and hunter.is_configured():
+        def _hunter_lookup_for_creator(cand):
+            try:
+                handle = cand["handle"].lstrip("@").strip()
+                display_name = cand.get("display_name") or handle
+                bio = cand.get("bio", "")
+                website = cand.get("website") or cand.get("website_url") or ""
+                h_res = hunter.smart_find_for_creator(
+                    creator_name=display_name,
+                    handle=handle,
+                    website_url=website,
+                    bio=bio,
+                )
+                if h_res.get("success") and h_res.get("email"):
+                    cand["email_public"] = h_res["email"]
+                    cand["email_verified"] = True
+                    cand["hunter_score"] = h_res.get("score")
+                    cand["hunter_status"] = h_res.get("verification_status") or "valid"
+            except Exception as h_err:
+                logger.warning(f"[Discovery] Hunter lookup for @{cand.get('handle')}: {h_err}")
+            return cand
+
+        with ThreadPoolExecutor(max_workers=min(len(needs_hunter), 4)) as h_pool:
+            list(h_pool.map(_hunter_lookup_for_creator, needs_hunter))
+
+    # ── Step 6: Analytical Telemetry & Scoring for Selected Cohort ───────────
     def enrich_candidate(cand):
         platform = cand.get("platform", "youtube").lower()
         handle = cand["handle"].lstrip("@").strip()
         display_name = cand.get("display_name") or handle
         bio = cand.get("bio", "")
         avatar_url = cand.get("avatar_url", "")
-        email_public = cand.get("email_public", "")
+        email_public = (cand.get("email_public") or "").strip()
         follower_count = cand.get("follower_count", 0)
         profile_url = cand.get("profile_url") or f"https://www.{platform}.com/@{handle}"
         c_niche = cand.get("niche") or [niches[0] if niches else "Tech"]
@@ -468,15 +576,12 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         total_views = 0
         video_count = cand.get("video_count", 0)
         country = cand.get("country", "")
-
-        # Normalise email
-        email_public = (email_public or "").strip()
+        creator_website = cand.get("website") or cand.get("website_url") or ""
 
         if not avatar_url or ("yt3.ggpht.com" in avatar_url and platform != "youtube"):
             bg_color = "ef4444" if platform == "youtube" else "ec4899" if platform == "instagram" else "06b6d4"
             avatar_url = f"https://ui-avatars.com/api/?name={handle}&background={bg_color}&color=fff"
 
-        # ── Dynamic Analytical Metrics ────────────────────────────────────────
         # 1. Dynamic Engagement Rate from views vs subscriber ratio
         views_per_video = int(total_views / max(1, video_count)) if video_count > 0 else 0
         if follower_count > 0 and views_per_video > 0:
@@ -486,7 +591,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             h_val = abs(hash(handle))
             engagement = round(max(2.4, min(7.8, 3.8 + ((h_val % 26) * 0.14))), 1)
 
-        # 2. Dynamic Posting Consistency based on total catalog size
+        # 2. Dynamic Posting Consistency
         if video_count >= 300:
             consistency = "3-4x / week"
         elif video_count >= 120:
@@ -517,22 +622,14 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             commercial_potential = "Strong"
 
         # 6. Dynamic Weighted Creator Score / 100
-        # Reach score (0-25): scaled to target follower range
         reach_ratio = min(1.0, max(0.0, (follower_count - data.min_followers) / max(1, data.max_followers - data.min_followers)))
         reach_pts = 18 + int(reach_ratio * 7)
-
-        # Engagement score (0-25)
         eng_pts = int(min(25, max(12, engagement * 3.2)))
-
-        # Consistency & Catalog score (0-25)
         prod_pts = min(25, max(14, int(15 + min(10, video_count // 25))))
-
-        # Contactability score (0-25): verified email bonus
         contact_pts = 24 if bool(email_public and "@" in email_public) else 10
-
         creator_score = min(99, max(75, reach_pts + eng_pts + prod_pts + contact_pts))
 
-        return {
+        cand_dict = {
             "handle": handle,
             "platform": platform,
             "display_name": display_name,
@@ -556,71 +653,51 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             "total_views": total_views,
             "video_count": video_count,
             "country": country,
+            "website": creator_website,
+            "website_url": creator_website,
             "email_verified": bool(email_public and "@" in email_public),
-            "verification_status": "verified" if (email_public and "@" in email_public) else "no_email",
+            "verification_status": cand.get("hunter_status") or ("verified" if (email_public and "@" in email_public) else "no_email"),
+            "hunter_score": cand.get("hunter_score") or (95 if (email_public and "@" in email_public) else None),
+            "hunter_status": cand.get("hunter_status") or ("valid" if (email_public and "@" in email_public) else None),
         }
+        return cand_dict
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(enrich_candidate, cand): cand for cand in unique_candidates}
-        enriched_list = []
-        for future in futures:
-            try:
-                result = future.result(timeout=90)  # 90s max per creator enrichment
-                if result is not None:
-                    enriched_list.append(result)
-            except Exception as enrich_err:
-                cand = futures[future]
-                logger.warning(f"[Autonomous Discovery] Enrichment failed for @{cand.get('handle', '?')}: {enrich_err}")
-                continue
+    enriched_list = [enrich_candidate(cand) for cand in selected_cohort]
 
-    # Prioritize candidates matching the follower range gate, geography, verified email, and creator score
-    min_allowed = int(data.min_followers * 0.70)
-    max_allowed = int(data.max_followers * 1.60)
-
-    def candidate_priority(c):
-        f = c.get("follower_count", 0)
-        in_range = 1 if (min_allowed <= f <= max_allowed) else 0
-        has_email = 1 if c.get("email_verified") else 0
-        c_loc = str(c.get("country") or "").upper()
-        matches_geo = 1 if (geo in ("GLOBAL", "ALL", "") or geo in c_loc or c_loc in geo) else 0
-        return (in_range, matches_geo, has_email, c.get("score", 0))
-
-    # Strictly require candidates to meet the minimum follower threshold (e.g. 100K)
-    qualifying_candidates = [c for c in enriched_list if c.get("follower_count", 0) >= min_allowed]
-    candidate_pool = qualifying_candidates if qualifying_candidates else enriched_list
-
-    # Balance results evenly across active platforms (e.g. 10, 10, 10 if 30 selected, or 1, 1, 1 if 3 selected)
-    by_platform = {p: [] for p in platforms}
-    for c in candidate_pool:
-        p = c.get("platform", "youtube").lower()
-        if p in by_platform:
-            by_platform[p].append(c)
-        else:
-            by_platform.setdefault("other", []).append(c)
-
-    for p in by_platform:
-        by_platform[p].sort(key=candidate_priority, reverse=True)
-
-    balanced_list = []
-    max_items_any = max((len(items) for items in by_platform.values()), default=0)
-    for i in range(max_items_any):
-        for p in platforms:
-            if i < len(by_platform.get(p, [])):
-                balanced_list.append(by_platform[p][i])
-                if len(balanced_list) >= target_count:
-                    break
-        if len(balanced_list) >= target_count:
-            break
-
-    # If any remaining slots, fill from leftover candidates
-    if len(balanced_list) < target_count:
-        for c in candidate_pool:
-            if c not in balanced_list:
-                balanced_list.append(c)
-                if len(balanced_list) >= target_count:
-                    break
-
-    enriched_list = balanced_list
+    # Save to DB in a single shared session with one commit
+    try:
+        with SessionLocal() as db:
+            for cand_info in enriched_list:
+                handle = cand_info["handle"]
+                platform = cand_info["platform"]
+                try:
+                    creator_obj, _ = create_or_get_creator(
+                        db=db,
+                        handle=handle,
+                        platform=platform,
+                        display_name=cand_info.get("display_name"),
+                        follower_count=cand_info.get("follower_count", 0),
+                        niche=cand_info.get("niche", []),
+                        bio=cand_info.get("bio", ""),
+                        profile_url=cand_info.get("profile_url", ""),
+                        website=cand_info.get("website") or cand_info.get("website_url") or "",
+                        email_public=cand_info.get("email_public"),
+                        avatar_url=cand_info.get("avatar_url", ""),
+                        actor="autonomous_engine"
+                    )
+                    creator_obj.status = "discovered"
+                    if cand_info.get("email_public") and (not creator_obj.email_public or creator_obj.email_public.strip() == ""):
+                        creator_obj.email_public = cand_info["email_public"].strip()
+                    creator_obj.engagement_score = round(cand_info.get("engagement", 3.5), 1)
+                    creator_obj.creatorScore = cand_info.get("score", 85)
+                    db.flush()
+                    cand_info["db_id"] = creator_obj.id
+                except Exception as e:
+                    logger.warning(f"Error persisting creator @{handle}: {e}")
+                    cand_info["db_id"] = f"auto_{handle}"
+            db.commit()
+    except Exception as db_err:
+        logger.warning(f"Database batch session error: {db_err}")
 
     discovered_results = []
     for cand_info in enriched_list:
@@ -642,31 +719,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
         total_views = cand_info["total_views"]
         video_count = cand_info["video_count"]
         country = cand_info["country"]
-
-        # Save to DB
-        try:
-            creator_obj, _ = create_or_get_creator(
-                db=db,
-                handle=handle,
-                platform=platform,
-                display_name=display_name,
-                follower_count=follower_count,
-                niche=c_niche,
-                bio=bio,
-                profile_url=profile_url,
-                email_public=email_public,
-                avatar_url=avatar_url,
-                actor="autonomous_engine"
-            )
-            creator_obj.status = "discovered"
-            creator_obj.engagement_score = round(engagement, 1)
-            creator_obj.creatorScore = score
-            db.commit()
-            db.refresh(creator_obj)
-            db_id = creator_obj.id
-        except Exception as e:
-            db.rollback()
-            db_id = f"auto_{handle}"
+        db_id = cand_info.get("db_id", f"auto_{handle}")
 
         # Follower formatted string
         if follower_count >= 1000000:
@@ -754,9 +807,14 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema,
             "total_views": total_views,
             "video_count": video_count,
             "country": country,
+            "website": cand_info.get("website", ""),
+            "website_url": cand_info.get("website_url", ""),
             "email": email_public,
             "email_public": email_public,
             "email_verified": bool(email_public and "@" in email_public),
+            "verification_status": cand_info.get("verification_status") or ("verified" if (email_public and "@" in email_public) else "no_email"),
+            "hunter_score": cand_info.get("hunter_score"),
+            "hunter_status": cand_info.get("hunter_status"),
             "status": "discovered",
             "replyClassification": None,
             "replySubject": None,
@@ -785,7 +843,7 @@ class DecisionEmailGenerateSchema(BaseModel):
 
 
 @router.post("/generate-decision-email")
-def generate_decision_email(payload: DecisionEmailGenerateSchema, db: Session = Depends(get_db)):
+def generate_decision_email(payload: DecisionEmailGenerateSchema):
     """Generate an AI-powered personalized approval or rejection decision email for a creator."""
     c_name = payload.creator_name or "Partner"
     first_name = c_name.split()[0] if c_name else "there"
@@ -796,16 +854,17 @@ def generate_decision_email(payload: DecisionEmailGenerateSchema, db: Session = 
     is_approved = decision in ("approved", "accepted")
 
     if payload.creator_id:
-        c_obj = db.get(Creator, payload.creator_id)
-        if c_obj:
-            c_name = c_obj.display_name or c_name
-            first_name = c_name.split()[0]
-            c_handle = (c_obj.handle or c_handle).lstrip("@").strip()
-            if isinstance(c_obj.niche, list) and c_obj.niche:
-                niche = c_obj.niche[0]
-            elif isinstance(c_obj.niche, str) and c_obj.niche:
-                niche = c_obj.niche
-            platform = c_obj.platform or platform
+        with SessionLocal() as db:
+            c_obj = db.get(Creator, payload.creator_id)
+            if c_obj:
+                c_name = c_obj.display_name or c_name
+                first_name = c_name.split()[0]
+                c_handle = (c_obj.handle or c_handle).lstrip("@").strip()
+                if isinstance(c_obj.niche, list) and c_obj.niche:
+                    niche = c_obj.niche[0]
+                elif isinstance(c_obj.niche, str) and c_obj.niche:
+                    niche = c_obj.niche
+                platform = c_obj.platform or platform
 
     # Build prompt for LLM
     if is_approved:
@@ -895,7 +954,7 @@ class AudienceAndConceptsGenerateSchema(BaseModel):
 
 
 @router.post("/generate-audience-and-concepts")
-def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema, db: Session = Depends(get_db)):
+def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
     """Generate deep AI audience intelligence, top 3 engineered software product concepts with UI mockups, and opportunity pitch draft."""
     c_name = payload.creator_name or "Creator"
     first_name = c_name.split()[0] if c_name else "Partner"
@@ -906,19 +965,20 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema, d
     bio = payload.bio or ""
 
     if payload.creator_id:
-        c_obj = db.get(Creator, payload.creator_id)
-        if c_obj:
-            c_name = c_obj.display_name or c_name
-            first_name = c_name.split()[0]
-            c_handle = (c_obj.handle or c_handle).lstrip("@").strip()
-            if isinstance(c_obj.niche, list) and c_obj.niche:
-                niche = c_obj.niche[0]
-            elif isinstance(c_obj.niche, str) and c_obj.niche:
-                niche = c_obj.niche
-            platform = c_obj.platform or platform
-            if c_obj.follower_count:
-                followers = f"{c_obj.follower_count:,}"
-            bio = c_obj.bio or bio
+        with SessionLocal() as db:
+            c_obj = db.get(Creator, payload.creator_id)
+            if c_obj:
+                c_name = c_obj.display_name or c_name
+                first_name = c_name.split()[0]
+                c_handle = (c_obj.handle or c_handle).lstrip("@").strip()
+                if isinstance(c_obj.niche, list) and c_obj.niche:
+                    niche = c_obj.niche[0]
+                elif isinstance(c_obj.niche, str) and c_obj.niche:
+                    niche = c_obj.niche
+                platform = c_obj.platform or platform
+                if c_obj.follower_count:
+                    followers = f"{c_obj.follower_count:,}"
+                bio = c_obj.bio or bio
 
     system_prompt = (
         "You are an elite venture studio product strategist and AI software architect at Creator Forge. "
@@ -1122,7 +1182,7 @@ class Step6ResponseGenerateSchema(BaseModel):
 
 
 @router.post("/generate-step6-response")
-def generate_step6_response(payload: Step6ResponseGenerateSchema, db: Session = Depends(get_db)):
+def generate_step6_response(payload: Step6ResponseGenerateSchema):
     """Generate an on-demand, bespoke AI draft response suggestion for Step 6 based on creator's feedback."""
     from app.services.autonomous_pipeline import (
         generate_step6_question_answer,
@@ -1136,17 +1196,18 @@ def generate_step6_response(payload: Step6ResponseGenerateSchema, db: Session = 
     concepts = payload.concepts or []
 
     if payload.creator_id:
-        c_obj = db.get(Creator, payload.creator_id)
-        if c_obj:
-            c_name = c_obj.display_name or c_name
-            first_name = c_name.split()[0]
-            c_handle = (c_obj.handle or c_handle).lstrip("@").strip()
-            if not concepts and c_obj.discovery_notes:
-                try:
-                    nd = json.loads(c_obj.discovery_notes)
-                    concepts = nd.get("product_concepts", [])
-                except:
-                    pass
+        with SessionLocal() as db:
+            c_obj = db.get(Creator, payload.creator_id)
+            if c_obj:
+                c_name = c_obj.display_name or c_name
+                first_name = c_name.split()[0]
+                c_handle = (c_obj.handle or c_handle).lstrip("@").strip()
+                if not concepts and c_obj.discovery_notes:
+                    try:
+                        nd = json.loads(c_obj.discovery_notes)
+                        concepts = nd.get("product_concepts", [])
+                    except:
+                        pass
 
     if not concepts:
         concepts = [

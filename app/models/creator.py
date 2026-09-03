@@ -40,7 +40,7 @@ class Creator(Base):
     status = Column(
         SAEnum(
             "discovered", "qualified", "disqualified",
-            "in_review", "approved", "rejected", "suppressed",
+            "in_review", "approved", "rejected", "suppressed", "contacted",
             name="creator_status_enum",
         ),
         default="discovered",

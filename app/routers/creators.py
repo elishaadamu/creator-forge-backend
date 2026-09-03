@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.creator import Creator
 from app.services import discovery, analysis as analysis_svc, product_recommendation, deck_generator
 from app.services.contact_discovery import add_contact, get_contacts_for_creator, validate_contact
@@ -75,8 +75,156 @@ def apify_find_email_endpoint(body: ApifyFindEmailRequest):
     }
 
 
+class HunterFindEmailRequest(BaseModel):
+    creator_id: Optional[str] = None
+    domain: Optional[str] = None
+    company: Optional[str] = None
+    linkedin_handle: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    full_name: Optional[str] = None
+    max_duration: Optional[int] = 10
+    auto_save: Optional[bool] = True
+    api_key: Optional[str] = None
+
+
+class HunterVerifyEmailRequest(BaseModel):
+    email: str
+    creator_id: Optional[str] = None
+    auto_save: Optional[bool] = True
+    api_key: Optional[str] = None
+
+
+@router.post("/hunter/find-email")
+def hunter_find_email_endpoint(body: HunterFindEmailRequest, db: Session = Depends(get_db)):
+    """
+    Find high-probability corporate/business email via Hunter.io v2 API.
+    Can accept explicit domain/company/names or resolve automatically for a creator_id.
+    """
+    from app.integrations.hunter import hunter
+    
+    creator = None
+    if body.creator_id:
+        creator = db.get(Creator, body.creator_id)
+        if not creator:
+            clean = body.creator_id.replace("@", "").lower().strip()
+            creator = db.query(Creator).filter(
+                (Creator.id == body.creator_id) |
+                (Creator.handle.ilike(f"%{clean}%")) |
+                (Creator.display_name.ilike(f"%{clean}%"))
+            ).first()
+
+    domain = body.domain
+    company = body.company
+    first_name = body.first_name
+    last_name = body.last_name
+    full_name = body.full_name
+
+    # If creator found and missing fields, pull from creator profile
+    # If creator found, use smart find with bio company extraction & platform fallback
+    if creator:
+        if not full_name and not (first_name and last_name):
+            full_name = creator.display_name or creator.handle
+
+        # Filter out social platform domains
+        from app.integrations.hunter import clean_domain
+        clean_d = clean_domain(domain)
+        clean_c = company if company and company.lower() != (creator.handle or "").lower().replace("@", "") else None
+
+        res = hunter.smart_find_for_creator(
+            creator_name=full_name,
+            handle=creator.handle,
+            website_url=clean_d or getattr(creator, "website", None),
+            bio=getattr(creator, "bio", None),
+            company=clean_c,
+            api_key=body.api_key
+        )
+
+        # If Hunter B2B finder didn't find an email, fall back to scraping platform profile (YouTube / Instagram / TikTok)
+        if not res.get("success"):
+            try:
+                from app.services.scraper import scrape_profile
+                p_slug = (creator.platform or "youtube").lower()
+                clean_h = (creator.handle or "").lstrip("@")
+                scraped = scrape_profile(p_slug, clean_h)
+                scraped_email = (scraped.get("email_public") or scraped.get("email") or "").strip()
+                if scraped_email and "@" in scraped_email:
+                    # Immediately verify the scraped platform email with Hunter Email Verifier!
+                    ver = hunter.verify_email(scraped_email, api_key=body.api_key)
+                    res = {
+                        "success": True,
+                        "email": scraped_email,
+                        "score": ver.get("score") or 85,
+                        "verification_status": ver.get("status") or "valid",
+                        "deliverable": ver.get("deliverable", True),
+                        "source_type": f"{p_slug}_channel_contact",
+                        "sources": [{"domain": f"{p_slug}.com", "uri": creator.profile_url or ""}],
+                        "sources_count": 1,
+                        "smtp_check": ver.get("smtp_check", True),
+                        "mx_records": ver.get("mx_records", True),
+                        "raw": ver.get("raw"),
+                    }
+            except Exception as scrap_err:
+                logger.warning(f"Platform profile fallback notice for {creator.handle}: {scrap_err}")
+    else:
+        res = hunter.find_email(
+            domain=domain,
+            company=company,
+            linkedin_handle=body.linkedin_handle,
+            first_name=first_name,
+            last_name=last_name,
+            full_name=full_name,
+            max_duration=body.max_duration or 10,
+            api_key=body.api_key
+        )
+
+    if not res.get("success"):
+        return res
+
+    found_email = res.get("email")
+    if found_email and creator and body.auto_save:
+        creator.email_public = found_email
+        db.commit()
+        try:
+            from app.services.contact_discovery import add_contact
+            add_contact(
+                db,
+                creator.id,
+                "email",
+                found_email,
+                "hunter_io",
+                notes=f"Hunter.io Score: {res.get('score')} | Status: {res.get('verification_status')}",
+                actor="hunter_api"
+            )
+        except Exception as e:
+            pass
+
+    return {
+        **res,
+        "creator_id": creator.id if creator else None,
+        "saved": bool(creator and body.auto_save and found_email)
+    }
+
+
+@router.post("/hunter/verify-email")
+def hunter_verify_email_endpoint(body: HunterVerifyEmailRequest, db: Session = Depends(get_db)):
+    """
+    Verify deliverability of an email using Hunter.io v2 Email Verifier.
+    """
+    from app.integrations.hunter import hunter
+    res = hunter.verify_email(body.email, api_key=body.api_key)
+    
+    if res.get("success") and body.creator_id and body.auto_save:
+        creator = db.get(Creator, body.creator_id)
+        if creator and res.get("deliverable"):
+            creator.email_public = body.email.strip()
+            db.commit()
+
+    return res
+
+
 @router.post("/scrape")
-def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal", db: Session = Depends(get_db)):
+def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal"):
     """
     Scrape a public profile and optionally save it.
     Parses handle from full URLs automatically.
@@ -135,48 +283,50 @@ def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal
     if "error" in scraped and not scraped.get("display_name"):
         raise HTTPException(400, f"Scrape failed: {scraped['error']}")
 
-    creator = None
+    creator_data = None
     if body.save:
         try:
-            creator, created = discovery.create_or_get_creator(
-                db=db,
-                handle=scraped["handle"],
-                platform=scraped["platform"],
-                display_name=scraped.get("display_name"),
-                bio=scraped.get("bio"),
-                profile_url=scraped.get("profile_url"),
-                avatar_url=scraped.get("avatar_url"),
-                follower_count=scraped.get("follower_count", 0),
-                niche=scraped.get("niche", []),
-                website=scraped.get("website"),
-                email_public=scraped.get("email_public"),
-                discovery_source="scrape",
-                actor=actor,
-            )
-            # Auto-save any found email as a contact
-            if scraped.get("email_public") and creator:
-                try:
-                    add_contact(
-                        db, creator.id, "email",
-                        scraped["email_public"], "scraped_bio", actor=actor,
-                    )
-                except Exception:
-                    pass
-            for link in scraped.get("social_links", [])[:3]:
-                try:
-                    add_contact(
-                        db, creator.id, "business_inquiry_form",
-                        link, "scraped_profile", actor=actor,
-                    )
-                except Exception:
-                    pass
+            with SessionLocal() as db:
+                creator, created = discovery.create_or_get_creator(
+                    db=db,
+                    handle=scraped["handle"],
+                    platform=scraped["platform"],
+                    display_name=scraped.get("display_name"),
+                    bio=scraped.get("bio"),
+                    profile_url=scraped.get("profile_url"),
+                    avatar_url=scraped.get("avatar_url"),
+                    follower_count=scraped.get("follower_count", 0),
+                    niche=scraped.get("niche", []),
+                    website=scraped.get("website"),
+                    email_public=scraped.get("email_public"),
+                    discovery_source="scrape",
+                    actor=actor,
+                )
+                # Auto-save any found email as a contact
+                if scraped.get("email_public") and creator:
+                    try:
+                        add_contact(
+                            db, creator.id, "email",
+                            scraped["email_public"], "scraped_bio", actor=actor,
+                        )
+                    except Exception:
+                        pass
+                for link in scraped.get("social_links", [])[:3]:
+                    try:
+                        add_contact(
+                            db, creator.id, "business_inquiry_form",
+                            link, "scraped_profile", actor=actor,
+                        )
+                    except Exception:
+                        pass
+                creator_data = _creator_dict(creator) if creator else None
         except ValueError as e:
             raise HTTPException(400, str(e))
 
     return {
         "scraped": scraped,
-        "creator": _creator_dict(creator) if creator else None,
-        "created": creator is not None,
+        "creator": creator_data,
+        "created": creator_data is not None,
     }
 
 
@@ -391,8 +541,27 @@ def delete_all_creators(db: Session = Depends(get_db)):
                     partnerships, post_suggestions, product_recommendations, creators
                 CASCADE;
             """))
+            # Reset global workflow state to prevent orphan choices or pitch history from resurfacing
+            try:
+                from app.models.workflow_state import WorkflowState
+                state = db.get(WorkflowState, "default")
+                if state:
+                    state.active_section = "section1"
+                    state.active_step = 1
+                    state.selected_creator_id = None
+                    state.active_project_id = None
+                    state.pitch_sent_map = {}
+                    state.ai_choice_map = {}
+                    state.answer_sent_map = {}
+                    state.persuasion_sent_map = {}
+                    state.creator_stage_map = {}
+                    state.extra_state = {}
+                    state.updated_at = datetime.utcnow()
+            except Exception as ws_err:
+                logger.warning(f"Failed to reset workflow state during delete_all: {ws_err}")
+
             db.commit()
-            return {"success": True, "deleted_count": 0, "message": "Successfully wiped all creators and projects"}
+            return {"success": True, "deleted_count": 0, "message": "Successfully wiped all creators, projects, and workflow states"}
         else:
             from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
             from app.models.creator import (
@@ -423,8 +592,28 @@ def delete_all_creators(db: Session = Depends(get_db)):
             db.query(ValidationPlan).delete(synchronize_session=False)
             db.query(CoLaunchProject).delete(synchronize_session=False)
             deleted_count = db.query(Creator).delete(synchronize_session=False)
+
+            # Reset global workflow state
+            try:
+                from app.models.workflow_state import WorkflowState
+                state = db.get(WorkflowState, "default")
+                if state:
+                    state.active_section = "section1"
+                    state.active_step = 1
+                    state.selected_creator_id = None
+                    state.active_project_id = None
+                    state.pitch_sent_map = {}
+                    state.ai_choice_map = {}
+                    state.answer_sent_map = {}
+                    state.persuasion_sent_map = {}
+                    state.creator_stage_map = {}
+                    state.extra_state = {}
+                    state.updated_at = datetime.utcnow()
+            except Exception as ws_err:
+                logger.warning(f"Failed to reset workflow state during delete_all: {ws_err}")
+
             db.commit()
-            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and all venture projects"}
+            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and reset workflow states"}
     except Exception as e:
         db.rollback()
         try:
@@ -537,6 +726,29 @@ def delete_creator(
             logger.warning(f"[DeleteCreator] Cloudinary purge error: {cld_err}")
 
         db.delete(creator)
+
+        # Purge creator from global workflow state maps
+        try:
+            from app.models.workflow_state import WorkflowState
+            state = db.get(WorkflowState, "default")
+            if state:
+                dirty = False
+                for map_name in ("pitch_sent_map", "ai_choice_map", "answer_sent_map", "persuasion_sent_map", "creator_stage_map"):
+                    curr = dict(getattr(state, map_name) or {})
+                    keys_to_remove = [k for k in curr if k in (real_id, clean_handle, f"@{clean_handle}")]
+                    if keys_to_remove:
+                        for k in keys_to_remove:
+                            curr.pop(k, None)
+                        setattr(state, map_name, curr)
+                        dirty = True
+                if state.selected_creator_id in (real_id, clean_handle, f"@{clean_handle}"):
+                    state.selected_creator_id = None
+                    dirty = True
+                if dirty:
+                    state.updated_at = datetime.utcnow()
+        except Exception as ws_err:
+            logger.warning(f"Failed to purge creator from workflow state: {ws_err}")
+
         db.commit()
         return {"deleted": True, "creator_id": real_id}
     except Exception as e:

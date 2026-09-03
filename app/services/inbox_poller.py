@@ -118,6 +118,9 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         c = db.get(Creator, cand_id)
         if c:
             creator_id = c.id
+        else:
+            # Token belongs to an explicitly deleted creator — DO NOT match to other creators
+            return None
 
     # 2. Handle token match: Handle:@<handle> or [#<handle>]
     if not creator_id:
@@ -127,6 +130,9 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
             c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
             if c:
                 creator_id = c.id
+            else:
+                # Handle token belongs to a deleted creator — DO NOT match to other creators
+                return None
 
     all_creators = db.query(Creator).all()
 
@@ -205,7 +211,6 @@ def poll_inbox_sync():
 
     admin_email = (settings.GOOGLE_EMAIL or "").lower().strip()
     mail = None
-    db = SessionLocal()
     prev_timeout = socket.getdefaulttimeout()
     try:
         socket.setdefaulttimeout(5)  # 5s fast socket timeout to prevent hang
@@ -220,6 +225,7 @@ def poll_inbox_sync():
             
         all_ids = messages[0].split()
         email_ids = all_ids[-15:]  # Check last 15 emails for instant responsive sync
+        candidate_messages = []
         for e_id in email_ids:
             try:
                 status, msg_data = mail.fetch(e_id, "(RFC822)")
@@ -250,36 +256,41 @@ def poll_inbox_sync():
                         # Ignore outgoing messages from admin unless it's a self-test reply
                         if from_lower == admin_email and not is_reply_subject:
                             continue
-                            
-                        thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body)
-                        
-                        if thread_id:
-                            # Check if reply already exists in DB to prevent duplicates
-                            existing_reply = db.query(Reply).filter(
-                                Reply.thread_id == thread_id,
-                                Reply.from_address == from_email,
-                                Reply.body == body,
-                            ).first()
 
-                            if not existing_reply:
-                                try:
-                                    record_reply(
-                                        db=db,
-                                        thread_id=thread_id,
-                                        from_address=from_email,
-                                        subject=subject,
-                                        body=body,
-                                        actor="imap_poller"
-                                    )
-                                    logger.info(f"Recorded IMAP reply from {from_email} to thread {thread_id}")
-                                except Exception as e:
-                                    safe_err = str(e).encode("ascii", "ignore").decode("ascii")
-                                    logger.error(f"Failed to record reply from {from_email}: {safe_err}")
-                            else:
-                                pass
+                        candidate_messages.append((from_email, subject, body, raw_body))
             except Exception as item_err:
                 logger.debug(f"IMAP item fetch error: {item_err}")
                 continue
+
+        # If candidate messages were found, open a dedicated short-lived DB session to process them
+        if candidate_messages:
+            db = SessionLocal()
+            try:
+                for from_email, subject, body, raw_body in candidate_messages:
+                    thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body)
+                    if thread_id:
+                        existing_reply = db.query(Reply).filter(
+                            Reply.thread_id == thread_id,
+                            Reply.from_address == from_email,
+                            Reply.body == body,
+                        ).first()
+
+                        if not existing_reply:
+                            try:
+                                record_reply(
+                                    db=db,
+                                    thread_id=thread_id,
+                                    from_address=from_email,
+                                    subject=subject,
+                                    body=body,
+                                    actor="imap_poller"
+                                )
+                                logger.info(f"Recorded IMAP reply from {from_email} to thread {thread_id}")
+                            except Exception as e:
+                                safe_err = str(e).encode("ascii", "ignore").decode("ascii")
+                                logger.error(f"Failed to record reply from {from_email}: {safe_err}")
+            finally:
+                db.close()
     except Exception as e:
         safe_err = str(e).encode("ascii", "ignore").decode("ascii")
         logger.warning(f"IMAP Polling transient warning: {safe_err}")
@@ -304,6 +315,7 @@ async def start_poller_loop(interval_seconds: int = 60):
     global _RUNNING
     _RUNNING = True
     logger.info("Starting IMAP Inbox Poller loop...")
+    await asyncio.sleep(5)  # Let server complete startup and bind to port
     while _RUNNING:
         try:
             # Run the synchronous IMAP polling in a threadpool to avoid blocking the async loop

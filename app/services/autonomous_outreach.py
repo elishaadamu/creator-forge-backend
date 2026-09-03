@@ -582,6 +582,7 @@ async def start_followup_scheduler_loop():
         f"delay {settings.FOLLOWUP_DELAY_HOURS}h before follow-up fires"
     )
 
+    await asyncio.sleep(10)  # Let server complete startup and bind to port
     while _FOLLOWUP_SCHEDULER_RUNNING:
         try:
             db = SessionLocal()
@@ -616,6 +617,7 @@ async def start_autonomous_scheduler_loop(interval_hours: int = 24):
     global _SCHEDULER_RUNNING
     _SCHEDULER_RUNNING = True
     logger.info("[Outreach Scheduler] Started — batch outreach loop running...")
+    await asyncio.sleep(15)  # Let server complete startup and bind to port
     while _SCHEDULER_RUNNING:
         try:
             db = SessionLocal()
