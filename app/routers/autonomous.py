@@ -970,6 +970,7 @@ class AudienceAndConceptsGenerateSchema(BaseModel):
     platform: Optional[str] = "YouTube"
     followers: Optional[str] = "250K"
     bio: Optional[str] = None
+    allow_fallback: Optional[bool] = False
 
 
 @router.post("/generate-audience-and-concepts")
@@ -1052,6 +1053,20 @@ Return valid JSON only matching the structure above."""
         try:
             data = json.loads(raw)
             if "product_concepts" in data and len(data["product_concepts"]) > 0:
+                data["is_ai_generated"] = True
+                if payload.creator_id:
+                    try:
+                        with SessionLocal() as db:
+                            c_record = db.get(Creator, payload.creator_id)
+                            if c_record:
+                                nd = json.loads(c_record.notes or "{}") if isinstance(c_record.notes, str) else (c_record.notes or {})
+                                nd["product_concepts"] = data["product_concepts"]
+                                nd["audience_intelligence"] = data.get("audience_intelligence")
+                                nd["has_ai_concepts"] = True
+                                c_record.notes = json.dumps(nd)
+                                db.commit()
+                    except Exception as persist_err:
+                        logger.warning(f"[Generate Audience & Concepts] Persist warning: {persist_err}")
                 return data
         except Exception:
             m = re.search(r'\{.*\}', raw, re.DOTALL)
@@ -1059,11 +1074,32 @@ Return valid JSON only matching the structure above."""
                 try:
                     data = json.loads(m.group())
                     if "product_concepts" in data and len(data["product_concepts"]) > 0:
+                        data["is_ai_generated"] = True
+                        if payload.creator_id:
+                            try:
+                                with SessionLocal() as db:
+                                    c_record = db.get(Creator, payload.creator_id)
+                                    if c_record:
+                                        nd = json.loads(c_record.notes or "{}") if isinstance(c_record.notes, str) else (c_record.notes or {})
+                                        nd["product_concepts"] = data["product_concepts"]
+                                        nd["audience_intelligence"] = data.get("audience_intelligence")
+                                        nd["has_ai_concepts"] = True
+                                        c_record.notes = json.dumps(nd)
+                                        db.commit()
+                            except Exception as persist_err:
+                                logger.warning(f"[Generate Audience & Concepts] Persist warning: {persist_err}")
                         return data
                 except Exception:
                     pass
 
-    # High-quality dynamic fallback
+    # If AI synthesis failed and allow_fallback is not requested, raise error
+    if not getattr(payload, "allow_fallback", False):
+        raise HTTPException(
+            status_code=502,
+            detail="AI synthesis failed to produce structured product concepts in time. Please retry."
+        )
+
+    # High-quality dynamic fallback (only when allow_fallback is explicitly requested)
     clean_niche = niche.split()[0] if niche else "Creator"
     fallback_data = {
         "audience_intelligence": {

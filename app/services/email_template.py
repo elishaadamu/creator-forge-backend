@@ -63,42 +63,37 @@ def _clean_and_extract_ref_tokens(raw_text: str) -> tuple[str, str]:
     return cleaned_body, token
 
 
-def render_concept_showcase_html(
-    concepts: Optional[List[Dict[str, Any]]] = None,
-    concept_image_url: Optional[str] = None,
-    creator_name: str = ""
+def _render_single_concept_card(
+    concept: Dict[str, Any],
+    index: int = 0,
+    total_concepts: int = 1,
+    concept_image_url: Optional[str] = None
 ) -> str:
-    """
-    Renders an eye-catching, responsive concept mockup card for Step 5 & Step 6 emails.
-    Shows the app visual image, browser chrome, key metrics, and features.
-    """
-    if not concepts and not concept_image_url:
-        return ""
-
-    top_concept = concepts[0] if (concepts and len(concepts) > 0) else {}
-    app_name = top_concept.get("name") or top_concept.get("title") or "Custom Creator SaaS"
-    tagline = top_concept.get("tagline") or top_concept.get("summary") or top_concept.get("description") or "Tailored software suite engineered for your community"
-    pricing = top_concept.get("pricing") or "$29/mo Starter • $79/mo Pro"
-    problem = top_concept.get("problem") or top_concept.get("description") or ""
-    mockup_data = top_concept.get("mockup") or {}
+    """Renders an individual concept showcase card with visual mockup, pricing, and features."""
+    app_name = concept.get("name") or concept.get("title") or f"Software Concept #{index + 1}"
+    tagline = concept.get("tagline") or concept.get("summary") or concept.get("description") or "Tailored software suite engineered for your community"
+    pricing = concept.get("pricing") or "$29/mo Starter • $79/mo Pro"
+    problem = concept.get("problem") or concept.get("description") or ""
+    score = concept.get("opportunityScore") or concept.get("score") or (98 - index * 3)
+    mockup_data = concept.get("mockup") or {}
 
     app_url = mockup_data.get("appUrl") or f"{app_name.lower().replace(' ', '')}.app"
     primary_metric = mockup_data.get("primaryMetric") or "$18.4K Projected MRR"
     active_metric = mockup_data.get("activeMetric") or "1,240 Active Users"
     efficiency_metric = mockup_data.get("efficiencyMetric") or "14-Day MVP Launch"
 
-    # Select best visual image: custom image URL > concept.imageUrl > category fallback
-    active_image = concept_image_url or top_concept.get("imageUrl") or top_concept.get("image_url")
+    # Select best visual image: custom image URL (if first concept) > concept.imageUrl > category fallback
+    active_image = (concept_image_url if index == 0 else None) or concept.get("imageUrl") or concept.get("image_url")
     if not active_image:
         niche_key = "default"
         for k in CATEGORY_MOCKUP_IMAGES.keys():
-            if k in (top_concept.get("category", "") or "").lower() or k in (tagline or "").lower():
+            if k in (concept.get("category", "") or "").lower() or k in (tagline or "").lower() or k in (app_name or "").lower():
                 niche_key = k
                 break
         active_image = CATEGORY_MOCKUP_IMAGES.get(niche_key, CATEGORY_MOCKUP_IMAGES["default"])
 
     features_html = ""
-    key_features = top_concept.get("keyFeatures") or top_concept.get("features") or []
+    key_features = concept.get("keyFeatures") or concept.get("features") or []
     if key_features and isinstance(key_features, list):
         f_items = "".join(
             f'<li style="margin-bottom:6px;line-height:1.5;color:#cbd5e1;font-size:13px;">'
@@ -120,7 +115,7 @@ def render_concept_showcase_html(
     if problem:
         problem_html = f'''
         <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:10px 14px;margin-top:12px;font-size:12px;color:#94a3b8;line-height:1.5;">
-          <strong style="color:#f8fafc;">Core Bottleneck Solved:</strong> {html.escape(problem)}
+          <strong style="color:#f8fafc;">Solves:</strong> {html.escape(problem)}
         </div>
         '''
 
@@ -132,9 +127,11 @@ def render_concept_showcase_html(
         </div>
         '''
 
+    concept_badge = f"CONCEPT #{index + 1}" if total_concepts > 1 else "PROPOSED SOFTWARE PRODUCT"
+
     return f'''
-    <!-- CONCEPT SHOWCASE CARD -->
-    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:24px 0;background:linear-gradient(145deg,#131a29 0%,#0c101a 100%);border-radius:16px;border:1px solid #2d3748;box-shadow:0 14px 30px rgba(0,0,0,0.45);overflow:hidden;">
+    <!-- CONCEPT SHOWCASE CARD #{index + 1} -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0 24px 0;background:linear-gradient(145deg,#131a29 0%,#0c101a 100%);border-radius:16px;border:1px solid #2d3748;box-shadow:0 14px 30px rgba(0,0,0,0.45);overflow:hidden;">
       <!-- Window Chrome Header -->
       <tr>
         <td style="padding:12px 18px;background:#090d16;border-bottom:1px solid rgba(255,255,255,0.08);">
@@ -149,8 +146,11 @@ def render_concept_showcase_html(
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
+                <span style="background:rgba(168,85,247,0.18);border:1px solid rgba(168,85,247,0.4);color:#d8b4fe;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;margin-right:6px;">
+                  {concept_badge}
+                </span>
                 <span style="background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.35);color:#6ee7b7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;">
-                  MVP Ready To Launch
+                  Score: {score}/100
                 </span>
               </td>
             </tr>
@@ -172,7 +172,8 @@ def render_concept_showcase_html(
                 </div>
               </td>
               <td align="right" style="vertical-align:top;">
-                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#38bdf8;background:rgba(56,189,248,0.1);padding:4px 10px;border-radius:8px;border:1px solid rgba(56,189,248,0.25);white-space:nowrap;">
+                <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;font-weight:700;margin-bottom:2px;text-align:right;">Target Pricing</div>
+                <span style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:800;color:#38bdf8;background:rgba(56,189,248,0.12);padding:5px 12px;border-radius:8px;border:1px solid rgba(56,189,248,0.3);white-space:nowrap;">
                   {html.escape(pricing)}
                 </span>
               </td>
@@ -207,6 +208,45 @@ def render_concept_showcase_html(
       </tr>
     </table>
     '''
+
+
+def render_concept_showcase_html(
+    concepts: Optional[List[Dict[str, Any]]] = None,
+    concept_image_url: Optional[str] = None,
+    creator_name: str = ""
+) -> str:
+    """
+    Renders an eye-catching, responsive concept showcase for Step 5 & Step 6 emails.
+    Shows the full breakdown of all engineered concepts with visual mockups, prominent prices, and features.
+    """
+    if not concepts and not concept_image_url:
+        return ""
+
+    concept_list = concepts if (concepts and len(concepts) > 0) else [{}]
+    # Limit to top 3 concepts
+    concept_list = concept_list[:3]
+    total_count = len(concept_list)
+
+    header_bar = ""
+    if total_count > 1:
+        header_bar = f'''
+        <div style="margin:28px 0 10px 0;padding-bottom:8px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:12px;font-weight:800;color:#a855f7;text-transform:uppercase;letter-spacing:1px;">
+            Top {total_count} Software Opportunities &amp; Pricing Breakdown
+          </span>
+        </div>
+        '''
+
+    cards = []
+    for idx, c in enumerate(concept_list):
+        cards.append(_render_single_concept_card(
+            concept=c,
+            index=idx,
+            total_concepts=total_count,
+            concept_image_url=concept_image_url
+        ))
+
+    return header_bar + "".join(cards)
 
 
 def convert_markdown_to_clean_html(markdown_text: str) -> str:

@@ -384,8 +384,6 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     if not creator and to_email:
         creator = db.query(Creator).filter(Creator.email_public == to_email).first()
     if not creator:
-        creator = db.query(Creator).first()
-    if not creator:
         creator = Creator(
             id=str(uuid.uuid4()),
             handle=to_email.split("@")[0].lower()[:30],
@@ -499,6 +497,8 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
 class SendReplyRequest(BaseModel):
     body: str
     to_email: Optional[str] = None
+    concept_image_url: Optional[str] = None
+    concepts: Optional[List[Dict[str, Any]]] = None
 
 @router.post("/threads/{thread_id}/reply")
 def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "ops_dashboard", db: Session = Depends(get_db)):
@@ -562,12 +562,27 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
         
+    # Resolve concept mockup preview for replies
+    reply_concept_image = payload.concept_image_url
+    reply_concepts = payload.concepts
+    if not reply_concepts and thread.creator and thread.creator.niche_data:
+        try:
+            nd = json.loads(thread.creator.niche_data) if isinstance(thread.creator.niche_data, str) else thread.creator.niche_data
+            reply_concepts = nd.get("product_concepts")
+            if not reply_concept_image and reply_concepts:
+                first_c = reply_concepts[0]
+                reply_concept_image = first_c.get("mockup_url") or first_c.get("appUrl") or first_c.get("imageUrl")
+        except Exception:
+            pass
+
     # Send the email with luxury responsive HTML formatting
     c_name = thread.creator.display_name if thread.creator else ""
     body_html = format_luxury_html_email(
         body_text=payload.body,
         subject=subject,
         creator_name=c_name,
+        concept_image_url=reply_concept_image,
+        concepts=reply_concepts,
     )
     try:
         email_provider.send(
@@ -642,11 +657,21 @@ def _followup_dict(f: FollowUp) -> dict:
 
 
 def _reply_dict(r: Reply) -> dict:
+    from app.config import settings
+    admin_emails = {
+        (settings.GOOGLE_EMAIL or "").lower().strip(),
+        (settings.FROM_EMAIL or "").lower().strip(),
+        "elishadamu97@gmail.com",
+    }
+    is_outgoing = (r.from_address or "").lower().strip() in admin_emails or r.ai_summary == "Outgoing reply from you"
     return {
         "id": r.id, "thread_id": r.thread_id, "from_address": r.from_address,
         "subject": r.subject, "body": r.body,
-        "classification": r.classification, "sentiment": r.sentiment,
-        "ai_summary": r.ai_summary, "crm_stage": r.crm_stage,
+        "classification": "other" if is_outgoing else r.classification,
+        "sentiment": r.sentiment,
+        "ai_summary": "Outgoing reply from you" if is_outgoing else r.ai_summary,
+        "is_outgoing": is_outgoing,
+        "crm_stage": r.crm_stage,
         "received_at": (r.received_at.isoformat() + "Z") if (r.received_at and not r.received_at.isoformat().endswith("Z") and not ("+" in r.received_at.isoformat())) else (r.received_at.isoformat() if r.received_at else None),
     }
 

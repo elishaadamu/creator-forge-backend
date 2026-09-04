@@ -137,6 +137,12 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
     if all_creators is None:
         all_creators = db.query(Creator).all()
 
+    admin_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "elishadamu97@gmail.com").lower().strip()
+    is_admin_email = from_email_clean == admin_email or from_email_clean in ("elishadamu97@gmail.com", (settings.FROM_EMAIL or "").lower().strip())
+    if is_admin_email:
+        # Outbound admin messages must never be treated as inbound creator replies
+        return None
+
     # 3. Match against Creator display_name or handle in subject line
     if not creator_id and subject:
         subj_lower = subject.lower()
@@ -144,22 +150,11 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         for c in sorted_creators:
             c_name = (c.display_name or "").lower().strip()
             c_handle = (c.handle or "").lower().lstrip("@").strip()
-            if (c_name and len(c_name) >= 3 and c_name in subj_lower) or (c_handle and len(c_handle) >= 3 and c_handle in subj_lower):
+            if (c_name and len(c_name) >= 3 and f"for {c_name}" in subj_lower) or (c_handle and len(c_handle) >= 3 and f"for {c_handle}" in subj_lower):
                 creator_id = c.id
                 break
 
-    # 4. Match against OutreachMessage subject
-    if not creator_id and subject:
-        clean_subj = subject.lower().replace("re:", "").replace("fwd:", "").replace("fw:", "").strip()
-        if len(clean_subj) >= 6:
-            msg = db.query(OutreachMessage).filter(OutreachMessage.subject.ilike(f"%{clean_subj[:35]}%")).order_by(OutreachMessage.created_at.desc()).first()
-            if msg and msg.creator_id:
-                creator_id = msg.creator_id
-
-    admin_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "elishadamu97@gmail.com").lower().strip()
-    is_admin_email = from_email_clean == admin_email
-
-    # 5. Match against Creator table (email_public) with multiple-creator disambiguation
+    # 4. Match against Creator table (email_public) with multiple-creator disambiguation
     if not creator_id and not is_admin_email:
         matching_creators = [c for c in all_creators if (c.email_public or "").lower().strip() == from_email_clean]
         if len(matching_creators) == 1:
@@ -253,8 +248,8 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
                         if any(pat in from_lower for pat in ignore_patterns):
                             continue
 
-                        # Ignore outgoing messages from admin unless it's a self-test reply
-                        if from_lower == admin_email and not is_reply_subject:
+                        # Ignore all outgoing/sent messages from admin/studio account
+                        if from_lower == admin_email or from_lower in ("elishadamu97@gmail.com", (settings.FROM_EMAIL or "").lower().strip()):
                             continue
 
                         candidate_messages.append((from_email, subject, body, raw_body))

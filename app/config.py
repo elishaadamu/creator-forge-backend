@@ -109,3 +109,8 @@ class Settings:
 
 settings = Settings()
 
+# Direct convenience exports for easy editing & imports
+STUDIO_NAME = settings.STUDIO_NAME
+STUDIO_TAGLINE = settings.STUDIO_TAGLINE
+STUDIO_LOGO_URL = settings.STUDIO_LOGO_URL
+
