@@ -12,4 +12,4 @@ psycopg2-binary>=2.9.9
 pg8000>=1.31.2
 fpdf2==2.8.4
 cloudinary>=1.40.0
-
+markdown>=3.5.0

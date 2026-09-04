@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
@@ -352,134 +352,17 @@ def trigger_inbox_poll(background_tasks: BackgroundTasks, db: Session = Depends(
         }
 
 
+from app.services.email_template import format_luxury_html_email, convert_markdown_to_clean_html
+
+
 class DirectEmailRequest(BaseModel):
     to_email: str
     subject: str
     body: str
     creator_id: Optional[str] = None
+    concept_image_url: Optional[str] = None
+    concepts: Optional[List[dict]] = None
 
-
-def format_luxury_html_email(body_text: str, subject: str, creator_name: str = "", tracking_token: str = "") -> str:
-    import re
-    paragraphs = [p.strip() for p in body_text.split("\n\n") if p.strip()]
-    formatted_html_parts = []
-    
-    for p in paragraphs:
-        # Check for horizontal rule
-        if p.strip() == "---":
-            formatted_html_parts.append('<hr style="border:none;border-top:1px solid #334155;margin:24px 0;">')
-            continue
-
-        # Check for markdown headings
-        if p.startswith("### "):
-            heading_text = p[4:].strip()
-            formatted_html_parts.append(f'<h3 style="margin:20px 0 10px 0;font-size:16px;font-weight:800;color:#ffffff;letter-spacing:-0.3px;">{heading_text}</h3>')
-            continue
-        elif p.startswith("## "):
-            heading_text = p[3:].strip()
-            formatted_html_parts.append(f'<h2 style="margin:24px 0 12px 0;font-size:18px;font-weight:800;color:#ffffff;letter-spacing:-0.4px;">{heading_text}</h2>')
-            continue
-
-        lines = p.split("\n")
-        # Check if this paragraph is a list of bullet points
-        if all(line.strip().startswith("•") or line.strip().startswith("-") or line.strip().startswith("*") or (len(line) > 2 and line[0].isdigit() and line[1] in (".", ")")) for line in lines):
-            list_items = []
-            for line in lines:
-                clean_line = line.strip().lstrip("•-*0123456789.) ").strip()
-                # Process bolding in list items
-                clean_line = re.sub(r'\*\*(.+?)\*\*', r'<strong style="color:#ffffff;font-weight:700;">\1</strong>', clean_line)
-                list_items.append(f'<li style="margin-bottom:8px;line-height:1.6;color:#e2e8f0;font-size:14px;">{clean_line}</li>')
-            formatted_html_parts.append(f'<ul style="margin:14px 0;padding-left:22px;color:#a855f7;">{"".join(list_items)}</ul>')
-        else:
-            # Check if this paragraph is or contains a standalone URL (like magic portal URL)
-            url_match = re.search(r'(https?://[^\s<]+)', p)
-            p_html = p
-
-            # Convert markdown bolding
-            p_html = re.sub(r'\*\*(.+?)\*\*', r'<strong style="color:#ffffff;font-weight:700;">\1</strong>', p_html)
-            
-            # If paragraph contains a portal URL, render an eye-catching CTA button
-            if url_match:
-                raw_url = url_match.group(1)
-                is_portal = "portal" in raw_url or "launch" in raw_url
-                cta_label = "Open Co-Founder Portal →" if is_portal else "Open Link →"
-                
-                # Replace the URL in text with a glowing luxury button
-                cta_btn_html = f'''<div style="margin:20px 0;text-align:center;">
-                  <a href="{raw_url}" target="_blank" style="display:inline-block;padding:14px 32px;background:linear-gradient(135deg,#9333ea 0%,#6366f1 100%);color:#ffffff;font-size:15px;font-weight:800;text-decoration:none;border-radius:14px;box-shadow:0 10px 25px rgba(147,51,234,0.4);border:1px solid rgba(255,255,255,0.2);letter-spacing:0.3px;">
-                    {cta_label}
-                  </a>
-                  <div style="margin-top:8px;font-size:11px;color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,monospace;">
-                    Secure Direct Access URL: <a href="{raw_url}" style="color:#a855f7;text-decoration:underline;">{raw_url}</a>
-                  </div>
-                </div>'''
-                
-                # Remove raw URL from text and render
-                text_without_url = p_html.replace(raw_url, "").strip().replace("\n", "<br>")
-                if text_without_url:
-                    formatted_html_parts.append(f'<p style="margin:0 0 12px 0;line-height:1.7;color:#cbd5e1;font-size:15px;">{text_without_url}</p>')
-                formatted_html_parts.append(cta_btn_html)
-            else:
-                p_html = p_html.replace("\n", "<br>")
-                formatted_html_parts.append(f'<p style="margin:0 0 16px 0;line-height:1.7;color:#cbd5e1;font-size:15px;">{p_html}</p>')
-
-    body_content = "".join(formatted_html_parts)
-    ref_block = f'<div style="border-top:1px solid #334155;margin-top:28px;padding-top:14px;font-size:11px;color:#64748b;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">Ref: {tracking_token}</div>' if tracking_token else ""
-
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{subject}</title>
-</head>
-<body style="margin:0;padding:0;background-color:#07090e;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#f8fafc;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color:#07090e;padding:32px 16px;">
-    <tr>
-      <td align="center">
-        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:620px;background:#0f172a;border-radius:18px;border:1px solid #1e293b;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.5);">
-          <!-- Header -->
-          <tr>
-            <td style="padding:28px 32px;background:linear-gradient(135deg,#1e1b4b 0%,#0f172a 100%);border-bottom:1px solid #334155;">
-              <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td>
-                    <div style="font-size:18px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">
-                      <span style="color:#a855f7;">CREATOR</span> FORGE
-                    </div>
-                    <div style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-top:2px;">
-                      Venture Studio & Co-Launch Incubation
-                    </div>
-                  </td>
-                  <td align="right">
-                    <span style="background:rgba(168,85,247,0.15);border:1px solid rgba(168,85,247,0.4);color:#d8b4fe;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;">
-                      50/50 Co-Founder
-                    </span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <!-- Body Content -->
-          <tr>
-            <td style="padding:32px;background-color:#0f172a;">
-              {body_content}
-              {ref_block}
-            </td>
-          </tr>
-          <!-- Footer -->
-          <tr>
-            <td style="padding:20px 32px;background:#090d16;border-top:1px solid #1e293b;font-size:12px;color:#64748b;text-align:center;">
-              <div style="font-weight:600;color:#94a3b8;margin-bottom:4px;">Creator Forge Venture Studio</div>
-              <div>Co-launching software empires with leading digital creators.</div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
 
 
 @router.post("/send-direct")
@@ -525,11 +408,22 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
             db.commit()
 
     # Format beautiful luxury HTML template
+    resolved_concepts = payload.concepts
+    resolved_concept_image = payload.concept_image_url
+    if not resolved_concepts and creator and creator.discovery_notes:
+        try:
+            nd = json.loads(creator.discovery_notes)
+            resolved_concepts = nd.get("product_concepts")
+        except Exception:
+            pass
+
     body_html = format_luxury_html_email(
         body_text=payload.body,
         subject=subject_to_send,
         creator_name=creator.display_name if creator else "",
-        tracking_token=tracking_token
+        tracking_token=tracking_token,
+        concept_image_url=resolved_concept_image,
+        concepts=resolved_concepts
     )
 
     # 1. Send via Google SMTP
@@ -652,13 +546,19 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
         
-    # Send the email
+    # Send the email with luxury responsive HTML formatting
+    c_name = thread.creator.display_name if thread.creator else ""
+    body_html = format_luxury_html_email(
+        body_text=payload.body,
+        subject=subject,
+        creator_name=c_name,
+    )
     try:
         email_provider.send(
             to_email=to_email,
             subject=subject,
             body_text=payload.body,
-            body_html=payload.body.replace("\n", "<br>")
+            body_html=body_html
         )
     except Exception as e:
         raise HTTPException(500, f"Failed to send reply: {str(e)}")

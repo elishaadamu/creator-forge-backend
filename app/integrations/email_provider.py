@@ -91,6 +91,19 @@ class EmailProvider:
                 "No email credentials configured. Please set RESEND_API_KEY, SENDGRID_API_KEY, or GOOGLE_EMAIL/GOOGLE_APP_PASSWORD in Render environment."
             )
 
+        # Ensure body_html is formatted with standard luxury responsive HTML template
+        if not body_html or "<!DOCTYPE" not in body_html:
+            try:
+                from app.services.email_template import format_luxury_html_email
+                body_html = format_luxury_html_email(
+                    body_text=body_text or body_html or "",
+                    subject=subject,
+                )
+            except Exception as fmt_err:
+                logger.warning(f"[EmailProvider] Failed to format luxury HTML: {fmt_err}")
+                if not body_html:
+                    body_html = (body_text or "").replace("\n", "<br>")
+
         display_name = from_name or settings.FROM_NAME or "Creator Forge"
         sender_email = (
             from_email
