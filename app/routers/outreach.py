@@ -381,6 +381,22 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     creator = None
     if payload.creator_id:
         creator = db.get(Creator, payload.creator_id)
+    if not creator and to_email:
+        creator = db.query(Creator).filter(Creator.email_public == to_email).first()
+    if not creator:
+        creator = db.query(Creator).first()
+    if not creator:
+        creator = Creator(
+            id=str(uuid.uuid4()),
+            handle=to_email.split("@")[0].lower()[:30],
+            platform="youtube",
+            display_name=to_email.split("@")[0].capitalize(),
+            email_public=to_email,
+            status="contacted"
+        )
+        db.add(creator)
+        db.commit()
+        db.refresh(creator)
 
     subject_to_send = payload.subject
     body_text = payload.body

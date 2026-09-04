@@ -76,10 +76,10 @@ def render_concept_showcase_html(
         return ""
 
     top_concept = concepts[0] if (concepts and len(concepts) > 0) else {}
-    app_name = top_concept.get("name") or "Custom Creator SaaS"
-    tagline = top_concept.get("tagline") or "Tailored software suite engineered for your community"
+    app_name = top_concept.get("name") or top_concept.get("title") or "Custom Creator SaaS"
+    tagline = top_concept.get("tagline") or top_concept.get("summary") or top_concept.get("description") or "Tailored software suite engineered for your community"
     pricing = top_concept.get("pricing") or "$29/mo Starter • $79/mo Pro"
-    problem = top_concept.get("problem") or ""
+    problem = top_concept.get("problem") or top_concept.get("description") or ""
     mockup_data = top_concept.get("mockup") or {}
 
     app_url = mockup_data.get("appUrl") or f"{app_name.lower().replace(' ', '')}.app"
