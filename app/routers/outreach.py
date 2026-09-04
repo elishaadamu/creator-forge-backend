@@ -326,18 +326,22 @@ def list_threads(status: Optional[str] = None, skip: int = 0, limit: int = 50, d
 
 @router.post("/poll-inbox")
 def trigger_inbox_poll(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """Trigger an immediate IMAP fetch in background and return updated threads immediately."""
+    """Trigger an immediate IMAP fetch and return updated threads immediately."""
     from app.services.inbox_poller import poll_inbox_sync
+    result = {}
     try:
-        background_tasks.add_task(poll_inbox_sync)
+        # Run sync with up to 5s wait if another poller is active
+        result = poll_inbox_sync(wait_timeout=5.0)
     except Exception as e:
-        logger.warning(f"Failed to queue background IMAP sync: {e}")
+        logger.warning(f"Failed to run IMAP sync in poll-inbox: {e}")
+        result = {"status": "error", "error": str(e), "new_replies": 0}
         
     try:
         threads = db.query(Thread).order_by(Thread.last_activity.desc()).all()
         return {
             "status": "success",
-            "message": "IMAP inbox polled",
+            "message": f"IMAP inbox polled: {result.get('new_replies', 0)} new replies detected",
+            "new_replies": result.get("new_replies", 0),
             "threads": [_thread_dict(t) for t in threads]
         }
     except Exception as e:

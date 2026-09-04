@@ -38,6 +38,8 @@ app.add_middleware(
 )
 
 import asyncio
+import logging
+logger = logging.getLogger("creator_forge")
 from app.services.inbox_poller import start_poller_loop, stop_poller_loop
 from app.services.autonomous_outreach import (
     start_autonomous_scheduler_loop, stop_autonomous_scheduler_loop,
@@ -50,14 +52,15 @@ async def startup():
     await asyncio.to_thread(init_db)
     # Ensure autonomous table is registered
     from app.models.autonomous_campaign import AutonomousCampaign
-    # Start the IMAP poller loop in the background (polls every 15s for instant autonomous execution)
+    # Start the IMAP poller loop in the background (polls every 15s for instant inbox sync)
     asyncio.create_task(start_poller_loop(interval_seconds=15))
-    # Start the Autonomous Outreach Scheduler loop (new batch emails, runs every 24h)
-    asyncio.create_task(start_autonomous_scheduler_loop(interval_hours=24))
-    # Start the dedicated Follow-up Scheduler loop (runs every FOLLOWUP_CHECK_INTERVAL_HOURS)
-    # Testing default: 1h check interval, 1h delay before follow-up fires
-    # Production: set FOLLOWUP_DELAY_HOURS=168 (7 days) in .env
-    asyncio.create_task(start_followup_scheduler_loop())
+    # Autonomous scheduler loops are disabled by default for human control
+    if settings.ENABLE_AUTONOMOUS_BACKGROUND_SCHEDULER:
+        logger.info("[Autonomous Scheduler] Background loops enabled via configuration.")
+        asyncio.create_task(start_autonomous_scheduler_loop(interval_hours=24))
+        asyncio.create_task(start_followup_scheduler_loop())
+    else:
+        logger.info("[Autonomous Scheduler] Background batch loops disabled (Human Mode active).")
 
 @app.on_event("shutdown")
 def shutdown():

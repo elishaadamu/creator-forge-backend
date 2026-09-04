@@ -41,6 +41,7 @@ class Creator(Base):
         SAEnum(
             "discovered", "qualified", "disqualified",
             "in_review", "approved", "rejected", "suppressed", "contacted",
+            "pitched", "partnered", "launched",
             name="creator_status_enum",
         ),
         default="discovered",

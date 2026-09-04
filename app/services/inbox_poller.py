@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import datetime
 from email.utils import parseaddr
-from typing import Optional
+from typing import Optional, List
 
 from app.config import settings
 from app.database import SessionLocal
@@ -102,7 +102,7 @@ def _parse_email_message(msg):
     cleaned_body = _clean_email_body(raw_body)
     return subject, from_email, cleaned_body, raw_body
 
-def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = "", raw_body: str = "") -> Optional[str]:
+def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = "", raw_body: str = "", all_creators: Optional[List[Creator]] = None) -> Optional[str]:
     """Attempt to find the thread ID for a creator using tracking tokens, handle, subject, or email."""
     if not from_email:
         return None
@@ -134,7 +134,8 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
                 # Handle token belongs to a deleted creator — DO NOT match to other creators
                 return None
 
-    all_creators = db.query(Creator).all()
+    if all_creators is None:
+        all_creators = db.query(Creator).all()
 
     # 3. Match against Creator display_name or handle in subject line
     if not creator_id and subject:
@@ -198,42 +199,41 @@ import socket
 
 _POLL_LOCK = threading.Lock()
 
-def poll_inbox_sync():
+def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
     """Synchronous function that connects to IMAP, fetches recent messages, and processes incoming creator replies."""
     if not settings.GOOGLE_EMAIL or not settings.GOOGLE_APP_PASSWORD:
         logger.warning("IMAP Poller: GOOGLE_EMAIL or GOOGLE_APP_PASSWORD not set. Skipping poll.")
-        return
+        return {"status": "skipped", "reason": "no_credentials", "new_replies": 0}
 
-    # Non-blocking lock: if another sync is currently running, skip to prevent stalling
-    if not _POLL_LOCK.acquire(blocking=False):
+    # Non-blocking or bounded lock acquisition
+    acquired = _POLL_LOCK.acquire(timeout=wait_timeout) if wait_timeout > 0 else _POLL_LOCK.acquire(blocking=False)
+    if not acquired:
         logger.debug("IMAP Poller already running in another thread. Skipping concurrent invocation.")
-        return
+        return {"status": "busy", "reason": "already_running", "new_replies": 0}
 
     admin_email = (settings.GOOGLE_EMAIL or "").lower().strip()
     mail = None
     prev_timeout = socket.getdefaulttimeout()
+    new_replies_count = 0
+    candidate_messages = []
     try:
-        socket.setdefaulttimeout(5)  # 5s fast socket timeout to prevent hang
-        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=5)
+        socket.setdefaulttimeout(8)  # 8s socket timeout to prevent hang
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=8)
         mail.login(settings.GOOGLE_EMAIL, settings.GOOGLE_APP_PASSWORD.replace(" ", ""))
         mail.select("INBOX")
         
-        # Search recent messages (fetch last 15 message IDs for instant response)
+        # Search recent messages (fetch last 20 message IDs for instant response)
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
-            return
+            return {"status": "success", "new_replies": 0, "processed": 0}
             
         all_ids = messages[0].split()
-        email_ids = all_ids[-15:]  # Check last 15 emails for instant responsive sync
-        candidate_messages = []
-        for e_id in email_ids:
-            try:
-                status, msg_data = mail.fetch(e_id, "(RFC822)")
-                if status != "OK":
-                    continue
-                    
-                for response_part in msg_data:
-                    if isinstance(response_part, tuple):
+        email_ids = all_ids[-15:]  # Check last 15 emails for responsive sync
+        status, msg_data = mail.fetch(b",".join(email_ids), "(RFC822)")
+        if status == "OK" and msg_data:
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    try:
                         msg = email.message_from_bytes(response_part[1])
                         subject, from_email, body, raw_body = _parse_email_message(msg)
                         
@@ -258,16 +258,17 @@ def poll_inbox_sync():
                             continue
 
                         candidate_messages.append((from_email, subject, body, raw_body))
-            except Exception as item_err:
-                logger.debug(f"IMAP item fetch error: {item_err}")
-                continue
+                    except Exception as item_err:
+                        logger.debug(f"IMAP item parse error: {item_err}")
+                        continue
 
         # If candidate messages were found, open a dedicated short-lived DB session to process them
         if candidate_messages:
             db = SessionLocal()
             try:
+                all_creators = db.query(Creator).all()
                 for from_email, subject, body, raw_body in candidate_messages:
-                    thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body)
+                    thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body, all_creators=all_creators)
                     if thread_id:
                         existing_reply = db.query(Reply).filter(
                             Reply.thread_id == thread_id,
@@ -285,31 +286,37 @@ def poll_inbox_sync():
                                     body=body,
                                     actor="imap_poller"
                                 )
+                                new_replies_count += 1
                                 logger.info(f"Recorded IMAP reply from {from_email} to thread {thread_id}")
                             except Exception as e:
                                 safe_err = str(e).encode("ascii", "ignore").decode("ascii")
                                 logger.error(f"Failed to record reply from {from_email}: {safe_err}")
             finally:
                 db.close()
+        return {"status": "success", "new_replies": new_replies_count, "processed": len(candidate_messages)}
     except Exception as e:
         safe_err = str(e).encode("ascii", "ignore").decode("ascii")
         logger.warning(f"IMAP Polling transient warning: {safe_err}")
+        return {"status": "error", "error": safe_err, "new_replies": 0}
     finally:
         try:
             socket.setdefaulttimeout(prev_timeout)
-        except:
+        except Exception:
             pass
-        db.close()
         if mail:
             try:
                 mail.close()
-            except:
+            except Exception:
                 pass
             try:
                 mail.logout()
-            except:
+            except Exception:
                 pass
-        _POLL_LOCK.release()
+        if _POLL_LOCK.locked():
+            try:
+                _POLL_LOCK.release()
+            except Exception:
+                pass
 
 async def start_poller_loop(interval_seconds: int = 60):
     global _RUNNING

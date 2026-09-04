@@ -45,6 +45,7 @@ class Settings:
     # Safety Controls
     DAILY_SEND_LIMIT_DEFAULT: int = int(os.getenv("DAILY_SEND_LIMIT", "10"))
     AUTO_SEND_ENABLED: bool = False   # Never auto-send; always require human approval
+    ENABLE_AUTONOMOUS_BACKGROUND_SCHEDULER: bool = os.getenv("ENABLE_AUTONOMOUS_BACKGROUND_SCHEDULER", "false").lower() in ("true", "1", "yes")
     MIN_FOLLOWERS_THRESHOLD: int = 100_000
     MIN_ENGAGEMENT_SCORE: float = 3.0  # minimum quality score (0-10)
 
@@ -77,6 +78,8 @@ class Settings:
     GOOGLE_EMAIL: str = os.getenv("GOOGLE_EMAIL", "")
     GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "elishadamu97@gmail.com")
+    RECIPIENT_EMAIL: str = os.getenv("RECIPIENT_EMAIL", "adamsfair12@gmail.com")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://creator-forge-frontend.vercel.app")
 
     # Integration stubs
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")

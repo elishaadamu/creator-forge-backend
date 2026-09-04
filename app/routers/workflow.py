@@ -67,6 +67,17 @@ def _get_or_create_state(db: Session) -> WorkflowState:
 def get_workflow_state(db: Session = Depends(get_db)):
     """Retrieve shared cross-device workflow state from the Render database."""
     state = _get_or_create_state(db)
+    creator_count = db.query(Creator).count()
+    if creator_count == 0 and (state.creator_stage_map or state.selected_creator_id):
+        state.selected_creator_id = None
+        state.creator_stage_map = {}
+        state.pitch_sent_map = {}
+        state.ai_choice_map = {}
+        state.answer_sent_map = {}
+        state.persuasion_sent_map = {}
+        state.active_project_id = None
+        db.commit()
+        db.refresh(state)
     return _format_state(state)
 
 

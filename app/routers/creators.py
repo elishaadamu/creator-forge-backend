@@ -3,11 +3,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import logging
 from app.database import get_db, SessionLocal
 from app.models.creator import Creator
 from app.services import discovery, analysis as analysis_svc, product_recommendation, deck_generator
 from app.services.contact_discovery import add_contact, get_contacts_for_creator, validate_contact
 from app.services.scraper import scrape_profile
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/creators", tags=["creators"])
 
@@ -375,6 +378,7 @@ class CreatorUpdate(BaseModel):
     location: Optional[str] = None
     website: Optional[str] = None
     email_public: Optional[str] = None
+    email: Optional[str] = None
     notes: Optional[str] = None
     status: Optional[str] = None
 
@@ -401,13 +405,23 @@ def update_creator_details(
         raise HTTPException(404, f"Creator {creator_id} not found")
     
     data = body.model_dump(exclude_unset=True)
+    target_email = (body.email_public or body.email or "").strip()
+    if target_email:
+        c.email_public = target_email
+
     for field, val in data.items():
-        if hasattr(c, field):
+        if field not in ("email", "email_public") and hasattr(c, field):
             setattr(c, field, val)
     
-    if body.email_public:
+    if target_email:
         try:
-            add_contact(db, c.id, "email", body.email_public, "manual_edit", actor=actor)
+            from app.models.creator import Contact
+            contact = db.query(Contact).filter(Contact.creator_id == c.id, Contact.contact_type == "email").first()
+            if contact:
+                contact.value = target_email
+            else:
+                contact = Contact(creator_id=c.id, contact_type="email", value=target_email, source="manual_edit")
+                db.add(contact)
         except Exception:
             pass
             

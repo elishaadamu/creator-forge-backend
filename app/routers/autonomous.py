@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -12,6 +13,9 @@ from app.services import autonomous_outreach as auto_svc
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/autonomous", tags=["autonomous"])
+
+# Global thread-safe event for interrupting active discovery batches
+_DISCOVERY_ABORT_EVENT = threading.Event()
 
 
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────
@@ -289,6 +293,9 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     from app.services.scraper import search_youtube_channels, scrape_profile, scrape_youtube
     from app.services.discovery import create_or_get_creator
 
+    # Clear any previous abort event when initiating a new discovery
+    _DISCOVERY_ABORT_EVENT.clear()
+
     # Read API keys from request headers or environment
     ai_keys = {
         "geminiKey": request.headers.get("X-Gemini-Key") or settings.GEMINI_API_KEY,
@@ -321,14 +328,16 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     per_platform = max(1, (target_count + num_platforms - 1) // num_platforms)
     
     # 1. YouTube Discovery
-    if "youtube" in platforms:
+    if "youtube" in platforms and not _DISCOVERY_ABORT_EVENT.is_set():
         try:
             yt_found = []
             search_limit = max(target_count, 3)
             for n in niches[:2]:
+                if _DISCOVERY_ABORT_EVENT.is_set():
+                    break
                 found = search_youtube_channels(n, limit=search_limit, min_followers=data.min_followers, max_followers=data.max_followers)
                 yt_found.extend(found)
-                if len(yt_found) >= target_count:
+                if len(yt_found) >= target_count or _DISCOVERY_ABORT_EVENT.is_set():
                     break
             for ch in yt_found:
                 h = ch.get("handle", "").lstrip("@").strip()
@@ -387,7 +396,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
             break
 
     # 2. Instagram Discovery (seed limit proportional to target_count)
-    if "instagram" in platforms:
+    if "instagram" in platforms and not _DISCOVERY_ABORT_EVENT.is_set():
         try:
             ig_seeds = NICHE_PLATFORM_CREATORS.get(niche_key, {}).get("instagram", NICHE_PLATFORM_CREATORS["tech"]["instagram"])
             for c in candidates:
@@ -397,6 +406,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
             ig_limit = min(len(ig_seeds), max(2, per_platform))
             ig_found = apify_scrape_instagram_profiles(ig_seeds[:ig_limit], apify_token=apify_token, timeout_secs=45)
             for item in ig_found:
+                if _DISCOVERY_ABORT_EVENT.is_set():
+                    break
                 h = item.get("handle", "").lstrip("@").strip()
                 f_count = item.get("follower_count", 0)
                 if f_count > 0 and f_count < int(data.min_followers * 0.70):
@@ -421,7 +432,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
             logger.warning(f"Instagram discovery notice: {ig_err}")
 
     # 3. TikTok Discovery (seed limit proportional to target_count)
-    if "tiktok" in platforms:
+    if "tiktok" in platforms and not _DISCOVERY_ABORT_EVENT.is_set():
         try:
             tt_seeds = NICHE_PLATFORM_CREATORS.get(niche_key, {}).get("tiktok", NICHE_PLATFORM_CREATORS["tech"]["tiktok"])
             tt_limit = min(len(tt_seeds), max(2, per_platform))
@@ -824,12 +835,20 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
         })
 
     return {
-        "status": "success",
+        "status": "stopped" if _DISCOVERY_ABORT_EVENT.is_set() else "success",
         "discovered_count": len(discovered_results),
         "candidate_count": len(candidates),
         "enriched_count": len(enriched_list),
         "creators": discovered_results,
     }
+
+
+@router.post("/stop-discovery")
+def stop_discovery():
+    """Immediately halt any active autonomous creator discovery process."""
+    _DISCOVERY_ABORT_EVENT.set()
+    logger.info("[Discovery] Stop signal received via POST /api/autonomous/stop-discovery.")
+    return {"status": "success", "message": "Discovery abort signal set"}
 
 
 class DecisionEmailGenerateSchema(BaseModel):

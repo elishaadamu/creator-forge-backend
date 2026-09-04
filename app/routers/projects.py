@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -83,9 +84,12 @@ class GateDecisionRequest(BaseModel):
 class TrackVisitRequest(BaseModel):
     slug: Optional[str] = None
     projectId: Optional[str] = None
+    clientId: Optional[str] = None
+    fingerprint: Optional[str] = None
     channel: Optional[str] = "Direct / Other"
     ref: Optional[str] = None
     path: Optional[str] = None
+    isNewVisitor: Optional[bool] = None
 
 
 def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
@@ -264,9 +268,20 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         existing_creator_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == body.creatorId).first()
     if not existing_creator_proj and body.creatorEmail:
         existing_creator_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_email == body.creatorEmail).first()
+    clean_handle = (body.creatorHandle or "").lstrip("@").strip().lower()
+    if not existing_creator_proj and clean_handle:
+        existing_creator_proj = db.query(CoLaunchProject).filter(
+            CoLaunchProject.creator_handle.ilike(f"%{clean_handle}%")
+        ).first()
+    if not existing_creator_proj and body.creatorName:
+        clean_name = body.creatorName.strip().lower()
+        if clean_name and len(clean_name) >= 3:
+            existing_creator_proj = db.query(CoLaunchProject).filter(
+                CoLaunchProject.creator_name.ilike(f"%{clean_name}%")
+            ).first()
 
     if existing_creator_proj:
-        logger.info(f"[execute_create_co_launch_project] Project {existing_creator_proj.id} already exists for creator {body.creatorId or body.creatorEmail}. Returning existing project to prevent duplicate emails.")
+        logger.info(f"[execute_create_co_launch_project] Project {existing_creator_proj.id} already exists for creator {body.creatorId or body.creatorHandle or body.creatorName}. Returning existing project.")
         return _format_project_response(existing_creator_proj)
 
     proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
@@ -306,6 +321,25 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     db.commit()
     db.refresh(proj)
 
+    # Dynamic pricing extraction from concept / payload
+    import re
+    raw_pricing = body.pricing or "$29/mo Starter • $79/mo Pro"
+    price_matches = [int(p) for p in re.findall(r'\$(\d+)', raw_pricing)]
+    if len(price_matches) >= 2:
+        starter_price = price_matches[0]
+        pro_price = price_matches[1]
+        founding_price = price_matches[2] if len(price_matches) > 2 else max(starter_price * 3, 89)
+    elif len(price_matches) == 1:
+        founding_price = price_matches[0]
+        starter_price = max(9, int(round(founding_price * 0.3)))
+        pro_price = max(starter_price * 2, int(round(founding_price * 0.7)))
+    else:
+        starter_price = 29
+        pro_price = 79
+        founding_price = 99
+    
+    deposit_price = max(9, int(round(founding_price * 0.2)))
+
     # 1. Step 1: Create Validation Plan
     customer_desc = body.customer or body.targetAudience or f"{body.niche or 'Creator'} audience and builders"
     problem_desc = body.problem or f"Manual workflows and lack of specialized tooling in {body.niche or 'this space'}"
@@ -315,7 +349,7 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         customer=customer_desc,
         problem=problem_desc,
         offer=offer_desc,
-        pricing=body.pricing or "$29/mo Starter • $79/mo Pro",
+        pricing=raw_pricing,
         test_method="1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
         period="14 days",
         threshold=f"${int(body.presaleTarget or 5000):,} in presales within 14 days",
@@ -334,10 +368,15 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             "positioning": f"The #1 automated platform built exclusively for {customer_desc}",
             "headline": f"Finally, an operating system tailored for {body.niche or 'your'} workflows",
             "mockup": body.mockup or {},
+            "pricingConfig": {
+                "foundingPrice": founding_price,
+                "depositPrice": deposit_price,
+                "perks": f"50% Lifetime Price Lock & VIP Alpha Perks for {proj.creator_name or 'Founding'} Backers"
+            },
             "pricingTiers": [
-                {"name": "Founding Member", "price": 99, "period": "lifetime", "perks": "Lifetime core access, private Discord, roadmap voting"},
-                {"name": "Starter Plan", "price": 29, "period": "month", "perks": "Full template library, monthly updates, standard support"},
-                {"name": "Pro Builder", "price": 79, "period": "month", "perks": "Unlimited syncs, 1-on-1 onboarding, priority feature access"},
+                {"name": "Founding Member", "price": founding_price, "period": "lifetime", "perks": "Lifetime core access, private Discord, roadmap voting"},
+                {"name": "Starter Plan", "price": starter_price, "period": "month", "perks": "Full template library, monthly updates, standard support"},
+                {"name": "Pro Builder", "price": pro_price, "period": "month", "perks": "Unlimited syncs, 1-on-1 onboarding, priority feature access"},
             ]
         },
         infrastructure={
@@ -351,7 +390,7 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             "summary": f"Initial audience feedback survey identifying key pain points in {body.niche or 'niche'}.",
             "questions": [
                 {"id": "q1", "question": f"What is your biggest daily roadblock when executing {body.niche or 'work'}?", "type": "text"},
-                {"id": "q2", "question": f"Would you pay $29–$79/month for a tool that automates this completely?", "type": "multiple_choice", "options": ["Definitely yes", "Maybe", "No"]},
+                {"id": "q2", "question": f"Would you pay ${starter_price}–${pro_price}/month for a tool that automates this completely?", "type": "multiple_choice", "options": ["Definitely yes", "Maybe", "No"]},
                 {"id": "q3", "question": "What software do you currently stitch together to solve this?", "type": "text"},
             ],
             "responses": []
@@ -365,7 +404,7 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         (1, "instagram", "Post Instagram Story #1: The Problem Teaser", f"Hey everyone! I've been noticing how frustrating {problem_desc.lower()} has been lately. Who else deals with this daily?", "Vote on poll + DM me", f"https://launch.app/p/{slug}?utm=ig_story1"),
         (2, "instagram", "Post Instagram Story #2: Behind-The-Scenes Co-Founding", f"Yesterday so many of you replied about this. That's why I'm co-founding {body.productName} to fix it once and for all! Link below to see the first preview.", "Tap link to view preview", f"https://launch.app/p/{slug}?utm=ig_story2"),
         (3, "youtube", "YouTube Video Integration Script (60s Mid-Roll)", f"Before we continue, a quick heads-up: my team and I are launching {body.productName}. If you're tired of {problem_desc.lower()}, we're opening 50 founding spots today at 50% off.", "Check link in top pinned comment", f"https://launch.app/p/{slug}?utm=yt_desc"),
-        (5, "newsletter", "Newsletter Broadcast: Founding Cohort Announcement", f"Subject: Building something new with you.\n\nOver the past 6 months, the #1 request I received was a dedicated solution for {body.niche or 'creators'}. Today we're opening presales for {body.productName}.", "Reserve Founding Access ($99)", f"https://launch.app/p/{slug}?utm=newsletter"),
+        (5, "newsletter", "Newsletter Broadcast: Founding Cohort Announcement", f"Subject: Building something new with you.\n\nOver the past 6 months, the #1 request I received was a dedicated solution for {body.niche or 'creators'}. Today we're opening presales for {body.productName}.", f"Reserve Founding Access (${founding_price})", f"https://launch.app/p/{slug}?utm=newsletter"),
         (7, "twitter", "X / Twitter Breakdown Thread", f"1/5 Why existing tools fail for {customer_desc}.\n\n2/5 How we designed {body.productName} from scratch to cut setup time by 90%.\n\n3/5 Pre-order cohort open now (first 50 members get lifetime updates).", "Read thread & grab pass", f"https://launch.app/p/{slug}?utm=twitter"),
         (10, "instagram", "Post Instagram Story #3: Live Backer Progress", f"Update: We just crossed $3,000 in pre-orders in 48 hours! Only 18 founding member passes remain before prices increase.", "Claim remaining pass", f"https://launch.app/p/{slug}?utm=ig_story3"),
         (14, "youtube", "Community Post & Final Call", f"Closing the founding presale window for {body.productName} tonight at midnight. Huge thank you to the 40+ founding builders who joined!", "Final 6 hours to join", f"https://launch.app/p/{slug}?utm=yt_comm"),
@@ -407,15 +446,12 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
                 "id": "exp_price_1",
                 "category": "pricing",
                 "title": "Lifetime Founding Pass vs Monthly",
-                "hypothesis": "Offering a $99 lifetime founding pass accelerates initial presale velocity towards the $5K threshold",
-                "variant": "$99 Lifetime Founding Access (Limited to first 50 builders)",
+                "hypothesis": f"Offering a ${founding_price} lifetime founding pass accelerates initial presale velocity towards the ${int(body.presaleTarget or 5000):,} threshold",
+                "variant": f"${founding_price} Lifetime Founding Access (Limited to first 50 builders)",
                 "status": "ready"
             }
         ],
-        feedback_clusters=[
-            {"topic": "Setup Simplicity", "count": 28, "sentiment": "positive", "quote": "If this actually takes less than 5 minutes to connect, take my money."},
-            {"topic": "Pricing Sensitivity", "count": 14, "sentiment": "neutral", "quote": "Is there an annual discount option?"}
-        ]
+        feedback_clusters=[]
     )
     db.add(telemetry)
     db.commit()
@@ -759,6 +795,132 @@ def update_creator_task(project_id: str, task_id: str, body: UpdateTaskRequest, 
     return {"status": "success", "taskId": task.id, "newStatus": task.status}
 
 
+@router.post("/{project_id}/remind-task/{task_id}")
+def send_task_reminder(project_id: str, task_id: str, db: Session = Depends(get_db)):
+    """
+    Send an email reminder to the creator for a specific or overdue campaign post task.
+    Includes the post draft, channel instructions, and tracking link.
+    """
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    task = db.query(CreatorCampaignTask).filter(
+        CreatorCampaignTask.project_id == project_id,
+        CreatorCampaignTask.id == task_id
+    ).first()
+    if not task:
+        raise HTTPException(404, f"Task '{task_id}' not found")
+
+    from app.integrations.email_provider import email_provider
+    from app.config import settings
+
+    creator_email = (proj.creator_email or settings.RECIPIENT_EMAIL or "").strip()
+    admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
+    base_frontend = (settings.FRONTEND_URL or "https://creator-forge-frontend.vercel.app").rstrip("/")
+    portal_slug = (proj.creator_handle or proj.creator_name or "creator").replace("@", "").replace(" ", "").strip().lower()
+    portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token={proj.portal_token}&project={proj.id}"
+
+    subject = f"[LAUNCH MISSION] Day {task.day_number} Posting Reminder: {task.task_title}"
+    body_text = f"""Hi {proj.creator_name or 'there'},
+
+This is a quick reminder for your Day {task.day_number} co-launch milestone for {proj.product_name}!
+
+Channel: {task.channel.upper()}
+Mission: {task.task_title}
+
+--- READY-TO-POST CONTENT DRAFT ---
+{task.content_draft or 'See portal for draft details'}
+
+Call to Action: {task.cta_text or 'Claim founding access'}
+Your Tracking Link: {task.tracking_link or f'{base_frontend}/preorder/{portal_slug}'}
+
+You can view the full draft, story sequences, and mark this task complete in your Creator Portal:
+{portal_magic_link}
+
+Best regards,
+Creator Forge Studio Operations"""
+
+    body_html = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0c0e14; color: #f1f5f9; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
+        <div style="display: inline-block; padding: 4px 12px; background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.3); border-radius: 20px; font-size: 11px; font-weight: bold; color: #c084fc; margin-bottom: 12px;">
+            DAY {task.day_number} LAUNCH MISSION REMINDER
+        </div>
+        <h2 style="color: #ffffff; margin-top: 0; font-size: 20px;">{task.task_title}</h2>
+        <p style="color: #94a3b8; font-size: 14px; line-height: 1.6;">
+            Hi {proj.creator_name or 'there'}, here is your scheduled launch post for <strong>{proj.product_name}</strong> on <strong>{task.channel.capitalize()}</strong>. Ready to copy and publish to your audience:
+        </p>
+
+        <div style="margin: 20px 0; padding: 18px; background: #161a24; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;">
+            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: bold; color: #a855f7; text-transform: uppercase;">Ready-to-Post Copy Draft:</p>
+            <p style="margin: 0; font-size: 13px; color: #e2e8f0; line-height: 1.7; white-space: pre-wrap;">{task.content_draft or ''}</p>
+        </div>
+
+        <div style="margin: 16px 0; padding: 14px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px;">
+            <p style="margin: 0 0 6px 0; font-size: 11px; font-weight: bold; color: #34d399; text-transform: uppercase;">Your Unique Pre-Order Tracking Link:</p>
+            <a href="{task.tracking_link or portal_magic_link}" style="color: #6ee7b7; font-size: 13px; font-weight: bold; word-break: break-all;">{task.tracking_link or portal_magic_link}</a>
+        </div>
+
+        <div style="margin: 24px 0 12px 0; text-align: center;">
+            <a href="{portal_magic_link}" style="display: inline-block; padding: 12px 28px; background: #9333ea; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 14px; border-radius: 10px; box-shadow: 0 4px 14px rgba(147, 51, 234, 0.4);">
+                Open Creator Portal & Mark Done &rarr;
+            </a>
+        </div>
+        <p style="color: #64748b; font-size: 11px; text-align: center; margin-top: 16px;">
+            Co-Launch Partner Portal for {proj.product_name} &bull; 50/50 Revenue Share Active
+        </p>
+    </div>
+    """
+
+    sent_to = []
+    if creator_email and "@" in creator_email:
+        try:
+            email_provider.send(
+                to_email=creator_email,
+                subject=subject,
+                body_html=body_html,
+                body_text=body_text
+            )
+            sent_to.append(creator_email)
+        except Exception as e:
+            logger.warning(f"Failed to send task reminder to creator {creator_email}: {e}")
+
+    # Also notify admin
+    if admin_email and "@" in admin_email and admin_email not in sent_to:
+        try:
+            email_provider.send(
+                to_email=admin_email,
+                subject=f"[ADMIN COPY] {subject}",
+                body_html=body_html,
+                body_text=body_text
+            )
+            sent_to.append(admin_email)
+        except Exception as e:
+            logger.warning(f"Failed to send task reminder admin copy: {e}")
+
+    # Log in activity logs
+    meta = dict(proj.metadata_info or {})
+    logs = list(meta.get("activity_logs", []))
+    logs.append({
+        "id": str(uuid.uuid4()),
+        "type": "campaign_reminder",
+        "description": f"Dispatched reminder email for Day {task.day_number} ({task.channel}) to {', '.join(sent_to) if sent_to else 'Pending email'}",
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    meta["activity_logs"] = logs
+    proj.metadata_info = meta
+    db.commit()
+
+    return {
+        "status": "sent" if sent_to else "mocked",
+        "sentTo": sent_to,
+        "taskId": task.id,
+        "taskTitle": task.task_title,
+        "dayNumber": task.day_number,
+        "channel": task.channel
+    }
+
+
 @router.post("/{project_id}/reservations")
 def add_reservation(project_id: str, body: AddReservationRequest, db: Session = Depends(get_db)):
     """Record a verified buyer pre-order / reservation in Step 4 Telemetry."""
@@ -857,8 +1019,13 @@ def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session
 def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db)):
     """
     Universal public page/preorder visit recorder.
-    Increments unique visitors, channel attribution count in DB, and updates live telemetry.
+    Accurately tracks unique devices/visitors using client IDs and device fingerprints.
+    Page reloads on the same device increment page views, NOT unique visitors.
     """
+    # Exclude internal admin dashboard visits if accidentally sent
+    if body.path and ("/dashboard" in body.path or "/admin" in body.path):
+        return {"status": "ignored", "message": "Admin dashboard views are not tracked as customer visits"}
+
     proj = None
     if body.projectId:
         proj = db.get(CoLaunchProject, body.projectId)
@@ -884,20 +1051,41 @@ def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db
         telemetry = ValidationTelemetry(project_id=proj.id)
         db.add(telemetry)
 
-    # Increment visitors & page views
-    telemetry.visitors = int(telemetry.visitors or 0) + 1
+    # 1. Total page views always increments by 1
     telemetry.views = int(telemetry.views or 0) + 1
-    proj.visitors = telemetry.visitors
+
+    # 2. Check if this client ID or device fingerprint has already been recorded
+    meta = dict(proj.metadata_info or {})
+    raw_tracked = meta.get("tracked_client_ids") or []
+    tracked_clients = set(raw_tracked)
+
+    client_key = (body.clientId or body.fingerprint or "").strip()
+
+    is_truly_new = False
+    if client_key:
+        if client_key not in tracked_clients:
+            tracked_clients.add(client_key)
+            meta["tracked_client_ids"] = list(tracked_clients)[-5000:]
+            proj.metadata_info = meta
+            is_truly_new = True
+    elif body.isNewVisitor is True:
+        is_truly_new = True
+
+    # 3. Only increment unique visitors if genuinely a new device/client, or if visitors count was 0
+    if is_truly_new or not telemetry.visitors:
+        telemetry.visitors = max(1, len(tracked_clients) if tracked_clients else (int(telemetry.visitors or 0) + 1))
+        proj.visitors = telemetry.visitors
 
     # Map normalized channel
     chan = body.channel or "Direct / Other"
     cur_attr = dict(telemetry.channel_attribution or {})
-    cur_attr[chan] = cur_attr.get(chan, 0) + 1
-    telemetry.channel_attribution = cur_attr
+    if is_truly_new or chan not in cur_attr:
+        cur_attr[chan] = cur_attr.get(chan, 0) + 1
+        telemetry.channel_attribution = cur_attr
 
     # Recalculate conversion rate
     res_count = len(telemetry.reservations or [])
-    if telemetry.visitors > 0:
+    if telemetry.visitors and telemetry.visitors > 0:
         telemetry.conversion_rate = round((res_count / telemetry.visitors) * 100, 1)
         proj.conversion_rate = telemetry.conversion_rate
 
