@@ -257,19 +257,43 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     if not markdown_text:
         return ""
 
-    # 1. Normalize bullet characters (•, -, *) to standard markdown lists
+    # 1. Normalize lines, headings, and bullet characters (•, -, *) to standard markdown lists
     lines = markdown_text.splitlines()
     normalized_lines = []
     
+    list_marker_pattern = re.compile(r"^(\s*)(?:[•\-\*]|\d+[\.\)])\s+")
+    heading_pattern = re.compile(r"^#{1,6}\s+")
+    in_list = False
+
     for line in lines:
         stripped = line.strip()
+        is_list_item = bool(list_marker_pattern.match(stripped))
+        is_heading = bool(heading_pattern.match(stripped))
+
         # If line starts with unicode bullet •, convert to markdown *
         if stripped.startswith("•"):
             indent_count = len(line) - len(line.lstrip())
             indent = " " * indent_count
-            normalized_lines.append(f"{indent}* {stripped[1:].strip()}")
-        else:
-            normalized_lines.append(line)
+            line = f"{indent}* {stripped[1:].strip()}"
+            is_list_item = True
+
+        # Ensure blank line before heading if previous line was not blank
+        if is_heading and normalized_lines and normalized_lines[-1].strip():
+            normalized_lines.append("")
+
+        # Ensure blank line before list starts if previous line was not blank
+        if is_list_item and not in_list:
+            if normalized_lines and normalized_lines[-1].strip():
+                normalized_lines.append("")
+            in_list = True
+        elif not is_list_item and in_list and stripped:
+            # List ended, insert blank line before regular text
+            normalized_lines.append("")
+            in_list = False
+        elif not stripped:
+            in_list = False
+
+        normalized_lines.append(line)
 
     clean_md = "\n".join(normalized_lines)
 
