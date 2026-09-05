@@ -111,6 +111,7 @@ class ValidationCampaign(Base):
     product_assets = Column(JSON, default=dict)
     infrastructure = Column(JSON, default=dict)
     research_survey = Column(JSON, default=dict)
+    campaign_kit = Column(JSON, default=dict)
 
     review_status = Column(String, default="draft", index=True) # 'draft', 'pending_approval', 'approved', 'launched'
     approved_by = Column(String, nullable=True)

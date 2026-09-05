@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models.project import (
@@ -40,6 +41,8 @@ class CreateProjectRequest(BaseModel):
     presaleTarget: Optional[float] = 12500.0
     selectedConcept: Optional[Dict[str, Any]] = None
     mockup: Optional[Dict[str, Any]] = None
+    campaign_kit: Optional[Dict[str, Any]] = None
+    campaignKit: Optional[Dict[str, Any]] = None
 
 
 class UpdatePlanRequest(BaseModel):
@@ -56,12 +59,18 @@ class UpdatePlanRequest(BaseModel):
 
 class UpdateCampaignRequest(BaseModel):
     product_assets: Optional[Dict[str, Any]] = None
+    productAssets: Optional[Dict[str, Any]] = None
     infrastructure: Optional[Dict[str, Any]] = None
     research_survey: Optional[Dict[str, Any]] = None
+    researchSurvey: Optional[Dict[str, Any]] = None
     review_status: Optional[str] = None # 'draft', 'approved', 'launched'
+    reviewStatus: Optional[str] = None
     campaign_kit: Optional[Dict[str, Any]] = None
+    campaignKit: Optional[Dict[str, Any]] = None
     creator_tasks: Optional[List[Dict[str, Any]]] = None
+    creatorTasks: Optional[List[Dict[str, Any]]] = None
     campaign_launched: Optional[bool] = None
+    campaignLaunched: Optional[bool] = None
 
 
 
@@ -204,17 +213,32 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             "productAssets": campaign.product_assets,
             "infrastructure": campaign.infrastructure,
             "researchSurvey": campaign.research_survey,
+            "campaignKit": (
+                (campaign.campaign_kit if campaign and getattr(campaign, "campaign_kit", None) else None) or
+                (proj.metadata_info or {}).get("campaign_kit") or
+                (proj.metadata_info or {}).get("campaignKit") or
+                (campaign.product_assets.get("campaign_kit") if campaign and isinstance(campaign.product_assets, dict) else None)
+            ),
             "reviewStatus": campaign.review_status,
             "approvedAt": campaign.approved_at.isoformat() if campaign.approved_at else None,
         } if campaign else None,
-        "campaignKit": (proj.metadata_info or {}).get("campaign_kit") or (proj.metadata_info or {}).get("campaignKit") or (campaign.product_assets if campaign and (campaign.product_assets or {}).get("postingSchedule") else None),
+        "campaignKit": (
+            (campaign.campaign_kit if campaign and getattr(campaign, "campaign_kit", None) else None) or
+            (proj.metadata_info or {}).get("campaign_kit") or
+            (proj.metadata_info or {}).get("campaignKit") or
+            (campaign.product_assets.get("campaign_kit") if campaign and isinstance(campaign.product_assets, dict) else None) or
+            (campaign.product_assets.get("campaignKit") if campaign and isinstance(campaign.product_assets, dict) else None) or
+            (campaign.product_assets if campaign and isinstance(campaign.product_assets, dict) and campaign.product_assets.get("postingSchedule") else None)
+        ),
         "campaignLaunched": bool(
             (proj.metadata_info or {}).get("campaign_launched") or
+            (campaign.campaign_kit if campaign and getattr(campaign, "campaign_kit", None) else None) or
             (proj.metadata_info or {}).get("campaign_kit") or
             (campaign.review_status in ("approved", "launched") if campaign else False) or
             len(tasks) > 0
         ),
         "campaignAssetsGenerated": bool(
+            (campaign.campaign_kit if campaign and getattr(campaign, "campaign_kit", None) else None) or
             (proj.metadata_info or {}).get("campaign_kit") or
             (campaign.product_assets if campaign and (campaign.product_assets or {}).get("postingSchedule") else False) or
             len(tasks) > 0
@@ -638,6 +662,10 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
         ).first()
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
+
+    return _format_project_response(proj)
+
+
 @router.patch("/{project_id}")
 @router.put("/{project_id}")
 def update_project_general(project_id: str, body: Dict[str, Any], db: Session = Depends(get_db)):
@@ -749,7 +777,21 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
     if "productInfrastructure" in body or "product_infrastructure" in body:
         cur_meta["product_infrastructure"] = body.get("productInfrastructure") or body.get("product_infrastructure")
 
+    if "campaignKit" in body or "campaign_kit" in body:
+        ck = body.get("campaignKit") or body.get("campaign_kit")
+        if ck and isinstance(ck, dict):
+            cur_meta["campaign_kit"] = ck
+            cur_meta["campaign_launched"] = True
+            if proj.validation_campaign:
+                proj.validation_campaign.campaign_kit = ck
+                flag_modified(proj.validation_campaign, "campaign_kit")
+
+    if "campaignLaunched" in body or "campaign_launched" in body:
+        cl = body.get("campaignLaunched") if body.get("campaignLaunched") is not None else body.get("campaign_launched")
+        cur_meta["campaign_launched"] = bool(cl)
+
     proj.metadata_info = cur_meta
+    flag_modified(proj, "metadata_info")
 
     proj.updated_at = datetime.utcnow()
     db.commit()
@@ -798,38 +840,73 @@ def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db:
         campaign = ValidationCampaign(project_id=proj.id)
         db.add(campaign)
 
-    if body.product_assets is not None: campaign.product_assets = body.product_assets
+    prod_assets = body.product_assets if body.product_assets is not None else body.productAssets
+    if prod_assets is not None: campaign.product_assets = prod_assets
     if body.infrastructure is not None: campaign.infrastructure = body.infrastructure
-    if body.research_survey is not None: campaign.research_survey = body.research_survey
-    if body.review_status is not None:
-        campaign.review_status = body.review_status
-        if body.review_status in ("approved", "launched"):
+    res_survey = body.research_survey if body.research_survey is not None else body.researchSurvey
+    if res_survey is not None: campaign.research_survey = res_survey
+    rev_status = body.review_status if body.review_status is not None else body.reviewStatus
+    if rev_status is not None:
+        campaign.review_status = rev_status
+        if rev_status in ("approved", "launched"):
             campaign.approved_at = datetime.utcnow()
             campaign.approved_by = "Lead Founder"
 
     # Step 3: Campaign Kit & Launch State Persistence
+    kit = body.campaign_kit if body.campaign_kit is not None else body.campaignKit
+    if kit is None and prod_assets and isinstance(prod_assets, dict):
+        if "campaign_kit" in prod_assets:
+            kit = prod_assets["campaign_kit"]
+        elif "campaignKit" in prod_assets:
+            kit = prod_assets["campaignKit"]
+
     meta = dict(proj.metadata_info or {})
-    if body.campaign_kit is not None:
-        meta["campaign_kit"] = body.campaign_kit
+    if kit is not None:
+        campaign.campaign_kit = kit
+        meta["campaign_kit"] = kit
         meta["campaign_launched"] = True
-    if body.campaign_launched is not None:
-        meta["campaign_launched"] = body.campaign_launched
-        if body.campaign_launched:
+        flag_modified(campaign, "campaign_kit")
+
+    camp_launched = body.campaign_launched if body.campaign_launched is not None else body.campaignLaunched
+    if camp_launched is not None:
+        meta["campaign_launched"] = camp_launched
+        if camp_launched:
             campaign.review_status = "approved"
+
     proj.metadata_info = meta
+    flag_modified(proj, "metadata_info")
 
     # Step 3: Creator Campaign Tasks in PostgreSQL
-    if body.creator_tasks is not None and isinstance(body.creator_tasks, list) and len(body.creator_tasks) > 0:
+    creator_tasks = body.creator_tasks if body.creator_tasks is not None else body.creatorTasks
+    if creator_tasks is not None and isinstance(creator_tasks, list) and len(creator_tasks) > 0:
         db.query(CreatorCampaignTask).filter(CreatorCampaignTask.project_id == proj.id).delete()
-        for idx, t in enumerate(body.creator_tasks):
+        for idx, t in enumerate(creator_tasks):
             t_day = t.get("dayNumber") or t.get("day_number") or t.get("day") or (idx + 1)
             t_status = "completed" if (t.get("done") or t.get("status") == "completed") else (t.get("status") or "pending")
+            
+            # Smart draft extraction if draft is empty but draftKey or channel exists
+            raw_draft = str(t.get("content") or t.get("content_draft") or t.get("draft") or "").strip()
+            draft_key = t.get("draftKey") or t.get("draft_key")
+            if not raw_draft and kit and isinstance(kit, dict):
+                if draft_key and kit.get(draft_key):
+                    raw_draft = str(kit.get(draft_key))
+                elif t.get("channel") in ("Twitter / X", "twitter", "All Social Channels") and kit.get("announcementPost"):
+                    raw_draft = str(kit.get("announcementPost"))
+                elif "Story" in str(t.get("title", "")) and kit.get("storySequence"):
+                    raw_draft = str(kit.get("storySequence"))
+                elif "Video" in str(t.get("title", "")) and kit.get("videoScript"):
+                    raw_draft = str(kit.get("videoScript"))
+                elif "Newsletter" in str(t.get("title", "")) and kit.get("newsletterDraft"):
+                    raw_draft = str(kit.get("newsletterDraft"))
+                elif "DM" in str(t.get("title", "")) and kit.get("directMessageScript"):
+                    raw_draft = str(kit.get("directMessageScript"))
+
             task_obj = CreatorCampaignTask(
                 project_id=proj.id,
                 day_number=int(t_day),
                 channel=str(t.get("channel") or "instagram"),
                 task_title=str(t.get("title") or t.get("task_title") or f"Day {t_day} Campaign Post"),
-                content_draft=str(t.get("content") or t.get("content_draft") or t.get("draft") or ""),
+                content_draft=raw_draft,
                 cta_text=str(t.get("cta") or t.get("cta_text") or ""),
                 tracking_link=str(t.get("trackingLink") or t.get("tracking_link") or ""),
                 media_prompt=str(t.get("mediaPrompt") or t.get("media_prompt") or ""),

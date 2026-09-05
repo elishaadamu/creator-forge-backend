@@ -72,12 +72,37 @@ def init_db():
         if not table_exists:
             print("[DB INIT] Creating missing schema tables...")
             Base.metadata.create_all(bind=engine)
+
+        # Migration: ensure campaign_kit column exists on validation_campaigns
+        try:
+            with engine.connect() as conn:
+                is_pg = "postgresql" in str(engine.url) or "postgres" in str(engine.url)
+                if is_pg:
+                    conn.execute(text("ALTER TABLE validation_campaigns ADD COLUMN IF NOT EXISTS campaign_kit JSONB DEFAULT '{}'::jsonb"))
+                else:
+                    # SQLite: check if column exists
+                    col_info = conn.execute(text("PRAGMA table_info(validation_campaigns)")).fetchall()
+                    col_names = [c[1] for c in col_info]
+                    if "campaign_kit" not in col_names:
+                        conn.execute(text("ALTER TABLE validation_campaigns ADD COLUMN campaign_kit JSON DEFAULT '{}'"))
+                conn.commit()
+        except Exception as _mig_err:
+            print(f"[DB INIT] Column migration notice: {_mig_err}")
     except Exception as e:
         print(f"[DB INIT] Database connection failed: {e}.")
         print("[DB INIT] Gracefully falling back to local SQLite database to keep service online.")
         engine = create_configured_engine(fallback_sqlite_url)
         SessionLocal.configure(bind=engine)
         Base.metadata.create_all(bind=engine)
+        try:
+            with engine.connect() as conn:
+                col_info = conn.execute(text("PRAGMA table_info(validation_campaigns)")).fetchall()
+                col_names = [c[1] for c in col_info]
+                if "campaign_kit" not in col_names:
+                    conn.execute(text("ALTER TABLE validation_campaigns ADD COLUMN campaign_kit JSON DEFAULT '{}'"))
+                conn.commit()
+        except Exception:
+            pass
     
     # Auto-seed the 'default' campaign if missing
     from app.models.campaign import Campaign
