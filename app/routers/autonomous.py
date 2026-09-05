@@ -340,14 +340,19 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
                 if len(yt_found) >= target_count or _DISCOVERY_ABORT_EVENT.is_set():
                     break
             for ch in yt_found:
-                h = ch.get("handle", "").lstrip("@").strip()
+                h = str(ch.get("handle", "")).lstrip("@").strip()
+                f_count = int(ch.get("follower_count", 0) or 0)
+                if data.min_followers and f_count < data.min_followers:
+                    continue
+                if data.max_followers and f_count > data.max_followers:
+                    continue
                 if h and not any(c["handle"].lower() == h.lower() and c.get("platform") == "youtube" for c in candidates):
                     candidates.append({
                         "handle": h,
                         "platform": "youtube",
-                        "display_name": ch.get("display_name") or h,
+                        "display_name": str(ch.get("display_name") or h).lstrip("@").strip(),
                         "niche": ch.get("niche") or [niches[0]],
-                        "follower_count": ch.get("follower_count", 0),
+                        "follower_count": f_count,
                         "bio": ch.get("bio", ""),
                         "avatar_url": ch.get("avatar_url", ""),
                         "email_public": ch.get("email_public", ""),
@@ -360,31 +365,31 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
         except Exception as yt_err:
             logger.warning(f"YouTube discovery notice: {yt_err}")
 
-    # Curated verified creator seeds by vertical (all with 100K-1M+ followers)
+    # Curated verified creator seeds by vertical (curated within 100K-1M mid-tier target range)
     NICHE_PLATFORM_CREATORS = {
         "tech": {
-            "instagram": ["mkbhd", "tldtoday", "austinnotduncan", "frontpagetech", "the_mrwhosetheboss", "uravgconsumer", "snazzyq", "jonrettinger", "techburner", "krystal_loechl", "david_cogen", "daniel_sin", "samuel_bechara", "techlead", "jomatech"],
-            "tiktok": ["mkbhd", "tldtoday", "austinevans", "uravgconsumer", "techburner", "themrwhosetheboss", "carterpcs", "frank_tech", "zackdfilms", "matthew_moniz", "daniel_sin", "techlead", "joma", "linustech"],
+            "instagram": ["david_cogen", "daniel_sin", "krystal_loechl", "techlead", "samuel_bechara", "kevinstrathearn", "alexziskind", "andreyazimov", "florinpop"],
+            "tiktok": ["daniel_sin", "techlead", "matthew_moniz", "david_cogen", "frank_tech", "carterpcs", "amigoscode", "cleverqazi"],
         },
         "fitness": {
-            "instagram": ["jeffnippard", "athleanx", "hybridperformancemethod", "biolayne", "jpgcoaching", "leanbeefpatty", "renaissanceperiodization", "eugene.teoh", "sean_nalewanyj"],
-            "tiktok": ["jeffnippard", "leanbeefpatty", "jpgcoaching", "charliecaruso8", "noeldeyzel_bodybuilder", "t_nutrition_fitness", "seannalewanyj"],
+            "instagram": ["jpgcoaching", "eugene.teoh", "sean_nalewanyj", "biolayne", "charliecaruso8"],
+            "tiktok": ["jpgcoaching", "seannalewanyj", "charliecaruso8", "t_nutrition_fitness"],
         },
         "finance": {
-            "instagram": ["aliabdaal", "grahamstephan", "humphreyyang", "vivian.tu", "brianjung", "codie_sanchez", "cleverprogrammer", "mark_tilbury"],
-            "tiktok": ["humphreytalks", "yourrichbff", "grahamstephan", "brianjung", "codie_sanchez", "tariq_invests", "marktilbury"],
+            "instagram": ["tariq_invests", "codie_sanchez", "mark_tilbury", "cleverprogrammer"],
+            "tiktok": ["tariq_invests", "humphreytalks", "yourrichbff"],
         },
         "business": {
-            "instagram": ["alexhormozi", "leilahormozi", "garyvee", "noahkagan", "codie_sanchez", "robwalling", "myfirstmillionpod"],
-            "tiktok": ["alexhormozi", "leilahormozi", "garyvee", "noahkagan", "codie_sanchez", "myfirstmillion"],
+            "instagram": ["robwalling", "myfirstmillionpod", "noahkagan"],
+            "tiktok": ["myfirstmillion", "robwalling"],
         },
         "gaming": {
-            "instagram": ["sypherpk", "timthetatman", "drdisrespect", "valkyrae", "pokimane", "tfue", "scump"],
-            "tiktok": ["sypherpk", "timthetatman", "drdisrespect", "valkyrae", "scump", "shroud", "tfue"],
+            "instagram": ["scump", "shroud"],
+            "tiktok": ["scump"],
         },
         "design": {
-            "instagram": ["thefuturishere", "ransegall", "flux.academy", "willpaterson", "femke.design", "charismonad"],
-            "tiktok": ["thefuturishere", "ransegall", "willpaterson", "designjoy", "femkedesign"],
+            "instagram": ["ransegall", "flux.academy", "willpaterson", "femke.design", "charismonad"],
+            "tiktok": ["ransegall", "willpaterson", "femkedesign"],
         }
     }
 
@@ -408,15 +413,18 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
             for item in ig_found:
                 if _DISCOVERY_ABORT_EVENT.is_set():
                     break
-                h = item.get("handle", "").lstrip("@").strip()
-                f_count = item.get("follower_count", 0)
-                if f_count > 0 and f_count < int(data.min_followers * 0.70):
+                h = str(item.get("handle", "")).lstrip("@").strip()
+                f_count = int(item.get("follower_count", 0) or 0)
+                # Strict follower tier filtering (min_followers <= f_count <= max_followers)
+                if data.min_followers and f_count < data.min_followers:
+                    continue
+                if data.max_followers and f_count > data.max_followers:
                     continue
                 if h and not any(c["handle"].lower() == h.lower() and c.get("platform") == "instagram" for c in candidates):
                     candidates.append({
                         "handle": h,
                         "platform": "instagram",
-                        "display_name": item.get("display_name") or h,
+                        "display_name": str(item.get("display_name") or h).lstrip("@").strip(),
                         "niche": [niches[0]],
                         "follower_count": f_count,
                         "bio": item.get("bio", ""),
@@ -438,15 +446,18 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
             tt_limit = min(len(tt_seeds), max(2, per_platform))
             tt_found = apify_scrape_tiktok_profiles(tt_seeds[:tt_limit], apify_token=apify_token, timeout_secs=45)
             for item in tt_found:
-                h = item.get("handle", "").lstrip("@").strip()
-                f_count = item.get("follower_count", 0)
-                if f_count > 0 and f_count < int(data.min_followers * 0.70):
+                h = str(item.get("handle", "")).lstrip("@").strip()
+                f_count = int(item.get("follower_count", 0) or 0)
+                # Strict follower tier filtering (min_followers <= f_count <= max_followers)
+                if data.min_followers and f_count < data.min_followers:
+                    continue
+                if data.max_followers and f_count > data.max_followers:
                     continue
                 if h and not any(c["handle"].lower() == h.lower() and c.get("platform") == "tiktok" for c in candidates):
                     candidates.append({
                         "handle": h,
                         "platform": "tiktok",
-                        "display_name": item.get("display_name") or h,
+                        "display_name": str(item.get("display_name") or h).lstrip("@").strip(),
                         "niche": [niches[0]],
                         "follower_count": f_count,
                         "bio": item.get("bio", ""),
@@ -481,23 +492,64 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
         c["email_verified"] = bool(email_public and "@" in email_public)
         unique_candidates.append(c)
 
-    # ── Step 4: Strict Scale Limit Selection BEFORE Hunter.io ────────────────
-    # Per user directive: When Apify returns more creators than target_count,
-    # the extra creators MUST NOT be passed to Hunter.io. We filter and select
-    # strictly target_count creators first.
-    min_allowed = int(data.min_followers * 0.70)
-    max_allowed = int(data.max_followers * 1.60)
+    # ── Step 4: Strict Follower Bounds & Scale Limit Selection ───────────────
+    # Enforce exact user bounds: min_followers <= follower_count <= max_followers
+    min_allowed = max(0, int(data.min_followers))
+    max_allowed = max(min_allowed, int(data.max_followers))
 
     def candidate_priority(c):
-        f = c.get("follower_count", 0)
+        f = int(c.get("follower_count", 0) or 0)
         in_range = 1 if (min_allowed <= f <= max_allowed) else 0
         has_email = 1 if (c.get("email_verified") or (c.get("email_public") and "@" in c.get("email_public"))) else 0
         c_loc = str(c.get("country") or "").upper()
         matches_geo = 1 if (geo in ("GLOBAL", "ALL", "") or geo in c_loc or c_loc in geo) else 0
-        return (has_email, in_range, matches_geo, f)
+        # Rank by quality and sweet-spot fit within the target tier rather than raw unbounded follower count
+        sweet_spot = min_allowed + (max_allowed - min_allowed) * 0.45 if max_allowed > min_allowed else min_allowed
+        sweet_spot_distance = -abs(f - sweet_spot) / max(1, max_allowed - min_allowed)
+        return (in_range, has_email, matches_geo, sweet_spot_distance)
 
-    qualifying_candidates = [c for c in unique_candidates if c.get("follower_count", 0) >= min_allowed]
-    candidate_pool = qualifying_candidates if qualifying_candidates else unique_candidates
+    # Strictly filter qualifying candidates within the user's follower tier
+    qualifying_candidates = [
+        c for c in unique_candidates
+        if (min_allowed <= int(c.get("follower_count", 0) or 0) <= max_allowed)
+    ]
+
+    # If scraping returned fewer candidates than requested, backfill from verified DB creators matching the exact follower range
+    if len(qualifying_candidates) < target_count:
+        try:
+            with SessionLocal() as db_session:
+                db_creators = db_session.query(Creator).filter(
+                    Creator.follower_count >= min_allowed,
+                    Creator.follower_count <= max_allowed
+                ).order_by(Creator.follower_count.desc()).limit(target_count * 3).all()
+                for dbc in db_creators:
+                    db_h = str(dbc.handle or "").lstrip("@").strip()
+                    if db_h and not any(c["handle"].lower() == db_h.lower() for c in qualifying_candidates):
+                        qualifying_candidates.append({
+                            "handle": db_h,
+                            "platform": dbc.platform or "youtube",
+                            "display_name": str(dbc.display_name or db_h).lstrip("@").strip(),
+                            "niche": dbc.niche or [niches[0]],
+                            "follower_count": dbc.follower_count,
+                            "bio": dbc.bio or "",
+                            "avatar_url": dbc.avatar_url or "",
+                            "email_public": dbc.email_public or "",
+                            "website": dbc.website or "",
+                            "website_url": dbc.website or "",
+                            "profile_url": dbc.profile_url or f"https://www.{dbc.platform}.com/@{db_h}",
+                            "country": "",
+                            "video_count": 0,
+                            "email_verified": bool(dbc.email_public and "@" in dbc.email_public),
+                        })
+                        if len(qualifying_candidates) >= target_count * 2:
+                            break
+        except Exception as db_q_err:
+            logger.warning(f"[Discovery] DB creator backfill error: {db_q_err}")
+
+    # Fallback safety: only use candidates that strictly respect the max_followers limit
+    candidate_pool = [c for c in qualifying_candidates if (int(c.get("follower_count", 0) or 0) <= max_allowed)]
+    if not candidate_pool:
+        candidate_pool = [c for c in unique_candidates if (int(c.get("follower_count", 0) or 0) <= max_allowed)]
 
     with_email = [c for c in candidate_pool if c.get("email_public") and "@" in c.get("email_public")]
     without_email = [c for c in candidate_pool if not (c.get("email_public") and "@" in c.get("email_public"))]
@@ -722,12 +774,12 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     discovered_results = []
     for cand_info in enriched_list:
         platform = cand_info["platform"]
-        handle = cand_info["handle"]
-        display_name = cand_info["display_name"]
+        handle = str(cand_info["handle"]).lstrip("@").strip()
+        display_name = str(cand_info["display_name"]).lstrip("@").strip()
         bio = cand_info["bio"]
         avatar_url = cand_info["avatar_url"]
         email_public = cand_info["email_public"]
-        follower_count = cand_info["follower_count"]
+        follower_count = int(cand_info.get("follower_count", 0) or 0)
         profile_url = cand_info["profile_url"]
         c_niche = cand_info["niche"]
         engagement = cand_info["engagement"]
@@ -747,7 +799,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
         elif follower_count >= 1000:
             follower_str = f"{int(follower_count / 1000)}K"
         else:
-            follower_str = str(follower_count) if follower_count > 0 else "100K+"
+            follower_str = f"{follower_count:,}"
 
         primary_niche = c_niche[0] if isinstance(c_niche, list) and len(c_niche) > 0 else "Tech"
         niche_str = ", ".join(c_niche) if isinstance(c_niche, list) else str(c_niche)
@@ -802,7 +854,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
             "id": db_id,
             "name": display_name,
             "display_name": display_name,
-            "handle": f"@{clean_h}",
+            "handle": clean_h,
             "platform": platform.capitalize(),
             "follower_count": follower_count,
             "followerStr": follower_str,

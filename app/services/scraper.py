@@ -1216,29 +1216,41 @@ def search_youtube_channels(query: str, limit: int = 5, min_followers: int = 0, 
                 pass
         return ch
 
-    to_enrich = filtered[:limit]
+    to_enrich = filtered[:max(limit * 2, 6)]
     if to_enrich:
         with ThreadPoolExecutor(max_workers=min(len(to_enrich), 5)) as pool:
             list(pool.map(_enrich_single_channel, to_enrich))
 
-    # ── Step 5: Build final results ─────────────────────────────────────────
+    # ── Step 5: Build final results with strict post-enrichment validation ───
     results = []
     niche_label = matched_expansions[0] if matched_expansions else query
-    for ch in filtered[:limit]:
+    for ch in filtered:
+        clean_handle = str(ch.get("handle", "")).lstrip("@").strip()
+        if not clean_handle:
+            continue
+        subs = int(ch.get("follower_count", 0) or 0)
+        # Strict follower tier filtering (e.g. 100K - 1M)
+        if min_followers and subs < min_followers:
+            continue
+        if max_followers and subs > max_followers:
+            continue
+
         results.append({
-            "handle": ch["handle"],
+            "handle": clean_handle,
             "platform": "youtube",
-            "display_name": ch.get("display_name") or ch["handle"],
+            "display_name": str(ch.get("display_name") or clean_handle).lstrip("@").strip(),
             "bio": ch.get("bio", ""),
-            "follower_count": ch.get("follower_count", 0),
+            "follower_count": subs,
             "avatar_url": ch.get("avatar_url", ""),
             "email_public": ch.get("email_public", ""),
-            "instagram": ch.get("instagram", ""),
+            "instagram": str(ch.get("instagram", "")).lstrip("@").strip(),
             "website": ch.get("website", ""),
-            "website_url": ch.get("website", ""),
-            "profile_url": ch.get("profile_url", f"https://www.youtube.com/@{ch['handle']}"),
+            "website_url": ch.get("website_url", "") or ch.get("website", ""),
+            "profile_url": ch.get("profile_url") or f"https://www.youtube.com/@{clean_handle}",
             "niche": ch.get("niche", [niche_label]),
         })
+        if len(results) >= limit:
+            break
 
     print(f"[YouTube Search] Final qualified creators ({len(results)}):")
     for r in results:
