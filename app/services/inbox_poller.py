@@ -137,8 +137,9 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
     if all_creators is None:
         all_creators = db.query(Creator).all()
 
-    admin_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "elishadamu97@gmail.com").lower().strip()
-    is_admin_email = from_email_clean == admin_email or from_email_clean in ("elishadamu97@gmail.com", (settings.FROM_EMAIL or "").lower().strip())
+    admin_email = (settings.GOOGLE_EMAIL or "").lower().strip()
+    from_email = (settings.FROM_EMAIL or "").lower().strip()
+    is_admin_email = (from_email_clean == admin_email or from_email_clean == from_email) if (admin_email or from_email) else False
     if is_admin_email:
         # Outbound admin messages must never be treated as inbound creator replies
         return None
@@ -207,6 +208,7 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
         return {"status": "busy", "reason": "already_running", "new_replies": 0}
 
     admin_email = (settings.GOOGLE_EMAIL or "").lower().strip()
+    from_email = (settings.FROM_EMAIL or "").lower().strip()
     mail = None
     prev_timeout = socket.getdefaulttimeout()
     new_replies_count = 0
@@ -230,12 +232,12 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
                 if isinstance(response_part, tuple):
                     try:
                         msg = email.message_from_bytes(response_part[1])
-                        subject, from_email, body, raw_body = _parse_email_message(msg)
+                        subject, from_email_sender, body, raw_body = _parse_email_message(msg)
                         
-                        if not from_email:
+                        if not from_email_sender:
                             continue
 
-                        from_lower = from_email.lower().strip()
+                        from_lower = from_email_sender.lower().strip()
                         is_reply_subject = subject.lower().lstrip().startswith(("re:", "fwd:", "fw:"))
 
                         # Filter out automated marketing, system alerts, and notification bots
@@ -249,10 +251,10 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
                             continue
 
                         # Ignore all outgoing/sent messages from admin/studio account
-                        if from_lower == admin_email or from_lower in ("elishadamu97@gmail.com", (settings.FROM_EMAIL or "").lower().strip()):
+                        if (admin_email and from_lower == admin_email) or (from_email and from_lower == from_email):
                             continue
 
-                        candidate_messages.append((from_email, subject, body, raw_body))
+                        candidate_messages.append((from_email_sender, subject, body, raw_body))
                     except Exception as item_err:
                         logger.debug(f"IMAP item parse error: {item_err}")
                         continue

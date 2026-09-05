@@ -661,8 +661,8 @@ def _reply_dict(r: Reply) -> dict:
     admin_emails = {
         (settings.GOOGLE_EMAIL or "").lower().strip(),
         (settings.FROM_EMAIL or "").lower().strip(),
-        "elishadamu97@gmail.com",
     }
+    admin_emails.discard("")
     is_outgoing = (r.from_address or "").lower().strip() in admin_emails or r.ai_summary == "Outgoing reply from you"
     return {
         "id": r.id, "thread_id": r.thread_id, "from_address": r.from_address,

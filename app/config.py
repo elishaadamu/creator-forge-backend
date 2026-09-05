@@ -77,7 +77,7 @@ class Settings:
     FROM_NAME: str = os.getenv("FROM_NAME", "Creator Partnerships Team")
     GOOGLE_EMAIL: str = os.getenv("GOOGLE_EMAIL", "")
     GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
-    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "elishadamu97@gmail.com")
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "creatorforgeweb@gmail.com")
     RECIPIENT_EMAIL: str = os.getenv("RECIPIENT_EMAIL", "adamsfair12@gmail.com")
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://creator-forge-frontend.vercel.app")
 
