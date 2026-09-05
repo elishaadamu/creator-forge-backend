@@ -69,6 +69,16 @@ def record_reply(
     if _detect_opt_out(body):
         _handle_opt_out(db, thread, from_address, body, actor)
 
+    # Deduplication guard: check if identical reply already exists in this thread
+    clean_body = (body or "").strip()
+    existing = db.query(Reply).filter(
+        Reply.thread_id == thread_id,
+        Reply.from_address.ilike((from_address or "").strip()),
+        Reply.body == clean_body,
+    ).first()
+    if existing:
+        return existing
+
     reply = Reply(
         thread_id=thread_id,
         from_address=from_address,

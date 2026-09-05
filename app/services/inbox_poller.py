@@ -267,11 +267,21 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
                 for from_email, subject, body, raw_body in candidate_messages:
                     thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body, all_creators=all_creators)
                     if thread_id:
-                        existing_reply = db.query(Reply).filter(
-                            Reply.thread_id == thread_id,
-                            Reply.from_address == from_email,
-                            Reply.body == body,
-                        ).first()
+                        # Check if this exact reply was already recorded for this creator across ANY thread
+                        target_thread = db.get(Thread, thread_id)
+                        clean_body = (body or "").strip()
+                        if target_thread and target_thread.creator_id:
+                            existing_reply = db.query(Reply).join(Thread).filter(
+                                Thread.creator_id == target_thread.creator_id,
+                                Reply.from_address.ilike(from_email.strip()),
+                                Reply.body == clean_body
+                            ).first()
+                        else:
+                            existing_reply = db.query(Reply).filter(
+                                Reply.thread_id == thread_id,
+                                Reply.from_address.ilike(from_email.strip()),
+                                Reply.body == clean_body,
+                            ).first()
 
                         if not existing_reply:
                             try:
