@@ -344,6 +344,25 @@ def create_creator(body: CreatorCreate, actor: str = "internal", db: Session = D
         raise HTTPException(400, str(e))
 
 
+def _build_project_map(db: Session) -> dict:
+    try:
+        from app.models.project import CoLaunchProject
+        all_projs = db.query(CoLaunchProject).all()
+        by_id = {}
+        by_handle = {}
+        by_email = {}
+        for p in all_projs:
+            if p.creator_id:
+                by_id[p.creator_id] = p
+            if p.creator_handle:
+                by_handle[p.creator_handle.lstrip("@").strip().lower()] = p
+            if p.creator_email:
+                by_email[p.creator_email.strip().lower()] = p
+        return {"by_id": by_id, "by_handle": by_handle, "by_email": by_email}
+    except Exception:
+        return {"by_id": {}, "by_handle": {}, "by_email": {}}
+
+
 @router.get("")
 def list_creators(
     status: Optional[str] = None,
@@ -358,15 +377,23 @@ def list_creators(
     if platform:
         q = q.filter(Creator.platform == platform)
     creators = q.order_by(Creator.created_at.desc()).offset(skip).limit(limit).all()
-    return [_creator_dict(c) for c in creators]
+    project_map = _build_project_map(db)
+    return [_creator_dict(c, project_map=project_map) for c in creators]
 
 
 @router.get("/{creator_id}")
 def get_creator(creator_id: str, db: Session = Depends(get_db)):
     c = db.get(Creator, creator_id)
     if not c:
+        clean_handle = creator_id.lstrip("@").strip().lower()
+        c = db.query(Creator).filter(
+            (Creator.handle.ilike(clean_handle)) |
+            (Creator.handle.ilike(f"@{clean_handle}"))
+        ).first()
+    if not c:
         raise HTTPException(404, "Creator not found")
-    return _creator_dict(c)
+    project_map = _build_project_map(db)
+    return _creator_dict(c, project_map=project_map)
 
 
 class CreatorUpdate(BaseModel):
@@ -1132,7 +1159,7 @@ def get_creator_analysis(creator_id: str, db: Session = Depends(get_db)):
     }
 
 
-def _creator_dict(c: Creator) -> dict:
+def _creator_dict(c: Creator, project_map: dict = None) -> dict:
     reply_classification = None
     reply_text = None
     product_concepts = []
@@ -1150,13 +1177,31 @@ def _creator_dict(c: Creator) -> dict:
     except Exception:
         pass
 
+    clean_h = (c.handle or "").lstrip("@").strip().lower()
+    clean_email = (c.email_public or "").strip().lower()
+
+    matched_proj = None
+    if project_map:
+        matched_proj = (
+            project_map.get("by_id", {}).get(c.id) or
+            project_map.get("by_handle", {}).get(clean_h) or
+            (project_map.get("by_email", {}).get(clean_email) if clean_email else None)
+        )
+
+    effective_status = "launched" if matched_proj else c.status
+    project_id = matched_proj.id if matched_proj else getattr(c, "project_id", None)
+
     return {
         "id": c.id, "handle": c.handle, "platform": c.platform,
         "display_name": c.display_name, "bio": c.bio,
         "profile_url": c.profile_url, "avatar_url": c.avatar_url,
         "follower_count": c.follower_count, "niche": c.niche or [],
         "location": c.location, "website": c.website,
-        "email_public": c.email_public, "status": c.status,
+        "email_public": c.email_public, "status": effective_status,
+        "project_id": project_id,
+        "projectId": project_id,
+        "has_project": bool(matched_proj),
+        "hasProject": bool(matched_proj),
         "reply_classification": reply_classification,
         "reply_text": reply_text,
         "product_concepts": product_concepts,

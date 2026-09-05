@@ -379,6 +379,20 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             existing_creator_proj.selected_concept = concept_data
             updated = True
 
+        # Ensure Creator table row is marked as launched
+        c_matched = None
+        if existing_creator_proj.creator_id:
+            c_matched = db.get(Creator, existing_creator_proj.creator_id)
+        if not c_matched and existing_creator_proj.creator_handle:
+            clean_h = existing_creator_proj.creator_handle.lstrip("@").strip()
+            c_matched = db.query(Creator).filter(
+                (Creator.handle.ilike(clean_h)) | (Creator.handle.ilike(f"@{clean_h}"))
+            ).first()
+        if c_matched and c_matched.status != "launched":
+            c_matched.status = "launched"
+            c_matched.updated_at = datetime.utcnow()
+            updated = True
+
         if updated:
             db.commit()
             db.refresh(existing_creator_proj)
@@ -404,10 +418,12 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     followers_str = str(body.followers) if body.followers is not None else None
 
     valid_creator_id = None
+    creator_row_to_launch = None
     if body.creatorId:
         c_row = db.get(Creator, body.creatorId)
         if c_row:
             valid_creator_id = c_row.id
+            creator_row_to_launch = c_row
         else:
             c_by_handle = db.query(Creator).filter(
                 (Creator.handle.ilike(body.creatorId.lstrip("@"))) |
@@ -415,6 +431,22 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             ).first()
             if c_by_handle:
                 valid_creator_id = c_by_handle.id
+                creator_row_to_launch = c_by_handle
+
+    if not creator_row_to_launch and clean_handle:
+        creator_row_to_launch = db.query(Creator).filter(
+            (Creator.handle.ilike(clean_handle)) |
+            (Creator.handle.ilike(f"@{clean_handle}"))
+        ).first()
+        if creator_row_to_launch and not valid_creator_id:
+            valid_creator_id = creator_row_to_launch.id
+
+    if not creator_row_to_launch and body.creatorEmail:
+        creator_row_to_launch = db.query(Creator).filter(
+            Creator.email_public.ilike(body.creatorEmail.strip())
+        ).first()
+        if creator_row_to_launch and not valid_creator_id:
+            valid_creator_id = creator_row_to_launch.id
 
     proj = CoLaunchProject(
         id=proj_id,
@@ -442,6 +474,9 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         created_at=datetime.utcnow()
     )
     db.add(proj)
+    if creator_row_to_launch:
+        creator_row_to_launch.status = "launched"
+        creator_row_to_launch.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(proj)
 
