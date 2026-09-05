@@ -424,12 +424,24 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     # Format beautiful luxury HTML template
     resolved_concepts = payload.concepts
     resolved_concept_image = payload.concept_image_url
-    if not resolved_concepts and creator and creator.discovery_notes:
-        try:
-            nd = json.loads(creator.discovery_notes)
-            resolved_concepts = nd.get("product_concepts")
-        except Exception:
-            pass
+    if not resolved_concepts and creator:
+        notes_str = creator.discovery_notes or creator.niche_data
+        if notes_str:
+            try:
+                nd = json.loads(notes_str) if isinstance(notes_str, str) else notes_str
+                resolved_concepts = nd.get("product_concepts") or nd.get("concepts")
+            except Exception:
+                pass
+
+    if not resolved_concept_image and resolved_concepts and len(resolved_concepts) > 0:
+        first_c = resolved_concepts[0]
+        if isinstance(first_c, dict):
+            mockup = first_c.get("mockup")
+            if isinstance(mockup, dict):
+                resolved_concept_image = mockup.get("appUrl") or mockup.get("imageUrl")
+            if not resolved_concept_image:
+                resolved_concept_image = first_c.get("imageUrl") or first_c.get("image_url") or first_c.get("mockup_url")
+
 
     body_html = format_luxury_html_email(
         body_text=payload.body,
