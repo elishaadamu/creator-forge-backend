@@ -72,12 +72,20 @@ def _render_single_concept_card(
     """Renders an individual concept showcase card with visual mockup, pricing, and features."""
     app_name = concept.get("name") or concept.get("title") or f"Software Concept #{index + 1}"
     tagline = concept.get("tagline") or concept.get("summary") or concept.get("description") or "Tailored software suite engineered for your community"
-    pricing = concept.get("pricing") or "$29/mo Starter • $79/mo Pro"
+    raw_pricing = concept.get("pricing") or concept.get("revenueModel")
+    if isinstance(raw_pricing, dict):
+        pricing_parts = [f"{str(v)}" if not any(c in str(k).lower() for c in ["creator", "split", "share"]) else f"{str(v)}" for k, v in raw_pricing.items() if v]
+        pricing = " • ".join(pricing_parts) if pricing_parts else "$29/mo Starter • $79/mo Pro"
+    elif isinstance(raw_pricing, str) and raw_pricing.strip():
+        pricing = raw_pricing.strip()
+    else:
+        pricing = "$29/mo Starter • $79/mo Pro"
+
     problem = concept.get("problem") or concept.get("description") or ""
     score = concept.get("opportunityScore") or concept.get("score") or (98 - index * 3)
-    mockup_data = concept.get("mockup") or {}
+    mockup_data = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
 
-    app_url = mockup_data.get("appUrl") or f"{app_name.lower().replace(' ', '')}.app"
+    app_url = mockup_data.get("appUrl") or f"{str(app_name).lower().replace(' ', '')}.app"
     primary_metric = mockup_data.get("primaryMetric") or "$18.4K Projected MRR"
     active_metric = mockup_data.get("activeMetric") or "1,240 Active Users"
     efficiency_metric = mockup_data.get("efficiencyMetric") or "14-Day MVP Launch"
@@ -428,7 +436,8 @@ def format_luxury_html_email(
     concept_image_url: Optional[str] = None,
     concepts: Optional[List[Dict[str, Any]]] = None,
     logo_url: Optional[str] = None,
-    studio_name: Optional[str] = None
+    studio_name: Optional[str] = None,
+    concept_title: Optional[str] = None
 ) -> str:
     """
     Master Responsive Luxury Venture Studio Email Formatter.
@@ -440,12 +449,25 @@ def format_luxury_html_email(
     active_logo_url = logo_url or STUDIO_LOGO_URL
     active_studio_name = studio_name or STUDIO_NAME
 
+    # If concept_title is passed and concepts is None/empty, build a concept card
+    active_concepts = concepts
+    if not active_concepts and (concept_title or concept_image_url):
+        active_concepts = [{
+            "name": concept_title or "Custom Creator SaaS",
+            "tagline": "Tailored software engineered for your audience",
+            "imageUrl": concept_image_url,
+            "mockup": {"previewUrl": concept_image_url, "appUrl": f"{creator_name.lower().replace(' ', '')}app.io" if creator_name else "creatorstudio.app"},
+            "revenueModel": "$29/month Tiered Subscription",
+            "pricing": {"creatorSplit": "50% Net Co-Founder Share"},
+            "coreFeatures": ["Tailored Audience Workflow", "Automated Creator Monetization"]
+        }]
+
     # Convert markdown body into styled HTML
     formatted_body_html = convert_markdown_to_clean_html(clean_body)
 
     # Render concept mockup card if concepts or concept image are present
     concept_card_html = render_concept_showcase_html(
-        concepts=concepts,
+        concepts=active_concepts,
         concept_image_url=concept_image_url,
         creator_name=creator_name
     )

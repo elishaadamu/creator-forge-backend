@@ -59,6 +59,10 @@ class UpdateCampaignRequest(BaseModel):
     infrastructure: Optional[Dict[str, Any]] = None
     research_survey: Optional[Dict[str, Any]] = None
     review_status: Optional[str] = None # 'draft', 'approved', 'launched'
+    campaign_kit: Optional[Dict[str, Any]] = None
+    creator_tasks: Optional[List[Dict[str, Any]]] = None
+    campaign_launched: Optional[bool] = None
+
 
 
 class UpdateTaskRequest(BaseModel):
@@ -203,7 +207,18 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             "reviewStatus": campaign.review_status,
             "approvedAt": campaign.approved_at.isoformat() if campaign.approved_at else None,
         } if campaign else None,
-        "campaignKit": campaign.product_assets if campaign else None,
+        "campaignKit": (proj.metadata_info or {}).get("campaign_kit") or (proj.metadata_info or {}).get("campaignKit") or (campaign.product_assets if campaign and (campaign.product_assets or {}).get("postingSchedule") else None),
+        "campaignLaunched": bool(
+            (proj.metadata_info or {}).get("campaign_launched") or
+            (proj.metadata_info or {}).get("campaign_kit") or
+            (campaign.review_status in ("approved", "launched") if campaign else False) or
+            len(tasks) > 0
+        ),
+        "campaignAssetsGenerated": bool(
+            (proj.metadata_info or {}).get("campaign_kit") or
+            (campaign.product_assets if campaign and (campaign.product_assets or {}).get("postingSchedule") else False) or
+            len(tasks) > 0
+        ),
         "surveyData": campaign.research_survey if campaign else None,
         "infrastructure": campaign.infrastructure if campaign else None,
         # Step 3
@@ -773,7 +788,7 @@ def update_validation_plan(project_id: str, body: UpdatePlanRequest, db: Session
 
 @router.put("/{project_id}/campaign")
 def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db: Session = Depends(get_db)):
-    """Save or update Step 2 Campaign Assets, Infrastructure, and Approve & Launch status."""
+    """Save or update Step 2 Campaign Assets, Infrastructure, Step 3 Campaign Kit, and Creator Tasks."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -791,6 +806,37 @@ def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db:
         if body.review_status in ("approved", "launched"):
             campaign.approved_at = datetime.utcnow()
             campaign.approved_by = "Lead Founder"
+
+    # Step 3: Campaign Kit & Launch State Persistence
+    meta = dict(proj.metadata_info or {})
+    if body.campaign_kit is not None:
+        meta["campaign_kit"] = body.campaign_kit
+        meta["campaign_launched"] = True
+    if body.campaign_launched is not None:
+        meta["campaign_launched"] = body.campaign_launched
+        if body.campaign_launched:
+            campaign.review_status = "approved"
+    proj.metadata_info = meta
+
+    # Step 3: Creator Campaign Tasks in PostgreSQL
+    if body.creator_tasks is not None and isinstance(body.creator_tasks, list) and len(body.creator_tasks) > 0:
+        db.query(CreatorCampaignTask).filter(CreatorCampaignTask.project_id == proj.id).delete()
+        for idx, t in enumerate(body.creator_tasks):
+            t_day = t.get("dayNumber") or t.get("day_number") or t.get("day") or (idx + 1)
+            t_status = "completed" if (t.get("done") or t.get("status") == "completed") else (t.get("status") or "pending")
+            task_obj = CreatorCampaignTask(
+                project_id=proj.id,
+                day_number=int(t_day),
+                channel=str(t.get("channel") or "instagram"),
+                task_title=str(t.get("title") or t.get("task_title") or f"Day {t_day} Campaign Post"),
+                content_draft=str(t.get("content") or t.get("content_draft") or t.get("draft") or ""),
+                cta_text=str(t.get("cta") or t.get("cta_text") or ""),
+                tracking_link=str(t.get("trackingLink") or t.get("tracking_link") or ""),
+                media_prompt=str(t.get("mediaPrompt") or t.get("media_prompt") or ""),
+                status=t_status,
+                completed_at=datetime.utcnow() if t_status == "completed" else None
+            )
+            db.add(task_obj)
 
     db.commit()
     db.refresh(proj)

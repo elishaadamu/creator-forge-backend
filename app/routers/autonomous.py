@@ -549,6 +549,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     needs_hunter = [c for c in selected_cohort if not (c.get("email_public") and "@" in c.get("email_public"))]
     if needs_hunter and hunter.is_configured():
         def _hunter_lookup_for_creator(cand):
+            if _DISCOVERY_ABORT_EVENT.is_set():
+                return cand
             try:
                 handle = cand["handle"].lstrip("@").strip()
                 display_name = cand.get("display_name") or handle
@@ -673,12 +675,19 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
         }
         return cand_dict
 
-    enriched_list = [enrich_candidate(cand) for cand in selected_cohort]
+    enriched_list = []
+    for cand in selected_cohort:
+        if _DISCOVERY_ABORT_EVENT.is_set():
+            logger.info("[Discovery] Halted during enrichment due to operator stop signal.")
+            break
+        enriched_list.append(enrich_candidate(cand))
 
     # Save to DB in a single shared session with one commit
     try:
         with SessionLocal() as db:
             for cand_info in enriched_list:
+                if _DISCOVERY_ABORT_EVENT.is_set():
+                    break
                 handle = cand_info["handle"]
                 platform = cand_info["platform"]
                 try:
