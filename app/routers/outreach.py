@@ -425,7 +425,7 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     resolved_concepts = payload.concepts
     resolved_concept_image = payload.concept_image_url
     if not resolved_concepts and creator:
-        notes_str = creator.discovery_notes or creator.niche_data
+        notes_str = getattr(creator, "discovery_notes", None) or getattr(creator, "niche_data", None)
         if notes_str:
             try:
                 nd = json.loads(notes_str) if isinstance(notes_str, str) else notes_str
@@ -577,15 +577,17 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
     # Resolve concept mockup preview for replies
     reply_concept_image = payload.concept_image_url
     reply_concepts = payload.concepts
-    if not reply_concepts and thread.creator and thread.creator.niche_data:
-        try:
-            nd = json.loads(thread.creator.niche_data) if isinstance(thread.creator.niche_data, str) else thread.creator.niche_data
-            reply_concepts = nd.get("product_concepts")
-            if not reply_concept_image and reply_concepts:
-                first_c = reply_concepts[0]
-                reply_concept_image = first_c.get("mockup_url") or first_c.get("appUrl") or first_c.get("imageUrl")
-        except Exception:
-            pass
+    if not reply_concepts and thread.creator:
+        creator_notes = getattr(thread.creator, "discovery_notes", None) or getattr(thread.creator, "niche_data", None)
+        if creator_notes:
+            try:
+                nd = json.loads(creator_notes) if isinstance(creator_notes, str) else creator_notes
+                reply_concepts = nd.get("product_concepts") or nd.get("concepts")
+                if not reply_concept_image and reply_concepts:
+                    first_c = reply_concepts[0]
+                    reply_concept_image = first_c.get("mockup_url") or first_c.get("appUrl") or first_c.get("imageUrl")
+            except Exception:
+                pass
 
     # Send the email with luxury responsive HTML formatting
     c_name = thread.creator.display_name if thread.creator else ""
