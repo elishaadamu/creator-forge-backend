@@ -231,19 +231,44 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             (campaign.product_assets if campaign and isinstance(campaign.product_assets, dict) and campaign.product_assets.get("postingSchedule") else None)
         ),
         "campaignLaunched": bool(
-            (proj.metadata_info or {}).get("campaign_launched") or
-            (campaign.campaign_kit if campaign and getattr(campaign, "campaign_kit", None) else None) or
-            (proj.metadata_info or {}).get("campaign_kit") or
-            (campaign.review_status in ("approved", "launched") if campaign else False) or
-            len(tasks) > 0
+            (campaign and campaign.campaign_kit and isinstance(campaign.campaign_kit, dict) and bool(
+                campaign.campaign_kit.get("postingSchedule") or
+                campaign.campaign_kit.get("announcementPost") or
+                campaign.campaign_kit.get("storySequence") or
+                campaign.campaign_kit.get("videoScript") or
+                campaign.campaign_kit.get("newsletterDraft")
+            )) or
+            (proj.metadata_info and isinstance(proj.metadata_info, dict) and bool(
+                (proj.metadata_info.get("campaign_kit") or {}).get("postingSchedule") or
+                (proj.metadata_info.get("campaign_kit") or {}).get("announcementPost")
+            ))
         ),
         "campaignAssetsGenerated": bool(
-            (campaign.campaign_kit if campaign and getattr(campaign, "campaign_kit", None) else None) or
-            (proj.metadata_info or {}).get("campaign_kit") or
-            (campaign.product_assets if campaign and (campaign.product_assets or {}).get("postingSchedule") else False) or
-            len(tasks) > 0
+            (campaign and campaign.campaign_kit and isinstance(campaign.campaign_kit, dict) and bool(
+                campaign.campaign_kit.get("postingSchedule") or
+                campaign.campaign_kit.get("announcementPost") or
+                campaign.campaign_kit.get("storySequence") or
+                campaign.campaign_kit.get("videoScript") or
+                campaign.campaign_kit.get("newsletterDraft")
+            )) or
+            (proj.metadata_info and isinstance(proj.metadata_info, dict) and bool(
+                (proj.metadata_info.get("campaign_kit") or {}).get("postingSchedule") or
+                (proj.metadata_info.get("campaign_kit") or {}).get("announcementPost")
+            ))
         ),
         "surveyData": campaign.research_survey if campaign else None,
+        "surveyResponses": (
+            (campaign.research_survey.get("responses") if campaign and isinstance(campaign.research_survey, dict) else None) or
+            (proj.metadata_info or {}).get("survey_responses") or
+            (proj.metadata_info or {}).get("surveyResponses") or
+            []
+        ),
+        "surveyAnalysis": (
+            (campaign.research_survey.get("analysis") if campaign and isinstance(campaign.research_survey, dict) else None) or
+            (proj.metadata_info or {}).get("survey_analysis") or
+            (proj.metadata_info or {}).get("surveyAnalysis") or
+            None
+        ),
         "infrastructure": campaign.infrastructure if campaign else None,
         # Step 3
         "creatorTasks": tasks,
@@ -278,6 +303,21 @@ class RecordPreorderRequest(BaseModel):
     paymentMethod: Optional[str] = "Stripe"
     channel: Optional[str] = "direct"
     txId: Optional[str] = None
+
+
+class RecordSurveyResponseRequest(BaseModel):
+    projectId: Optional[str] = None
+    slug: Optional[str] = None
+    creatorHandle: Optional[str] = None
+    name: Optional[str] = None
+    respondentName: Optional[str] = None
+    email: Optional[str] = None
+    respondentEmail: Optional[str] = None
+    rating: Optional[int] = None
+    intentScore: Optional[int] = None
+    answers: Optional[Dict[str, Any]] = None
+    submittedAt: Optional[str] = None
+
 
 
 class LogActivityRequest(BaseModel):
@@ -841,10 +881,16 @@ def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db:
         db.add(campaign)
 
     prod_assets = body.product_assets if body.product_assets is not None else body.productAssets
-    if prod_assets is not None: campaign.product_assets = prod_assets
-    if body.infrastructure is not None: campaign.infrastructure = body.infrastructure
+    if prod_assets is not None:
+        campaign.product_assets = prod_assets
+        flag_modified(campaign, "product_assets")
+    if body.infrastructure is not None:
+        campaign.infrastructure = body.infrastructure
+        flag_modified(campaign, "infrastructure")
     res_survey = body.research_survey if body.research_survey is not None else body.researchSurvey
-    if res_survey is not None: campaign.research_survey = res_survey
+    if res_survey is not None:
+        campaign.research_survey = res_survey
+        flag_modified(campaign, "research_survey")
     rev_status = body.review_status if body.review_status is not None else body.reviewStatus
     if rev_status is not None:
         campaign.review_status = rev_status
@@ -1354,6 +1400,196 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
     act_logs.insert(0, act_item)
     meta["activity_logs"] = act_logs[:50]
     proj.metadata_info = meta
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.post("/record-survey-response")
+@router.post("/{project_id}/survey-response")
+def record_survey_response_universal(
+    body: RecordSurveyResponseRequest,
+    project_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Universal public survey response recorder called by /survey/:slug form or simulation.
+    Persists respondent answers, increments question response counts, updates telemetry, and logs activity in DB.
+    """
+    proj = None
+    target_id = project_id or body.projectId
+    if target_id:
+        proj = db.get(CoLaunchProject, target_id)
+    
+    if not proj and body.slug:
+        clean_slug = body.slug.lower().strip()
+        projects = db.query(CoLaunchProject).all()
+        for p in projects:
+            p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
+            c_slug = (p.creator_handle or "").lower().replace("@", "")
+            if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
+                proj = p
+                break
+    
+    if not proj:
+        # Fallback to the latest active project
+        proj = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).first()
+
+    if not proj:
+        raise HTTPException(404, "No active co-launch project found to record survey response")
+
+    campaign = proj.validation_campaign
+    if not campaign:
+        campaign = ValidationCampaign(project_id=proj.id)
+        db.add(campaign)
+
+    res_survey = dict(campaign.research_survey or {})
+    res_id = f"sr_{int(datetime.utcnow().timestamp()*1000)}"
+    timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    res_name = (body.name or body.respondentName or "").strip() or "Community Member"
+    res_email = (body.email or body.respondentEmail or "").strip() or f"respondent_{res_id[-4:]}@example.com"
+    res_rating = int(body.rating if body.rating is not None else (body.intentScore if body.intentScore is not None else 8))
+
+    response_item = {
+        "id": res_id,
+        "name": res_name,
+        "email": res_email,
+        "rating": res_rating,
+        "answers": body.answers or {},
+        "submittedAt": body.submittedAt or timestamp_str,
+        "date": datetime.utcnow().strftime("%Y-%m-%d")
+    }
+
+    cur_responses = list(res_survey.get("responses") or [])
+    cur_responses.insert(0, response_item)
+    res_survey["responses"] = cur_responses
+
+    # Update question response counts
+    cur_questions = list(res_survey.get("questions") or [])
+    if cur_questions:
+        for q in cur_questions:
+            qid = q.get("id")
+            if body.answers and qid in body.answers and str(body.answers[qid]).strip():
+                q["responseCount"] = int(q.get("responseCount") or 0) + 1
+            elif not body.answers:
+                q["responseCount"] = int(q.get("responseCount") or 0) + 1
+        res_survey["questions"] = cur_questions
+
+    campaign.research_survey = res_survey
+    flag_modified(campaign, "research_survey")
+
+    # Also keep in proj.metadata_info
+    meta = dict(proj.metadata_info or {})
+    meta["survey_responses"] = cur_responses
+    
+    # Telemetry signups
+    telemetry = proj.telemetry
+    if telemetry:
+        telemetry.signups = max(int(telemetry.signups or 0), len(cur_responses))
+
+    # Activity Log
+    act_logs = list(meta.get("activity_logs") or [])
+    act_item = {
+        "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
+        "action": "Audience Survey Response Recorded",
+        "details": f"Survey feedback submitted by {res_name} ({res_email}) with intent score {res_rating}/10",
+        "category": "research",
+        "timestamp": timestamp_str
+    }
+    act_logs.insert(0, act_item)
+    meta["activity_logs"] = act_logs[:50]
+    proj.metadata_info = meta
+    flag_modified(proj, "metadata_info")
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.delete("/{project_id}/survey-response/{response_id}")
+def delete_survey_response(project_id: str, response_id: str, db: Session = Depends(get_db)):
+    """Delete a single survey response and recalculate question response counts."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    
+    campaign = proj.validation_campaign
+    if not campaign:
+        raise HTTPException(404, "No validation campaign found")
+
+    res_survey = dict(campaign.research_survey or {})
+    cur_responses = list(res_survey.get("responses") or [])
+    
+    new_responses = [r for r in cur_responses if r.get("id") != response_id]
+    res_survey["responses"] = new_responses
+
+    # Recalculate question response counts based on remaining responses
+    cur_questions = list(res_survey.get("questions") or [])
+    if cur_questions:
+        for q in cur_questions:
+            qid = q.get("id")
+            count = 0
+            for r in new_responses:
+                ans = r.get("answers") or {}
+                if qid in ans and str(ans[qid]).strip():
+                    count += 1
+                elif not ans:
+                    count += 1
+            q["responseCount"] = count
+        res_survey["questions"] = cur_questions
+
+    campaign.research_survey = res_survey
+    flag_modified(campaign, "research_survey")
+
+    meta = dict(proj.metadata_info or {})
+    meta["survey_responses"] = new_responses
+    proj.metadata_info = meta
+    flag_modified(proj, "metadata_info")
+
+    telemetry = proj.telemetry
+    if telemetry:
+        telemetry.signups = len(new_responses)
+
+    db.commit()
+    db.refresh(proj)
+    return _format_project_response(proj)
+
+
+@router.delete("/{project_id}/survey-responses")
+def clear_all_survey_responses(project_id: str, db: Session = Depends(get_db)):
+    """Clear all survey responses and reset question response counts to 0."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    
+    campaign = proj.validation_campaign
+    if not campaign:
+        raise HTTPException(404, "No validation campaign found")
+
+    res_survey = dict(campaign.research_survey or {})
+    res_survey["responses"] = []
+    res_survey["analysis"] = None
+
+    cur_questions = list(res_survey.get("questions") or [])
+    if cur_questions:
+        for q in cur_questions:
+            q["responseCount"] = 0
+        res_survey["questions"] = cur_questions
+
+    campaign.research_survey = res_survey
+    flag_modified(campaign, "research_survey")
+
+    meta = dict(proj.metadata_info or {})
+    meta["survey_responses"] = []
+    meta["survey_analysis"] = None
+    proj.metadata_info = meta
+    flag_modified(proj, "metadata_info")
+
+    telemetry = proj.telemetry
+    if telemetry:
+        telemetry.signups = 0
 
     db.commit()
     db.refresh(proj)
