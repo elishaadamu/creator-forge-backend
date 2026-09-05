@@ -27,9 +27,9 @@ class CreateProjectRequest(BaseModel):
     creatorName: Optional[str] = None
     creatorAvatar: Optional[str] = None
     creatorEmail: Optional[str] = None
-    niche: Optional[str] = None
-    followers: Optional[str] = None
-    productName: str
+    niche: Optional[Any] = None
+    followers: Optional[Any] = None
+    productName: Optional[str] = "New Co-Launch Venture"
     productTagline: Optional[str] = None
     targetAudience: Optional[str] = None
     customer: Optional[str] = None
@@ -37,7 +37,7 @@ class CreateProjectRequest(BaseModel):
     keyFeatures: Optional[List[str]] = None
     pricing: Optional[str] = None
     revenueModel: Optional[str] = None
-    presaleTarget: Optional[float] = 5000.0
+    presaleTarget: Optional[float] = 12500.0
     selectedConcept: Optional[Dict[str, Any]] = None
     mockup: Optional[Dict[str, Any]] = None
 
@@ -281,7 +281,30 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             ).first()
 
     if existing_creator_proj:
-        logger.info(f"[execute_create_co_launch_project] Project {existing_creator_proj.id} already exists for creator {body.creatorId or body.creatorHandle or body.creatorName}. Returning existing project.")
+        updated = False
+        concept_data = body.selectedConcept or {}
+        new_name = body.productName or concept_data.get("name")
+        new_tagline = body.productTagline or concept_data.get("tagline")
+        new_pricing = body.pricing or concept_data.get("pricing")
+
+        if new_name and new_name != existing_creator_proj.product_name:
+            existing_creator_proj.product_name = new_name
+            updated = True
+        if new_tagline and new_tagline != existing_creator_proj.product_tagline:
+            existing_creator_proj.product_tagline = new_tagline
+            updated = True
+        if new_pricing and new_pricing != existing_creator_proj.pricing:
+            existing_creator_proj.pricing = new_pricing
+            updated = True
+        if concept_data and concept_data != existing_creator_proj.selected_concept:
+            existing_creator_proj.selected_concept = concept_data
+            updated = True
+
+        if updated:
+            db.commit()
+            db.refresh(existing_creator_proj)
+
+        logger.info(f"[execute_create_co_launch_project] Project {existing_creator_proj.id} matched for creator. Returning project.")
         return _format_project_response(existing_creator_proj)
 
     proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
@@ -292,29 +315,51 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         db.delete(existing)
         db.commit()
 
+    concept_data = body.selectedConcept or {}
+    product_name = body.productName or concept_data.get("name") or "New Co-Launch Venture"
+    product_tagline = body.productTagline or concept_data.get("tagline") or ""
+    pricing_str = body.pricing or concept_data.get("pricing") or "$29/mo Starter • $79/mo Pro"
+    presale_target_val = float(body.presaleTarget or concept_data.get("presaleTarget") or 12500.0)
+
+    niche_str = ", ".join(str(x) for x in body.niche) if isinstance(body.niche, list) else (str(body.niche) if body.niche else None)
+    followers_str = str(body.followers) if body.followers is not None else None
+
+    valid_creator_id = None
+    if body.creatorId:
+        c_row = db.get(Creator, body.creatorId)
+        if c_row:
+            valid_creator_id = c_row.id
+        else:
+            c_by_handle = db.query(Creator).filter(
+                (Creator.handle.ilike(body.creatorId.lstrip("@"))) |
+                (Creator.handle.ilike(f"@{body.creatorId.lstrip('@')}"))
+            ).first()
+            if c_by_handle:
+                valid_creator_id = c_by_handle.id
+
     proj = CoLaunchProject(
         id=proj_id,
-        creator_id=body.creatorId,
+        creator_id=valid_creator_id,
         creator_handle=body.creatorHandle,
         creator_name=body.creatorName or body.creatorHandle,
         creator_avatar=body.creatorAvatar,
         creator_email=body.creatorEmail,
-        niche=body.niche,
-        followers=body.followers,
-        product_name=body.productName,
-        product_tagline=body.productTagline or "",
-        target_audience=body.customer or body.targetAudience or "",
-        pricing=body.pricing or "$29/mo Starter • $79/mo Pro",
-        revenue_model=body.revenueModel or "SaaS Subscription",
+        niche=niche_str,
+        followers=followers_str,
+        product_name=product_name,
+        product_tagline=product_tagline,
+        target_audience=body.customer or body.targetAudience or concept_data.get("customer") or "",
+        pricing=pricing_str,
+        revenue_model=body.revenueModel or concept_data.get("revenueModel") or "SaaS Subscription",
         current_phase=1,
         current_step="plan",
         status="validating",
-        presale_target=body.presaleTarget or 5000.0,
+        presale_target=presale_target_val,
         current_presales=0.0,
         visitors=0,
         conversion_rate=0.0,
         portal_token="cf_sec_live",
-        selected_concept=body.selectedConcept or {},
+        selected_concept=concept_data,
         created_at=datetime.utcnow()
     )
     db.add(proj)
@@ -323,7 +368,7 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
 
     # Dynamic pricing extraction from concept / payload
     import re
-    raw_pricing = body.pricing or "$29/mo Starter • $79/mo Pro"
+    raw_pricing = pricing_str or "$29/mo Starter • $79/mo Pro"
     price_matches = [int(p) for p in re.findall(r'\$(\d+)', raw_pricing)]
     if len(price_matches) >= 2:
         starter_price = price_matches[0]

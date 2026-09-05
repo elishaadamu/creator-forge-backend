@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -381,6 +381,10 @@ class CreatorUpdate(BaseModel):
     email: Optional[str] = None
     notes: Optional[str] = None
     status: Optional[str] = None
+    selected_concept_id: Optional[str] = None
+    selectedConceptId: Optional[str] = None
+    selected_concept: Optional[Dict[str, Any]] = None
+    selectedConcept: Optional[Dict[str, Any]] = None
 
 
 @router.patch("/{creator_id}")
@@ -410,8 +414,25 @@ def update_creator_details(
         c.email_public = target_email
 
     for field, val in data.items():
-        if field not in ("email", "email_public") and hasattr(c, field):
+        if field not in ("email", "email_public", "selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept") and hasattr(c, field):
             setattr(c, field, val)
+
+    # Persist selected_concept_id and selected_concept to discovery_notes JSON
+    if any(k in data for k in ("selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept")):
+        import json
+        notes = {}
+        if c.discovery_notes and c.discovery_notes.startswith("{"):
+            try:
+                notes = json.loads(c.discovery_notes)
+            except Exception:
+                notes = {}
+        sel_id = data.get("selected_concept_id") or data.get("selectedConceptId")
+        if sel_id:
+            notes["selected_concept_id"] = sel_id
+        sel_concept = data.get("selected_concept") or data.get("selectedConcept")
+        if sel_concept:
+            notes["selected_concept"] = sel_concept
+        c.discovery_notes = json.dumps(notes)
     
     if target_email:
         try:
@@ -1114,12 +1135,18 @@ def get_creator_analysis(creator_id: str, db: Session = Depends(get_db)):
 def _creator_dict(c: Creator) -> dict:
     reply_classification = None
     reply_text = None
+    product_concepts = []
+    selected_concept_id = None
+    selected_concept = None
     try:
         if c.discovery_notes and c.discovery_notes.startswith("{"):
             import json
             parsed = json.loads(c.discovery_notes)
             reply_classification = parsed.get("reply_classification")
             reply_text = parsed.get("reply_text")
+            product_concepts = parsed.get("product_concepts") or []
+            selected_concept_id = parsed.get("selected_concept_id") or parsed.get("selectedConceptId")
+            selected_concept = parsed.get("selected_concept") or parsed.get("selectedConcept")
     except Exception:
         pass
 
@@ -1132,6 +1159,12 @@ def _creator_dict(c: Creator) -> dict:
         "email_public": c.email_public, "status": c.status,
         "reply_classification": reply_classification,
         "reply_text": reply_text,
+        "product_concepts": product_concepts,
+        "productConcepts": product_concepts,
+        "selected_concept_id": selected_concept_id,
+        "selectedConceptId": selected_concept_id,
+        "selected_concept": selected_concept,
+        "selectedConcept": selected_concept,
         "discovery_source": c.discovery_source,
         "engagement_score": c.engagement_score,
         "created_at": c.created_at.isoformat() if c.created_at else None,
