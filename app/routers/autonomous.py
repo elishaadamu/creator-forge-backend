@@ -274,7 +274,7 @@ class DiscoverCreatorsSchema(BaseModel):
     min_followers: int = 100000
     max_followers: int = 1000000
     min_engagement_rate: float = 2.0
-    target_count: int = 3
+    target_count: int = 25
     platforms: Optional[List[str]] = Field(default_factory=lambda: ["youtube", "tiktok", "instagram"])
     geography: Optional[str] = "GLOBAL"
 
@@ -305,7 +305,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     }
     apify_token = request.headers.get("X-Apify-Token") or settings.APIFY_API_KEY
 
-    target_count = min(50, max(1, data.target_count or 3))
+    target_count = min(50, max(1, data.target_count or 25))
     candidate_pool_size = target_count
     niches = [n.strip() for n in (data.niches or ["Tech"]) if n.strip()]
     platforms = [p.lower().strip() for p in (data.platforms or ["youtube", "tiktok", "instagram"])]
