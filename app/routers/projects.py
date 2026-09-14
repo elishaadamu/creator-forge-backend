@@ -43,6 +43,8 @@ class CreateProjectRequest(BaseModel):
     mockup: Optional[Dict[str, Any]] = None
     campaign_kit: Optional[Dict[str, Any]] = None
     campaignKit: Optional[Dict[str, Any]] = None
+    portalLinkSent: Optional[bool] = False
+    skipCreatorEmail: Optional[bool] = False
 
 
 class UpdatePlanRequest(BaseModel):
@@ -177,6 +179,12 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "qaResults": (proj.metadata_info or {}).get("qa_results") or (proj.metadata_info or {}).get("qaResults"),
         "betaFeedback": (proj.metadata_info or {}).get("beta_feedback") or (proj.metadata_info or {}).get("betaFeedback", []),
         "feedbackClusters": (proj.metadata_info or {}).get("feedback_clusters") or (proj.metadata_info or {}).get("feedbackClusters") or (telemetry.feedback_clusters if telemetry else []) or [],
+        "experimentsData": (
+            (proj.metadata_info or {}).get("experimentsData") or
+            (proj.metadata_info or {}).get("experiments_data") or
+            (proj.metadata_info or {}).get("experiments") or
+            ({"experiments": telemetry.experiments, "performanceAudit": (proj.metadata_info or {}).get("performanceAudit")} if (telemetry and telemetry.experiments) else None)
+        ),
         "readinessReport": (proj.metadata_info or {}).get("readiness_report") or (proj.metadata_info or {}).get("readinessReport"),
         "appliedPatches": (proj.metadata_info or {}).get("applied_patches") or (proj.metadata_info or {}).get("appliedPatches", []),
         "mvpVersion": (proj.metadata_info or {}).get("mvp_version") or (proj.metadata_info or {}).get("mvpVersion", "v1.0.0-MVP"),
@@ -684,10 +692,27 @@ Creator Forge Studio Operations"""
             except Exception as e:
                 logger.warning(f"Failed to dispatch admin launch briefing: {e}")
 
-        # 2. Dispatch Magic Portal Link to Creator
+        # 2. Dispatch Magic Portal Link to Creator (Skip if already dispatched by client or outreach)
         if creator_email and "@" in creator_email:
-            try:
-                creator_email_body = f"""Hi {proj.creator_name or 'there'},
+            should_send_to_creator = not bool(body.portalLinkSent or body.skipCreatorEmail)
+
+            # Also verify if a kick-off message containing the portal link was already dispatched in outreach
+            if should_send_to_creator and proj.creator_id:
+                try:
+                    from app.models.outreach import OutreachMessage
+                    recent_msg = db.query(OutreachMessage).filter(
+                        OutreachMessage.creator_id == proj.creator_id,
+                        OutreachMessage.status == "sent"
+                    ).order_by(OutreachMessage.created_at.desc()).first()
+                    if recent_msg and ("portal" in (recent_msg.body or "").lower() or "co-founder portal" in (recent_msg.subject or "").lower()):
+                        should_send_to_creator = False
+                        logger.info(f"Skipping duplicate portal email to {creator_email}: kickoff email already dispatched in outreach")
+                except Exception as check_err:
+                    logger.warning(f"Error checking recent outreach messages: {check_err}")
+
+            if should_send_to_creator:
+                try:
+                    creator_email_body = f"""Hi {proj.creator_name or 'there'},
 
 Welcome to your software co-launch portal!
 
@@ -697,19 +722,25 @@ Access Portal: {portal_magic_link}
 
 Best,
 Creator Forge Studio Team"""
-                email_provider.send(
-                    to_email=creator_email,
-                    subject=f"Access Your Co-Founder Portal: {proj.product_name}",
-                    body_html=creator_email_body.replace("\n", "<br>"),
-                    body_text=creator_email_body
-                )
+                    email_provider.send(
+                        to_email=creator_email,
+                        subject=f"Access Your Co-Founder Portal: {proj.product_name}",
+                        body_html=creator_email_body.replace("\n", "<br>"),
+                        body_text=creator_email_body
+                    )
+                    proj.portal_link_sent = True
+                    proj.portal_link_sent_to = creator_email
+                    proj.portal_link_sent_at = datetime.utcnow()
+                    db.commit()
+                    logger.info(f"Dispatched Portal Magic Link to Creator {creator_email}")
+                except Exception as e:
+                    logger.warning(f"Failed to dispatch creator portal link: {e}")
+            else:
                 proj.portal_link_sent = True
                 proj.portal_link_sent_to = creator_email
                 proj.portal_link_sent_at = datetime.utcnow()
                 db.commit()
-                logger.info(f"Dispatched Portal Magic Link to Creator {creator_email}")
-            except Exception as e:
-                logger.warning(f"Failed to dispatch creator portal link: {e}")
+                logger.info(f"Portal magic link already dispatched to creator {creator_email}, duplicate email suppressed.")
     except Exception as dispatch_err:
         logger.warning(f"Project dispatch notification exception: {dispatch_err}")
 
@@ -865,6 +896,21 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         cl = body.get("campaignLaunched") if body.get("campaignLaunched") is not None else body.get("campaign_launched")
         cur_meta["campaign_launched"] = bool(cl)
 
+    if "experimentsData" in body or "experiments_data" in body:
+        exp_data = body.get("experimentsData") or body.get("experiments_data")
+        cur_meta["experimentsData"] = exp_data
+        cur_meta["experiments_data"] = exp_data
+        if proj.telemetry and isinstance(exp_data, dict) and "experiments" in exp_data:
+            proj.telemetry.experiments = exp_data.get("experiments") or []
+            flag_modified(proj.telemetry, "experiments")
+
+    if "experiments" in body:
+        exps = body.get("experiments")
+        cur_meta["experiments"] = exps
+        if proj.telemetry and isinstance(exps, list):
+            proj.telemetry.experiments = exps
+            flag_modified(proj.telemetry, "experiments")
+
     proj.metadata_info = cur_meta
     flag_modified(proj, "metadata_info")
 
@@ -889,7 +935,9 @@ def update_validation_plan(project_id: str, body: UpdatePlanRequest, db: Session
     if body.customer is not None: plan.customer = body.customer
     if body.problem is not None: plan.problem = body.problem
     if body.offer is not None: plan.offer = body.offer
-    if body.pricing is not None: plan.pricing = body.pricing
+    if body.pricing is not None:
+        plan.pricing = body.pricing
+        proj.pricing = body.pricing
     if body.test_method is not None: plan.test_method = body.test_method
     if body.period is not None: plan.period = body.period
     if body.threshold is not None: plan.threshold = body.threshold
@@ -1235,7 +1283,7 @@ def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session
 
     if body.decision == "pass_to_phase2":
         proj.current_phase = 2
-        proj.current_step = "specs"
+        proj.current_step = "plan"
         proj.status = "building"
         gate_status = "passed"
     elif body.decision == "iterate_validation":
