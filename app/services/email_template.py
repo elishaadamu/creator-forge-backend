@@ -1,11 +1,11 @@
 """
-Luxury Venture Studio Email Template & Markdown Formatter.
+Real Human-to-Human Venture Studio Email Template & Markdown Formatter.
 
 Provides:
-1. Centralized Studio Branding & Logo configuration.
-2. Flawless Markdown-to-HTML conversion with inline styles for email clients.
-3. Fully responsive (mobile + desktop) fluid HTML email layout.
-4. Embedded Concept Mockup Visual Showcase for Step 5 & Step 6 creator proposals.
+1. Clean 1-on-1 personal email message formatting (NOT an automated marketing newsletter).
+2. Official Creator Forge 4-node geometric logo & authentic executive signature.
+3. Clean, high-deliverability light HTML styling for all email clients (Gmail, Apple Mail, Outlook).
+4. Elegant concept preview showcase for Step 5 & Step 6 creator proposals.
 """
 import re
 import html
@@ -14,19 +14,8 @@ import markdown
 
 from app.config import settings
 
-# ==============================================================================
-# STUDIO BRANDING & LOGO CONFIGURATION
-# You can change the studio logo URL and studio details here, in app/config.py,
-# or via environment variables in .env (STUDIO_LOGO_URL, STUDIO_NAME).
-# ==============================================================================
 STUDIO_NAME: str = getattr(settings, "STUDIO_NAME", "Creator Forge")
 STUDIO_TAGLINE: str = getattr(settings, "STUDIO_TAGLINE", "Venture Studio & Co-Launch Incubation")
-
-# High-resolution studio logo mark. Change this URL to your own logo PNG or SVG anytime:
-STUDIO_LOGO_URL: str = (
-    getattr(settings, "STUDIO_LOGO_URL", "")
-    or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=240&auto=format&fit=crop&q=80"
-)
 
 # Default curated SaaS visual mockups per category (high-performance Unsplash previews)
 CATEGORY_MOCKUP_IMAGES = {
@@ -38,6 +27,66 @@ CATEGORY_MOCKUP_IMAGES = {
     "data_ai": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80",
     "default": "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1200&auto=format&fit=crop&q=80",
 }
+
+
+def _render_creator_forge_logo_html(size: int = 28) -> str:
+    """
+    Renders the official Creator Forge 4-node geometric symbol using pure HTML tables.
+    100% email client compatible — zero external image dependency, zero SVG blocking.
+    Node 1 (top-left): #1e293b (Slate-800)
+    Node 2 (top-right): #4f46e5 (Indigo-600)
+    Node 3 (bottom-left): #10b981 (Emerald-500)
+    Node 4 (bottom-right): #0f172a (Slate-900)
+    """
+    cell_size = max(10, size // 2 - 3)
+    return f'''
+    <table border="0" cellspacing="2" cellpadding="0" style="display:inline-table;width:{size}px;height:{size}px;border-collapse:separate;vertical-align:middle;background:#ffffff;padding:2px;border:1px solid #e2e8f0;border-radius:6px;">
+      <tr>
+        <td style="width:{cell_size}px;height:{cell_size}px;background:#1e293b;border-radius:2px;"></td>
+        <td style="width:{cell_size}px;height:{cell_size}px;background:#4f46e5;border-radius:2px;"></td>
+      </tr>
+      <tr>
+        <td style="width:{cell_size}px;height:{cell_size}px;background:#10b981;border-radius:2px;"></td>
+        <td style="width:{cell_size}px;height:{cell_size}px;background:#0f172a;border-radius:2px;"></td>
+      </tr>
+    </table>
+    '''
+
+
+def _render_executive_signature_html(creator_name: str = "", tracking_token: str = "") -> str:
+    """Renders a real 1-on-1 executive email signature with brand card elements."""
+    logo_html = _render_creator_forge_logo_html(32)
+    ref_footnote = ""
+    if tracking_token:
+        ref_footnote = f'''
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f1f5f9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#94a3b8;">
+          <span style="color:#64748b;">Studio Reference:</span>
+          <span style="background:#f1f5f9;color:#475569;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:4px;">{html.escape(tracking_token)}</span>
+        </div>
+        '''
+    return f'''
+    <div style="margin-top:28px;padding-top:20px;border-top:1px solid #e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+      <table border="0" cellspacing="0" cellpadding="0">
+        <tr>
+          <td style="vertical-align:top;padding-right:14px;">
+            {logo_html}
+          </td>
+          <td style="vertical-align:top;">
+            <div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.2;">Alex Rivera</div>
+            <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:3px;">Head of Venture Partnerships • Creator Forge</div>
+            <div style="font-size:12px;color:#475569;margin-top:8px;line-height:1.5;">
+              <a href="mailto:partnerships@creatorforge.com" style="color:#0f172a;text-decoration:underline;font-weight:600;">partnerships@creatorforge.com</a>
+              <span style="color:#cbd5e1;margin:0 6px;">•</span>
+              <a href="https://creatorforge.com" style="color:#4f46e5;text-decoration:none;">creatorforge.com</a>
+              <span style="color:#cbd5e1;margin:0 6px;">•</span>
+              <span style="color:#64748b;">San Francisco, CA</span>
+            </div>
+            {ref_footnote}
+          </td>
+        </tr>
+      </table>
+    </div>
+    '''
 
 
 def _clean_and_extract_ref_tokens(raw_text: str) -> tuple[str, str]:
@@ -69,12 +118,12 @@ def _render_single_concept_card(
     total_concepts: int = 1,
     concept_image_url: Optional[str] = None
 ) -> str:
-    """Renders an individual concept showcase card with visual mockup, pricing, and features."""
+    """Renders an individual concept showcase card with clean, modern light styling."""
     app_name = concept.get("name") or concept.get("title") or f"Software Concept #{index + 1}"
     tagline = concept.get("tagline") or concept.get("summary") or concept.get("description") or "Tailored software suite engineered for your community"
     raw_pricing = concept.get("pricing") or concept.get("revenueModel")
     if isinstance(raw_pricing, dict):
-        pricing_parts = [f"{str(v)}" if not any(c in str(k).lower() for c in ["creator", "split", "share"]) else f"{str(v)}" for k, v in raw_pricing.items() if v]
+        pricing_parts = [f"{str(v)}" for k, v in raw_pricing.items() if v]
         pricing = " • ".join(pricing_parts) if pricing_parts else "$29/mo Starter • $79/mo Pro"
     elif isinstance(raw_pricing, str) and raw_pricing.strip():
         pricing = raw_pricing.strip()
@@ -87,10 +136,9 @@ def _render_single_concept_card(
 
     app_url = mockup_data.get("appUrl") or f"{str(app_name).lower().replace(' ', '')}.app"
     primary_metric = mockup_data.get("primaryMetric") or "$18.4K Projected MRR"
-    active_metric = mockup_data.get("activeMetric") or "1,240 Active Users"
+    active_metric = mockup_data.get("activeMetric") or "1,240 Target Users"
     efficiency_metric = mockup_data.get("efficiencyMetric") or "14-Day MVP Launch"
 
-    # Select best visual image: custom image URL (if first concept) > concept.imageUrl > category fallback
     active_image = (concept_image_url if index == 0 else None) or concept.get("imageUrl") or concept.get("image_url")
     if not active_image:
         niche_key = "default"
@@ -104,13 +152,13 @@ def _render_single_concept_card(
     key_features = concept.get("keyFeatures") or concept.get("features") or []
     if key_features and isinstance(key_features, list):
         f_items = "".join(
-            f'<li style="margin-bottom:6px;line-height:1.5;color:#cbd5e1;font-size:13px;">'
-            f'<span style="color:#a855f7;font-weight:bold;margin-right:6px;">✓</span>{html.escape(str(f))}</li>'
+            f'<li style="margin-bottom:6px;line-height:1.5;color:#334155;font-size:13px;">'
+            f'<span style="color:#10b981;font-weight:bold;margin-right:6px;">✓</span>{html.escape(str(f))}</li>'
             for f in key_features[:4]
         )
         features_html = f'''
-        <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08);">
-          <div style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f1f5f9;">
+          <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">
             Key Built-In Features:
           </div>
           <ul style="margin:0;padding:0;list-style:none;">
@@ -122,42 +170,42 @@ def _render_single_concept_card(
     problem_html = ""
     if problem:
         problem_html = f'''
-        <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:10px 14px;margin-top:12px;font-size:12px;color:#94a3b8;line-height:1.5;">
-          <strong style="color:#f8fafc;">Solves:</strong> {html.escape(problem)}
+        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;margin-top:12px;font-size:12px;color:#475569;line-height:1.5;">
+          <strong style="color:#0f172a;">Solves:</strong> {html.escape(problem)}
         </div>
         '''
 
     image_element = ""
     if active_image:
         image_element = f'''
-        <div style="margin:14px 0 8px 0;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.1);background:#020617;box-shadow:0 12px 24px rgba(0,0,0,0.4);">
-          <img src="{active_image}" alt="{html.escape(app_name)} Visual Mockup" width="556" style="width:100%;max-width:556px;height:auto;display:block;object-fit:cover;" class="responsive-img" />
+        <div style="margin:14px 0 8px 0;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;background:#f8fafc;">
+          <img src="{active_image}" alt="{html.escape(app_name)} Visual Mockup" width="556" style="width:100%;max-width:556px;height:auto;display:block;object-fit:cover;" />
         </div>
         '''
 
     concept_badge = f"CONCEPT #{index + 1}" if total_concepts > 1 else "PROPOSED SOFTWARE PRODUCT"
 
     return f'''
-    <!-- CONCEPT SHOWCASE CARD #{index + 1} -->
-    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0 24px 0;background:linear-gradient(145deg,#131a29 0%,#0c101a 100%);border-radius:16px;border:1px solid #2d3748;box-shadow:0 14px 30px rgba(0,0,0,0.45);overflow:hidden;">
+    <!-- CONCEPT SHOWCASE CARD #{index + 1} (Light Clean Theme) -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0 24px 0;background:#f8fafc;border-radius:16px;border:1px solid #e2e8f0;overflow:hidden;">
       <!-- Window Chrome Header -->
       <tr>
-        <td style="padding:12px 18px;background:#090d16;border-bottom:1px solid rgba(255,255,255,0.08);">
+        <td style="padding:12px 18px;background:#ffffff;border-bottom:1px solid #e2e8f0;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
               <td align="left" style="vertical-align:middle;">
-                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;margin-right:6px;"></span>
-                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#f59e0b;margin-right:6px;"></span>
-                <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10b981;margin-right:12px;"></span>
-                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#94a3b8;background:rgba(255,255,255,0.05);padding:3px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+                <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:5px;"></span>
+                <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#f59e0b;margin-right:5px;"></span>
+                <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;margin-right:10px;"></span>
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#64748b;background:#f1f5f9;padding:3px 8px;border-radius:6px;border:1px solid #e2e8f0;">
                   https://{html.escape(app_url)}
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
-                <span style="background:rgba(168,85,247,0.18);border:1px solid rgba(168,85,247,0.4);color:#d8b4fe;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;margin-right:6px;">
+                <span style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;margin-right:6px;">
                   {concept_badge}
                 </span>
-                <span style="background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.35);color:#6ee7b7;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;">
+                <span style="background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;">
                   Score: {score}/100
                 </span>
               </td>
@@ -172,16 +220,16 @@ def _render_single_concept_card(
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
               <td>
-                <div style="font-size:18px;font-weight:900;color:#ffffff;letter-spacing:-0.4px;">
+                <div style="font-size:17px;font-weight:800;color:#0f172a;letter-spacing:-0.3px;">
                   {html.escape(app_name)}
                 </div>
-                <div style="font-size:13px;color:#a855f7;font-weight:600;margin-top:2px;">
+                <div style="font-size:13px;color:#6366f1;font-weight:600;margin-top:2px;">
                   {html.escape(tagline)}
                 </div>
               </td>
               <td align="right" style="vertical-align:top;">
-                <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;font-weight:700;margin-bottom:2px;text-align:right;">Target Pricing</div>
-                <span style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:800;color:#38bdf8;background:rgba(56,189,248,0.12);padding:5px 12px;border-radius:8px;border:1px solid rgba(56,189,248,0.3);white-space:nowrap;">
+                <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;margin-bottom:2px;text-align:right;">Target Pricing</div>
+                <span style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#0369a1;background:#f0f9ff;padding:4px 10px;border-radius:6px;border:1px solid #bae6fd;white-space:nowrap;">
                   {html.escape(pricing)}
                 </span>
               </td>
@@ -193,19 +241,19 @@ def _render_single_concept_card(
           <!-- Metric Highlights Grid -->
           <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:14px;">
             <tr>
-              <td width="32%" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:10px;text-align:center;" class="metric-col">
-                <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Est. Revenue</div>
-                <div style="font-size:14px;font-weight:800;color:#34d399;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(primary_metric)}</div>
+              <td width="32%" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;">
+                <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Est. Revenue</div>
+                <div style="font-size:13px;font-weight:800;color:#059669;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(primary_metric)}</div>
               </td>
               <td width="2%">&nbsp;</td>
-              <td width="32%" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:10px;text-align:center;" class="metric-col">
-                <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Target Users</div>
-                <div style="font-size:14px;font-weight:800;color:#c084fc;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(active_metric)}</div>
+              <td width="32%" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;">
+                <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Target Users</div>
+                <div style="font-size:13px;font-weight:800;color:#7c3aed;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(active_metric)}</div>
               </td>
               <td width="2%">&nbsp;</td>
-              <td width="32%" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:10px;text-align:center;" class="metric-col">
-                <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Build Speed</div>
-                <div style="font-size:14px;font-weight:800;color:#38bdf8;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(efficiency_metric)}</div>
+              <td width="32%" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;">
+                <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Build Speed</div>
+                <div style="font-size:13px;font-weight:800;color:#0284c7;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(efficiency_metric)}</div>
               </td>
             </tr>
           </table>
@@ -238,9 +286,9 @@ def render_concept_showcase_html(
     header_bar = ""
     if total_count > 1:
         header_bar = f'''
-        <div style="margin:28px 0 10px 0;padding-bottom:8px;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;">
-          <span style="font-size:12px;font-weight:800;color:#a855f7;text-transform:uppercase;letter-spacing:1px;">
-            Top {total_count} Software Opportunities &amp; Pricing Breakdown
+        <div style="margin:24px 0 10px 0;padding-bottom:8px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:12px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:0.8px;">
+            💡 Top {total_count} Software Opportunities &amp; Pricing Breakdown
           </span>
         </div>
         '''
@@ -254,7 +302,24 @@ def render_concept_showcase_html(
             concept_image_url=concept_image_url
         ))
 
-    return header_bar + "".join(cards)
+    cta_and_replies = '''
+    <div style="margin:22px 0 16px 0;">
+      <a href="#deck-preview" style="display:inline-block;padding:10px 20px;border-radius:10px;background:#0f172a;color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;margin-bottom:8px;">
+        📄 Review 3-Concept Deck (PDF)
+      </a>
+      <a href="#book-chat" style="display:inline-block;padding:10px 18px;border-radius:10px;background:#ffffff;border:1px solid #cbd5e1;color:#334155;font-size:13px;font-weight:600;text-decoration:none;margin-bottom:8px;">
+        📅 Book 15-Min Intro Chat
+      </a>
+    </div>
+    <div style="margin:12px 0 20px 0;font-size:12px;color:#94a3b8;">
+      <span style="color:#64748b;font-weight:600;margin-right:6px;">Quick Reply:</span>
+      <span style="display:inline-block;background:#f1f5f9;color:#334155;padding:4px 12px;border-radius:20px;font-size:11px;margin:2px;border:1px solid #e2e8f0;">&ldquo;Sounds interesting, send it over&rdquo;</span>
+      <span style="display:inline-block;background:#f1f5f9;color:#334155;padding:4px 12px;border-radius:20px;font-size:11px;margin:2px;border:1px solid #e2e8f0;">&ldquo;Send deck first&rdquo;</span>
+      <span style="display:inline-block;background:#f1f5f9;color:#334155;padding:4px 12px;border-radius:20px;font-size:11px;margin:2px;border:1px solid #e2e8f0;">&ldquo;Not right now&rdquo;</span>
+    </div>
+    '''
+
+    return header_bar + "".join(cards) + cta_and_replies
 
 
 def convert_markdown_to_clean_html(markdown_text: str) -> str:
@@ -295,7 +360,6 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
                 normalized_lines.append("")
             in_list = True
         elif not is_list_item and in_list and stripped:
-            # List ended, insert blank line before regular text
             normalized_lines.append("")
             in_list = False
         elif not stripped:
@@ -305,7 +369,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
 
     clean_md = "\n".join(normalized_lines)
 
-    # 2. Check for portal/preview URL to render an eye-catching CTA button
+    # 2. Check for portal/preview URL to render an authentic CTA button
     url_match = re.search(r'(https?://[^\s<"\']+)', clean_md)
     cta_btn_html = ""
     if url_match:
@@ -314,12 +378,12 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         cta_label = "Access Co-Founder Portal →" if is_portal else "Review Software Concepts →"
         
         cta_btn_html = f'''
-        <div style="margin:26px 0 16px 0;text-align:center;">
-          <a href="{raw_url}" target="_blank" class="mobile-btn" style="display:inline-block;padding:15px 34px;background:linear-gradient(135deg,#9333ea 0%,#6366f1 100%);color:#ffffff;font-size:15px;font-weight:800;text-decoration:none;border-radius:12px;box-shadow:0 10px 25px rgba(147,51,234,0.35);border:1px solid rgba(255,255,255,0.2);letter-spacing:0.3px;">
+        <div style="margin:22px 0 14px 0;">
+          <a href="{raw_url}" target="_blank" style="display:inline-block;padding:12px 24px;background:#0f172a;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;border-radius:8px;letter-spacing:0.2px;">
             {cta_label}
           </a>
-          <div style="margin-top:8px;font-size:11px;color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
-            Direct Secure Link: <a href="{raw_url}" style="color:#a855f7;text-decoration:underline;">{raw_url}</a>
+          <div style="margin-top:6px;font-size:11px;color:#64748b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
+            Direct link: <a href="{raw_url}" style="color:#6366f1;text-decoration:underline;">{raw_url}</a>
           </div>
         </div>
         '''
@@ -330,11 +394,11 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         extensions=["extra", "sane_lists", "nl2br"]
     )
 
-    # 4. Post-process and inject inline CSS for email client rendering
+    # 4. Post-process and inject clean inline CSS for high-deliverability email client rendering
     # Paragraphs
     raw_html = re.sub(
         r'<p>(.*?)</p>',
-        r'<p style="margin:0 0 16px 0;line-height:1.7;color:#cbd5e1;font-size:15px;">\1</p>',
+        r'<p style="margin:0 0 16px 0;line-height:1.65;color:#1e293b;font-size:15px;">\1</p>',
         raw_html,
         flags=re.DOTALL
     )
@@ -342,52 +406,52 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     # Headings
     raw_html = re.sub(
         r'<h1>(.*?)</h1>',
-        r'<h1 style="margin:24px 0 14px 0;font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;line-height:1.3;">\1</h1>',
+        r'<h1 style="margin:20px 0 12px 0;font-size:20px;font-weight:800;color:#0f172a;letter-spacing:-0.4px;line-height:1.3;">\1</h1>',
         raw_html
     )
     raw_html = re.sub(
         r'<h2>(.*?)</h2>',
-        r'<h2 style="margin:22px 0 12px 0;font-size:18px;font-weight:800;color:#ffffff;letter-spacing:-0.4px;line-height:1.35;">\1</h2>',
+        r'<h2 style="margin:18px 0 10px 0;font-size:17px;font-weight:700;color:#0f172a;letter-spacing:-0.3px;line-height:1.35;">\1</h2>',
         raw_html
     )
     raw_html = re.sub(
         r'<h3>(.*?)</h3>',
-        r'<h3 style="margin:18px 0 10px 0;font-size:16px;font-weight:800;color:#ffffff;letter-spacing:-0.3px;line-height:1.4;">\1</h3>',
+        r'<h3 style="margin:16px 0 8px 0;font-size:15px;font-weight:700;color:#0f172a;letter-spacing:-0.2px;line-height:1.4;">\1</h3>',
         raw_html
     )
 
     # Bold & Strong
     raw_html = re.sub(
         r'<strong>(.*?)</strong>',
-        r'<strong style="color:#ffffff;font-weight:700;">\1</strong>',
+        r'<strong style="color:#0f172a;font-weight:700;">\1</strong>',
         raw_html
     )
 
     # Emphasis & Italics
     raw_html = re.sub(
         r'<em>(.*?)</em>',
-        r'<em style="color:#e2e8f0;font-style:italic;">\1</em>',
+        r'<em style="color:#475569;font-style:italic;">\1</em>',
         raw_html
     )
 
     # Unordered Lists
     raw_html = re.sub(
         r'<ul>',
-        r'<ul style="margin:14px 0 18px 0;padding-left:20px;color:#a855f7;line-height:1.65;">',
+        r'<ul style="margin:12px 0 16px 0;padding-left:20px;color:#6366f1;line-height:1.6;">',
         raw_html
     )
 
     # Ordered Lists
     raw_html = re.sub(
         r'<ol>',
-        r'<ol style="margin:14px 0 18px 0;padding-left:22px;color:#a855f7;line-height:1.65;">',
+        r'<ol style="margin:12px 0 16px 0;padding-left:22px;color:#6366f1;line-height:1.6;">',
         raw_html
     )
 
     # List Items
     raw_html = re.sub(
         r'<li>(.*?)</li>',
-        r'<li style="margin-bottom:8px;line-height:1.65;color:#cbd5e1;font-size:14px;"><span style="color:#cbd5e1;">\1</span></li>',
+        r'<li style="margin-bottom:6px;line-height:1.6;color:#1e293b;font-size:15px;"><span style="color:#1e293b;">\1</span></li>',
         raw_html,
         flags=re.DOTALL
     )
@@ -395,7 +459,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     # Blockquotes
     raw_html = re.sub(
         r'<blockquote>\s*<p>(.*?)</p>\s*</blockquote>',
-        r'<blockquote style="margin:18px 0;padding:12px 18px;border-left:3px solid #9333ea;background:rgba(147,51,234,0.08);border-radius:0 10px 10px 0;color:#e2e8f0;font-size:14px;line-height:1.6;font-style:italic;">\1</blockquote>',
+        r'<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #6366f1;background:#f8fafc;border-radius:0 8px 8px 0;color:#334155;font-size:14px;line-height:1.6;font-style:italic;">\1</blockquote>',
         raw_html,
         flags=re.DOTALL
     )
@@ -403,27 +467,65 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     # Horizontal Rules
     raw_html = re.sub(
         r'<hr\s*/?>',
-        r'<hr style="border:none;border-top:1px solid #1e293b;margin:24px 0;">',
+        r'<hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;">',
         raw_html
     )
 
     # Anchor links
     raw_html = re.sub(
         r'<a\s+href="([^"]+)">([^<]+)</a>',
-        r'<a href="\1" target="_blank" style="color:#a855f7;font-weight:600;text-decoration:underline;">\2</a>',
+        r'<a href="\1" target="_blank" style="color:#6366f1;font-weight:600;text-decoration:underline;">\2</a>',
         raw_html
     )
 
     # Code tags
     raw_html = re.sub(
         r'<code>(.*?)</code>',
-        r'<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:rgba(255,255,255,0.08);color:#f1f5f9;padding:2px 6px;border-radius:4px;">\1</code>',
+        r'<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;padding:2px 6px;border-radius:4px;">\1</code>',
         raw_html
     )
 
     # Append CTA button if present and not already embedded
-    if cta_btn_html and "mobile-btn" not in raw_html:
+    if cta_btn_html and "Access Co-Founder Portal" not in raw_html:
         raw_html = f"{raw_html}\n{cta_btn_html}"
+
+    # Format Creator Forge 50/50 Venture Model block if present into responsive hero card
+    if "50/50" in raw_html and ("venture model" in raw_html.lower() or "partner" in raw_html.lower()):
+        hero_card_html = '''
+        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin:20px 0;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+          <div style="font-size:15px;font-weight:700;color:#312e81;margin-bottom:8px;">
+            Creator Forge <span style="color:#f59e0b;">⚡</span> <span style="color:#94a3b8;font-weight:normal;">|</span> <span style="color:#334155;font-size:14px;font-weight:600;">50/50 Venture Model</span>
+          </div>
+          <p style="margin:0 0 16px 0;color:#334155;font-size:14px;line-height:1.6;">
+            We partner <strong>50/50 with creators</strong> to build custom software tools and monetization apps for their audience. Our team handles 100% of the engineering, hosting, payment setup, and customer support with zero upfront cost to you.
+          </p>
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-top:1px solid #f1f5f9;padding-top:12px;">
+            <tr>
+              <td width="32%" style="background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #f1f5f9;vertical-align:top;">
+                <div style="font-size:11px;font-weight:700;color:#4f46e5;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Full Delivery</div>
+                <div style="font-size:12px;color:#1e293b;font-weight:500;line-height:1.4;">100% Engineering, UI/UX &amp; QA</div>
+              </td>
+              <td width="2%">&nbsp;</td>
+              <td width="32%" style="background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #f1f5f9;vertical-align:top;">
+                <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Zero Risk</div>
+                <div style="font-size:12px;color:#1e293b;font-weight:500;line-height:1.4;">$0 Upfront Cost &amp; Co-ownership</div>
+              </td>
+              <td width="2%">&nbsp;</td>
+              <td width="32%" style="background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #f1f5f9;vertical-align:top;">
+                <div style="font-size:11px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Hands-Off Ops</div>
+                <div style="font-size:12px;color:#1e293b;font-weight:500;line-height:1.4;">Global Hosting, Billing &amp; 24/7 Support</div>
+              </td>
+            </tr>
+          </table>
+        </div>
+        '''
+        raw_html = re.sub(
+            r'<p[^>]*>.*?(?:Creator Forge.*?50/50 Venture Model|We partner.*?50/50 with creators).*?</p>(?:\s*<ul[^>]*>.*?</ul>)?',
+            hero_card_html,
+            raw_html,
+            count=1,
+            flags=re.DOTALL | re.IGNORECASE
+        )
 
     return raw_html
 
@@ -440,16 +542,25 @@ def format_luxury_html_email(
     concept_title: Optional[str] = None
 ) -> str:
     """
-    Master Responsive Luxury Venture Studio Email Formatter.
-    Creates a responsive, retina-sharp, Human-Crafted Venture Studio email.
+    Real Human-to-Human Email Formatter.
+    Formats outreach and replies as a real 1-on-1 personal email message:
+    - Clean white/native email canvas (no dark-mode newsletter marketing card)
+    - High-deliverability typography (#1e293b on #ffffff)
+    - Official Creator Forge geometric logo & authentic executive signature
+    - Discrete tracking token
+    - Clean concept preview cards for Step 5 / Step 6 proposals
     """
     clean_body, extracted_token = _clean_and_extract_ref_tokens(body_text)
     active_token = tracking_token or extracted_token
 
-    active_logo_url = logo_url or STUDIO_LOGO_URL
-    active_studio_name = studio_name or STUDIO_NAME
+    # Guard against accidental "undefined content" or "undefined"
+    clean_body = re.sub(r'\bundefined\s+content\b', 'content', clean_body, flags=re.IGNORECASE)
+    clean_body = re.sub(r'\bundefined\b', 'community', clean_body, flags=re.IGNORECASE)
 
-    # If concept_title is passed and concepts is None/empty, build a concept card
+    # Convert markdown body into clean styled HTML
+    formatted_body_html = convert_markdown_to_clean_html(clean_body)
+
+    # Concept cards if present
     active_concepts = concepts
     if not active_concepts and (concept_title or concept_image_url):
         active_concepts = [{
@@ -462,182 +573,60 @@ def format_luxury_html_email(
             "coreFeatures": ["Tailored Audience Workflow", "Automated Creator Monetization"]
         }]
 
-    # Convert markdown body into styled HTML
-    formatted_body_html = convert_markdown_to_clean_html(clean_body)
-
-    # Render concept mockup card if concepts or concept image are present
     concept_card_html = render_concept_showcase_html(
         concepts=active_concepts,
         concept_image_url=concept_image_url,
         creator_name=creator_name
     )
 
-    # Reference footer token block
-    ref_block = ""
-    if active_token:
-        ref_block = f'''
-        <div style="border-top:1px solid #1e293b;margin-top:28px;padding-top:14px;font-size:11px;color:#64748b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
-          Studio Reference: <span style="color:#94a3b8;">{html.escape(active_token)}</span>
-        </div>
-        '''
-
-    # Logo element: image + fallback wordmark
-    logo_img_tag = ""
-    if active_logo_url:
-        logo_img_tag = f'''
-        <img src="{active_logo_url}" alt="{html.escape(active_studio_name)} Logo" height="34" style="height:34px;max-height:34px;width:auto;display:inline-block;vertical-align:middle;margin-right:12px;border-radius:6px;" class="header-logo" />
-        '''
+    signature_html = _render_executive_signature_html(creator_name, active_token)
 
     return f"""<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="x-apple-disable-message-reformatting">
   <title>{html.escape(subject)}</title>
-  <!--[if mso]>
-  <noscript>
-    <xml>
-      <o:OfficeDocumentSettings>
-        <o:PixelsPerInch>96</o:PixelsPerInch>
-      </o:OfficeDocumentSettings>
-    </xml>
-  </noscript>
-  <![endif]-->
   <style>
-    html, body {{
+    body {{
       margin: 0 !important;
       padding: 0 !important;
-      height: 100% !important;
-      width: 100% !important;
-      background-color: #07090e;
-      -webkit-text-size-adjust: 100%;
-      -ms-text-size-adjust: 100%;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: #ffffff !important;
+      color: #1e293b !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+      font-size: 15px !important;
+      line-height: 1.65 !important;
+      -webkit-font-smoothing: antialiased;
     }}
-    table, td {{
-      mso-table-lspace: 0pt !important;
-      mso-table-rspace: 0pt !important;
-    }}
-    table {{
-      border-spacing: 0 !important;
-      border-collapse: collapse !important;
-      table-layout: fixed !important;
-      margin: 0 auto !important;
-    }}
-    img {{
-      -ms-interpolation-mode: bicubic;
-      max-width: 100%;
+    p {{
+      margin: 0 0 16px 0;
+      color: #1e293b;
+      font-size: 15px;
+      line-height: 1.65;
     }}
     a {{
-      text-decoration: none;
+      color: #6366f1;
+      text-decoration: underline;
     }}
-    /* Responsive Media Queries */
     @media only screen and (max-width: 600px) {{
-      .email-container {{
-        width: 100% !important;
-        max-width: 100% !important;
-        border-radius: 0 !important;
-        border-left: none !important;
-        border-right: none !important;
-      }}
-      .content-padding {{
-        padding: 24px 16px !important;
-      }}
-      .header-padding {{
-        padding: 20px 16px !important;
-      }}
-      .metric-col {{
-        display: block !important;
-        width: 100% !important;
-        margin-bottom: 8px !important;
-      }}
-      .mobile-btn {{
-        display: block !important;
-        width: 100% !important;
-        box-sizing: border-box !important;
-        text-align: center !important;
-        padding: 14px 20px !important;
-      }}
-      .header-logo {{
-        height: 28px !important;
-        max-height: 28px !important;
+      .email-wrapper {{
+        padding: 16px 12px !important;
       }}
     }}
   </style>
 </head>
-<body style="margin:0;padding:0;background-color:#07090e;color:#f8fafc;">
-  <!-- Full Width Background Wrapper -->
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color:#07090e;padding:32px 12px;">
-    <tr>
-      <td align="center" style="vertical-align:top;">
-        <!-- Email Card Container (600px fluid) -->
-        <table width="100%" border="0" cellspacing="0" cellpadding="0" class="email-container" style="max-width:620px;background:#0f172a;border-radius:18px;border:1px solid #1e293b;overflow:hidden;box-shadow:0 24px 48px rgba(0,0,0,0.6);">
-          
-          <!-- Top Accent Glow Line -->
-          <tr>
-            <td height="3" style="background:linear-gradient(90deg,#9333ea 0%,#6366f1 50%,#38bdf8 100%);font-size:1px;line-height:1px;">&nbsp;</td>
-          </tr>
+<body style="margin:0;padding:0;background-color:#ffffff;color:#1e293b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.65;">
+  <div class="email-wrapper" style="max-width:600px;margin:0 auto;padding:24px 20px;background-color:#ffffff;color:#1e293b;">
+    <!-- Real Email Message Body -->
+    <div style="color:#1e293b;font-size:15px;line-height:1.65;">
+      {formatted_body_html}
+    </div>
 
-          <!-- Header -->
-          <tr>
-            <td class="header-padding" style="padding:26px 32px;background:linear-gradient(135deg,#13192b 0%,#0f172a 100%);border-bottom:1px solid #1e293b;">
-              <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td align="left" style="vertical-align:middle;">
-                    <table border="0" cellspacing="0" cellpadding="0">
-                      <tr>
-                        <td style="vertical-align:middle;">
-                          {logo_img_tag}
-                        </td>
-                        <td style="vertical-align:middle;">
-                          <div style="font-size:18px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;line-height:1.2;">
-                            <span style="color:#a855f7;">{html.escape(active_studio_name.split()[0].upper())}</span> {html.escape(" ".join(active_studio_name.split()[1:]).upper() if len(active_studio_name.split()) > 1 else "STUDIO")}
-                          </div>
-                          <div style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-top:2px;">
-                            {html.escape(STUDIO_TAGLINE)}
-                          </div>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                  <td align="right" style="vertical-align:middle;">
-                    <span style="background:rgba(168,85,247,0.15);border:1px solid rgba(168,85,247,0.4);color:#d8b4fe;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:800;letter-spacing:0.4px;white-space:nowrap;">
-                      50/50 Co-Founder
-                    </span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+    <!-- Proposal Concepts Breakdown if attached -->
+    {concept_card_html}
 
-          <!-- Body Content Area -->
-          <tr>
-            <td class="content-padding" style="padding:32px 32px 28px 32px;background-color:#0f172a;">
-              {formatted_body_html}
-              {concept_card_html}
-              {ref_block}
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:22px 32px;background:#090d16;border-top:1px solid #1e293b;font-size:12px;color:#64748b;text-align:center;line-height:1.6;">
-              <div style="font-weight:700;color:#94a3b8;margin-bottom:4px;">
-                {html.escape(active_studio_name)}
-              </div>
-              <div style="color:#64748b;margin-bottom:8px;">
-                Co-launching high-margin software ventures with digital creators under a 50/50 model.
-              </div>
-              <div style="font-size:11px;color:#475569;">
-                100% Engineering Funded • Zero Financial Cost to Creator • Automated Direct Payouts
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
+    <!-- Real Executive Email Signature -->
+    {signature_html}
+  </div>
 </body>
 </html>"""
