@@ -385,6 +385,31 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             updated = True
         if concept_data and concept_data != existing_creator_proj.selected_concept:
             existing_creator_proj.selected_concept = concept_data
+            if concept_data.get("customer") or concept_data.get("demographicAlignment"):
+                existing_creator_proj.target_audience = concept_data.get("customer") or concept_data.get("demographicAlignment")
+            if existing_creator_proj.validation_plan:
+                if concept_data.get("customer") or concept_data.get("demographicAlignment"):
+                    existing_creator_proj.validation_plan.customer = concept_data.get("customer") or concept_data.get("demographicAlignment")
+                if concept_data.get("problem") or concept_data.get("description"):
+                    existing_creator_proj.validation_plan.problem = concept_data.get("problem") or concept_data.get("description")
+                existing_creator_proj.validation_plan.offer = f"{existing_creator_proj.product_name} Founding Co-Launch Access: {existing_creator_proj.product_tagline}"
+                if new_pricing:
+                    existing_creator_proj.validation_plan.pricing = new_pricing
+            if existing_creator_proj.validation_campaign:
+                pa = existing_creator_proj.validation_campaign.product_assets or {}
+                pa["productName"] = existing_creator_proj.product_name
+                pa["productTagline"] = existing_creator_proj.product_tagline
+                if concept_data.get("problem"):
+                    pa["problem"] = concept_data.get("problem")
+                if concept_data.get("keyFeatures"):
+                    pa["keyFeatures"] = concept_data.get("keyFeatures")
+                if concept_data.get("mockup"):
+                    pa["mockup"] = concept_data.get("mockup")
+                if concept_data.get("mockupType"):
+                    pa["mockupType"] = concept_data.get("mockupType")
+                pa["selectedConcept"] = concept_data
+                existing_creator_proj.validation_campaign.product_assets = pa
+                flag_modified(existing_creator_proj.validation_campaign, "product_assets")
             updated = True
 
         # Ensure Creator table row is marked as launched
@@ -508,9 +533,9 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     deposit_price = max(9, int(round(founding_price * 0.2)))
 
     # 1. Step 1: Create Validation Plan
-    customer_desc = body.customer or body.targetAudience or f"{body.niche or 'Creator'} audience and builders"
-    problem_desc = body.problem or f"Manual workflows and lack of specialized tooling in {body.niche or 'this space'}"
-    offer_desc = f"{body.productName} Founding Co-Launch Access: {body.productTagline or ''}"
+    customer_desc = body.customer or body.targetAudience or concept_data.get("customer") or concept_data.get("demographicAlignment") or f"{body.niche or 'Creator'} audience and builders"
+    problem_desc = body.problem or concept_data.get("problem") or concept_data.get("description") or f"Manual workflows and lack of specialized tooling in {body.niche or 'this space'}"
+    offer_desc = f"{product_name} Founding Co-Launch Access: {product_tagline or ''}"
     plan = ValidationPlan(
         project_id=proj.id,
         customer=customer_desc,
@@ -526,15 +551,21 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     db.add(plan)
 
     # 2. Step 2: Build Validation Campaign
-    slug = body.productName.lower().replace(" ", "-").replace("'", "")
+    slug = product_name.lower().replace(" ", "-").replace("'", "")
     campaign = ValidationCampaign(
         project_id=proj.id,
         product_assets={
-            "productName": body.productName,
-            "productTagline": body.productTagline or "",
+            "productName": product_name,
+            "productTagline": product_tagline or "",
             "positioning": f"The #1 automated platform built exclusively for {customer_desc}",
-            "headline": f"Finally, an operating system tailored for {body.niche or 'your'} workflows",
-            "mockup": body.mockup or {},
+            "headline": f"Finally, an operating system tailored for {customer_desc}",
+            "problem": problem_desc,
+            "keyFeatures": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
+            "customer": customer_desc,
+            "demographic": customer_desc,
+            "mockup": body.mockup or concept_data.get("mockup") or {},
+            "mockupType": concept_data.get("mockupType") or "saas_os",
+            "selectedConcept": concept_data,
             "pricingConfig": {
                 "foundingPrice": founding_price,
                 "depositPrice": deposit_price,

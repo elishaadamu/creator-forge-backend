@@ -1032,6 +1032,8 @@ class AudienceAndConceptsGenerateSchema(BaseModel):
     followers: Optional[str] = "250K"
     bio: Optional[str] = None
     allow_fallback: Optional[bool] = False
+    custom_prompt: Optional[str] = None
+    brand_color: Optional[str] = None
 
 
 @router.post("/generate-audience-and-concepts")
@@ -1044,6 +1046,8 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
     platform = payload.platform or "YouTube"
     followers = payload.followers or "250K"
     bio = payload.bio or ""
+    custom_prompt = (payload.custom_prompt or "").strip()
+    brand_color = payload.brand_color or "#10B981"
 
     if payload.creator_id:
         with SessionLocal() as db:
@@ -1061,6 +1065,14 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
                     followers = f"{c_obj.follower_count:,}"
                 bio = c_obj.bio or bio
 
+    custom_steering_instruction = ""
+    if custom_prompt:
+        custom_steering_instruction = f"""
+USER CUSTOM STEERING / REFINEMENT PROMPT:
+The user explicitly directed: "{custom_prompt}"
+Prioritize this direction heavily in concept naming, target customer, key features, pricing, and visual app mockup styling!
+"""
+
     system_prompt = (
         "You are an elite venture studio product strategist and AI software architect at Creator Forge. "
         "You design high-margin B2B/B2C SaaS products tailored to creator audiences with verified commercial demand."
@@ -1073,6 +1085,7 @@ Creator Profile:
 - Community Scale: {followers} followers
 - Niche: {niche}
 - Channel Bio / Content Focus: {bio or 'High engagement tutorial and community content'}
+{custom_steering_instruction}
 
 Generate a comprehensive JSON object with:
 1. "audience_intelligence":
@@ -1087,6 +1100,8 @@ Generate a comprehensive JSON object with:
    - "name": Unique, marketable SaaS name (e.g. {first_name} OS, StreamScale AI, etc.)
    - "tagline": Punchy 1-line value proposition
    - "description": 2-3 sentence overview
+   - "brandColor": Hex code matching product vibe from Creator Forge human studio palette (e.g. "#16A34A" studio emerald, "#0F172A" obsidian slate, "#C8FF3D" forge lime, "#0284C7" ocean cyan, "#D97706" venture amber). Strictly DO NOT use generic purple or violet AI colors.
+   - "demographicAlignment": Specific buyer demographic matched to {c_name}'s audience
    - "problem": Exact problem solved for {niche} users
    - "customer": Primary target user persona
    - "keyFeatures": Array of 3-4 distinct features
@@ -1095,10 +1110,11 @@ Generate a comprehensive JSON object with:
    - "competition": Competitor landscape & unfair advantage
    - "mvpDifficulty": "Low (2 weeks)" or "Medium (3 weeks)"
    - "opportunityScore": Integer 90-98
-   - "mockup": {{"appUrl": "...", "primaryStat": "...", "accentColor": "purple/emerald/cyan"}}
+   - "mockupType": MUST be "saas_os" for Concept 1, "ai_copilot" for Concept 2, "knowledge_hub" for Concept 3 (each concept MUST have a distinct visual archetype)
+   - "mockup": {{"appUrl": "...", "primaryStat": "...", "primaryMetric": "$18.5K MRR", "activeMetric": "850", "efficiencyMetric": "94%", "accentColor": "emerald/slate/cyan/lime"}}
 3. "pitch_email":
    - "subject": "Top 3 Software Concepts & Opportunity Blueprint for {c_name}"
-   - "body": High-converting follow-up email presenting the 3 concepts with pricing and 50/50 co-founder terms.
+   - "body": High-converting follow-up email presenting the 3 concepts with pricing and 50/50 co-founder terms. Must end with clear call to action: "To move forward, simply reply to this email: 'I will be interested in Concept 1' (or Concept 2, Concept 3)."
 
 Return valid JSON only matching the structure above."""
 
@@ -1110,21 +1126,25 @@ Return valid JSON only matching the structure above."""
         logger.warning(f"[Generate Audience & Concepts] LLM error: {e}")
 
     import json, re
+    archetypes = ["saas_os", "ai_copilot", "knowledge_hub"]
     if raw:
         try:
             data = json.loads(raw)
             if "product_concepts" in data and len(data["product_concepts"]) > 0:
                 data["is_ai_generated"] = True
+                for i, concept in enumerate(data["product_concepts"]):
+                    if i < len(archetypes):
+                        concept["mockupType"] = archetypes[i]
                 if payload.creator_id:
                     try:
                         with SessionLocal() as db:
                             c_record = db.get(Creator, payload.creator_id)
                             if c_record:
-                                nd = json.loads(c_record.notes or "{}") if isinstance(c_record.notes, str) else (c_record.notes or {})
+                                nd = json.loads(c_record.discovery_notes or "{}") if isinstance(c_record.discovery_notes, str) else (c_record.discovery_notes or {})
                                 nd["product_concepts"] = data["product_concepts"]
                                 nd["audience_intelligence"] = data.get("audience_intelligence")
                                 nd["has_ai_concepts"] = True
-                                c_record.notes = json.dumps(nd)
+                                c_record.discovery_notes = json.dumps(nd)
                                 db.commit()
                     except Exception as persist_err:
                         logger.warning(f"[Generate Audience & Concepts] Persist warning: {persist_err}")
@@ -1136,16 +1156,19 @@ Return valid JSON only matching the structure above."""
                     data = json.loads(m.group())
                     if "product_concepts" in data and len(data["product_concepts"]) > 0:
                         data["is_ai_generated"] = True
+                        for i, concept in enumerate(data["product_concepts"]):
+                            if i < len(archetypes):
+                                concept["mockupType"] = archetypes[i]
                         if payload.creator_id:
                             try:
                                 with SessionLocal() as db:
                                     c_record = db.get(Creator, payload.creator_id)
                                     if c_record:
-                                        nd = json.loads(c_record.notes or "{}") if isinstance(c_record.notes, str) else (c_record.notes or {})
+                                        nd = json.loads(c_record.discovery_notes or "{}") if isinstance(c_record.discovery_notes, str) else (c_record.discovery_notes or {})
                                         nd["product_concepts"] = data["product_concepts"]
                                         nd["audience_intelligence"] = data.get("audience_intelligence")
                                         nd["has_ai_concepts"] = True
-                                        c_record.notes = json.dumps(nd)
+                                        c_record.discovery_notes = json.dumps(nd)
                                         db.commit()
                             except Exception as persist_err:
                                 logger.warning(f"[Generate Audience & Concepts] Persist warning: {persist_err}")
@@ -1162,6 +1185,7 @@ Return valid JSON only matching the structure above."""
 
     # High-quality dynamic fallback (only when allow_fallback is explicitly requested)
     clean_niche = niche.split()[0] if niche else "Creator"
+    fallback_prompt_prefix = f" [{custom_prompt[:30]}...]" if custom_prompt else ""
     fallback_data = {
         "audience_intelligence": {
             "topContent": {
@@ -1198,9 +1222,11 @@ Return valid JSON only matching the structure above."""
         "product_concepts": [
             {
                 "id": "p1",
-                "name": f"{first_name} OS",
-                "tagline": f"The all-in-one automated operating system for {niche} professionals",
+                "name": f"{first_name} OS" if not custom_prompt else f"{first_name} Studio OS",
+                "tagline": f"The all-in-one automated operating system for {niche} professionals{fallback_prompt_prefix}",
                 "description": f"A specialized SaaS workspace combining pre-built workflow automations, project boards, and analytics built specifically for {niche} practitioners.",
+                "brandColor": "#10B981",
+                "demographicAlignment": f"24-42 Yrs • High-income {niche} practitioners & agency founders",
                 "problem": f"Lack of unified workflow tools and excessive manual hours spent on {niche} operations.",
                 "customer": f"{niche} creators, freelancers, and growing agency owners",
                 "keyFeatures": [
@@ -1211,12 +1237,17 @@ Return valid JSON only matching the structure above."""
                 ],
                 "audienceEvidence": f"Over 300+ comments across top {platform} videos asking for {first_name}'s personal workflow setup.",
                 "pricing": "$29/mo Starter • $79/mo Pro",
+                "revenueModel": "SaaS Subscription • 50/50 Revenue Share • Projected $22.5K MRR",
                 "competition": "Notion/Airtable (too complex & generic) vs. our tailored ready-to-launch tool",
                 "mvpDifficulty": "Low (2 weeks to ship)",
                 "opportunityScore": 96,
+                "mockupType": "saas_os",
                 "mockup": {
                     "appUrl": f"{first_name.lower()}os.app",
                     "primaryStat": "$42.5k Projected MRR",
+                    "primaryMetric": "$22.5K MRR",
+                    "activeMetric": "850 Active",
+                    "efficiencyMetric": "96%",
                     "accentColor": "emerald"
                 }
             },
@@ -1225,6 +1256,8 @@ Return valid JSON only matching the structure above."""
                 "name": f"{first_name} Flow AI",
                 "tagline": f"AI-powered intelligence copilot tailored for {niche}",
                 "description": f"An intelligent AI copilot that automatically drafts, optimizes, and analyzes {niche} strategies and deliverables in seconds.",
+                "brandColor": "#0F172A",
+                "demographicAlignment": f"22-38 Yrs • Early adopters & tech-forward digital workers in {niche}",
                 "problem": "Subscribers spend hours generating assets and optimizing their day-to-day outputs.",
                 "customer": f"Active {niche} practitioners looking to 10x their daily productivity",
                 "keyFeatures": [
@@ -1235,13 +1268,18 @@ Return valid JSON only matching the structure above."""
                 ],
                 "audienceEvidence": "High engagement on AI and automation tutorials with high viral replay rates.",
                 "pricing": "$39/mo Creator • $99/mo Studio",
+                "revenueModel": "Tiered SaaS • 50/50 Revenue Share • Projected $31.8K MRR",
                 "competition": "Generic ChatGPT vs. our pre-trained niche specialized intelligence engine",
                 "mvpDifficulty": "Medium (3 weeks to ship)",
                 "opportunityScore": 93,
+                "mockupType": "ai_copilot",
                 "mockup": {
                     "appUrl": f"{first_name.lower()}flow.ai",
                     "primaryStat": "850+ Active Pre-Orders",
-                    "accentColor": "purple"
+                    "primaryMetric": "$31.8K MRR",
+                    "activeMetric": "1,420 Copilot Runs",
+                    "efficiencyMetric": "94%",
+                    "accentColor": "slate"
                 }
             },
             {
@@ -1249,6 +1287,8 @@ Return valid JSON only matching the structure above."""
                 "name": f"{first_name} Pro Hub",
                 "tagline": f"Private community, premium software toolkit & deal network for {niche}",
                 "description": f"A hybrid SaaS toolkit and private master community connecting {first_name}'s top subscribers with private tools, templates, and group calls.",
+                "brandColor": "#06B6D4",
+                "demographicAlignment": f"25-45 Yrs • High-intent power subscribers with premium budget",
                 "problem": "Followers want direct mentorship, premium software toolkits, and private networking.",
                 "customer": f"Dedicated power followers and high-intent students in {niche}",
                 "keyFeatures": [
@@ -1259,12 +1299,17 @@ Return valid JSON only matching the structure above."""
                 ],
                 "audienceEvidence": "Subscribers frequently ask in comments for a private mastermind or VIP tier.",
                 "pricing": "$49/mo Community • $149/mo VIP Mastermind",
+                "revenueModel": "Private Hub Membership • 50/50 Revenue Share • Projected $28.0K MRR",
                 "competition": "Discord/Slack (disorganized) vs. our custom branded web platform",
                 "mvpDifficulty": "Low (2 weeks to ship)",
                 "opportunityScore": 89,
+                "mockupType": "knowledge_hub",
                 "mockup": {
                     "appUrl": f"{first_name.lower()}prohub.com",
                     "primaryStat": "94% Retention Benchmark",
+                    "primaryMetric": "$28.0K MRR",
+                    "activeMetric": "480 VIP Members",
+                    "efficiencyMetric": "92%",
                     "accentColor": "cyan"
                 }
             }
@@ -1278,7 +1323,7 @@ Return valid JSON only matching the structure above."""
                 f"2. {first_name} Flow AI ($39-$99/mo) — AI-powered workflow assistant tailored for {niche} (Score: 93/100)\n"
                 f"3. {first_name} Pro Hub ($49-$149/mo) — Private software toolkit & deal network (Score: 89/100)\n\n"
                 f"Under our 50/50 partnership, our engineering team will build and deploy the complete MVP at zero cost to you.\n\n"
-                f"Take a look and let us know which concept you'd be most excited to build and launch with us!\n\n"
+                f"Take a look and let us know which concept you'd be most excited to build and launch with us! To move forward, simply reply to this email with: \"I will be interested in Concept 1\" (or Concept 2, Concept 3).\n\n"
                 f"Best regards,\n"
                 f"The Creator Forge Team"
             )

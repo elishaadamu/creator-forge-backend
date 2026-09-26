@@ -397,12 +397,20 @@ def run_autonomous_creator_progression(db: Session, reply: Reply):
     )
     
     has_explicit_concept_choice = any(k in reply_body_lower for k in [
-        "concept 1", "concept 2", "concept 3", "option 1", "option 2", "option 3",
+        "concept 1", "concept 2", "concept 3", "concept1", "concept2", "concept3",
+        "option 1", "option 2", "option 3",
         "step 1", "step 2", "step 3", "step1", "step2", "step3",
         "idea 1", "idea 2", "idea 3", "product 1", "product 2", "product 3",
         "#1", "#2", "#3", "first one", "second one", "third one",
         "first", "second", "third", "1st", "2nd", "3rd",
-        "number 1", "number 2", "number 3", "no 1", "no 2", "no 3", "no. 1", "no. 2", "no. 3"
+        "number 1", "number 2", "number 3", "no 1", "no 2", "no 3", "no. 1", "no. 2", "no. 3",
+        "interest in concept 1", "interest in concept 2", "interest in concept 3",
+        "interested in concept 1", "interested in concept 2", "interested in concept 3",
+        "i will be interest in concept 1", "i will be interest in concept 2", "i will be interest in concept 3",
+        "i will be interested in concept 1", "i will be interested in concept 2", "i will be interested in concept 3",
+        "i am interested in concept 1", "i am interested in concept 2", "i am interested in concept 3",
+        "i'm interested in concept 1", "i'm interested in concept 2", "i'm interested in concept 3",
+        "interested in concept", "interest in concept", "interested in #", "interest in #"
     ])
     
     if is_initial_inquiry_reply and not has_explicit_concept_choice:
@@ -616,14 +624,43 @@ def run_autonomous_creator_progression(db: Session, reply: Reply):
         return
 
     # 9. PRIMARY GATE: If affirmative agreement or concept choice is confirmed
-    if (has_affirmative or has_concept_mention) and not is_question:
-        chosen_concept = concepts[0]
-        if len(concepts) > 1 and any(k in body_lower for k in ["step 2", "step2", "concept 2", "option 2", "idea 2", "product 2", "second", "2nd", "#2", "number 2", "no 2", "flow"]):
-            chosen_concept = concepts[1]
-        elif len(concepts) > 2 and any(k in body_lower for k in ["step 3", "step3", "concept 3", "option 3", "idea 3", "product 3", "third", "3rd", "#3", "number 3", "no 3", "hub", "pro"]):
-            chosen_concept = concepts[2]
-        elif any(k in body_lower for k in ["step 1", "step1", "concept 1", "option 1", "idea 1", "first", "1st", "#1"]):
-            chosen_concept = concepts[0]
+    if (has_affirmative or has_concept_mention or has_explicit_concept_choice) and not is_question:
+        chosen_concept = None
+        # Check concept name match first
+        for c in concepts:
+            if c.get("name") and c.get("name").lower() in body_lower:
+                chosen_concept = c
+                break
+
+        if not chosen_concept:
+            if len(concepts) > 1 and any(k in body_lower for k in [
+                "concept 2", "concept2", "option 2", "idea 2", "product 2", "step 2", "step2",
+                "second", "2nd", "#2", "number 2", "no 2", "no. 2",
+                "interest in concept 2", "interested in concept 2",
+                "i will be interest in concept 2", "i will be interested in concept 2",
+                "i am interested in concept 2", "i'm interested in concept 2",
+                "flow"
+            ]):
+                chosen_concept = concepts[1]
+            elif len(concepts) > 2 and any(k in body_lower for k in [
+                "concept 3", "concept3", "option 3", "idea 3", "product 3", "step 3", "step3",
+                "third", "3rd", "#3", "number 3", "no 3", "no. 3",
+                "interest in concept 3", "interested in concept 3",
+                "i will be interest in concept 3", "i will be interested in concept 3",
+                "i am interested in concept 3", "i'm interested in concept 3",
+                "hub", "pro"
+            ]):
+                chosen_concept = concepts[2]
+            elif any(k in body_lower for k in [
+                "concept 1", "concept1", "option 1", "idea 1", "product 1", "step 1", "step1",
+                "first", "1st", "#1", "number 1", "no 1", "no. 1",
+                "interest in concept 1", "interested in concept 1",
+                "i will be interest in concept 1", "i will be interested in concept 1",
+                "i am interested in concept 1", "i'm interested in concept 1"
+            ]) or has_explicit_concept_choice:
+                chosen_concept = concepts[0]
+            else:
+                chosen_concept = concepts[0]
 
         logger.info(f"[Autonomous Pipeline] 🎯 Creator {creator.handle} confirmed concept choice: {chosen_concept['name']} ('{reply.body[:60]}'). Surfaced in Step 6 for operator project initialization.")
         creator.reply_classification = "ready_for_launch"

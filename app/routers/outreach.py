@@ -1,7 +1,6 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,8 +16,41 @@ from app.services.review_queue import (
 from app.services.send_queue import queue_message, send_message, handle_bounce, list_send_queue
 from app.services.followup import generate_followup, send_approved_followup, can_follow_up
 from app.services.reply_classifier import record_reply, classify_reply
+from app.services.concept_image_generator import generate_concept_card_image
 
 router = APIRouter(prefix="/api/outreach", tags=["outreach"])
+
+
+@router.get("/concept-card-image")
+def render_dynamic_concept_card(
+    name: str = "ActionLoop",
+    app_url: str = "actionloop.app",
+    mrr: str = "$22.4K MRR",
+    active_users: str = "1,200",
+    retention: str = "91%",
+    customer: str = "Overwhelmed high-achiever/creators",
+    pricing: str = "$49/mo Starter / $99/mo Pro"
+):
+    """
+    Renders dynamic concept text into an authentic macOS dark-mode concept card PNG.
+    Allows dynamic text from the AI or admin modifications to be converted into
+    a visual concept image and sent directly in emails.
+    """
+    concept_data = {
+        "name": name,
+        "appUrl": app_url,
+        "primaryMetric": mrr,
+        "activeMetric": active_users,
+        "efficiencyMetric": retention,
+        "customer": customer,
+        "pricing": pricing
+    }
+    png_bytes = generate_concept_card_image(concept_data)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"}
+    )
 
 
 class DraftCreate(BaseModel):
@@ -442,11 +474,15 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     if not resolved_concept_image and resolved_concepts and len(resolved_concepts) > 0:
         first_c = resolved_concepts[0]
         if isinstance(first_c, dict):
-            mockup = first_c.get("mockup")
-            if isinstance(mockup, dict):
-                resolved_concept_image = mockup.get("appUrl") or mockup.get("imageUrl")
-            if not resolved_concept_image:
-                resolved_concept_image = first_c.get("imageUrl") or first_c.get("image_url") or first_c.get("mockup_url")
+            mockup = first_c.get("mockup") if isinstance(first_c.get("mockup"), dict) else {}
+            resolved_concept_image = (
+                first_c.get("customImageUrl")
+                or first_c.get("imageUrl")
+                or first_c.get("image_url")
+                or first_c.get("mockup_url")
+                or mockup.get("imageUrl")
+                or mockup.get("previewUrl")
+            )
 
 
     body_html = format_luxury_html_email(
@@ -591,7 +627,15 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
                 reply_concepts = nd.get("product_concepts") or nd.get("concepts")
                 if not reply_concept_image and reply_concepts:
                     first_c = reply_concepts[0]
-                    reply_concept_image = first_c.get("mockup_url") or first_c.get("appUrl") or first_c.get("imageUrl")
+                    mockup = first_c.get("mockup") if isinstance(first_c.get("mockup"), dict) else {}
+                    reply_concept_image = (
+                        first_c.get("customImageUrl")
+                        or first_c.get("imageUrl")
+                        or first_c.get("image_url")
+                        or first_c.get("mockup_url")
+                        or mockup.get("imageUrl")
+                        or mockup.get("previewUrl")
+                    )
             except Exception:
                 pass
 

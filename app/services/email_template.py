@@ -34,19 +34,19 @@ def _render_creator_forge_logo_html(size: int = 28) -> str:
     Renders the official Creator Forge 4-node geometric symbol using pure HTML tables.
     100% email client compatible — zero external image dependency, zero SVG blocking.
     Node 1 (top-left): #1e293b (Slate-800)
-    Node 2 (top-right): #4f46e5 (Indigo-600)
-    Node 3 (bottom-left): #10b981 (Emerald-500)
-    Node 4 (bottom-right): #0f172a (Slate-900)
+    Node 2 (top-right): #0284c7 (Ocean Cyan)
+    Node 3 (bottom-left): #16a34a (Studio Emerald)
+    Node 4 (bottom-right): #0f172a (Obsidian Slate)
     """
     cell_size = max(10, size // 2 - 3)
     return f'''
     <table border="0" cellspacing="2" cellpadding="0" style="display:inline-table;width:{size}px;height:{size}px;border-collapse:separate;vertical-align:middle;background:#ffffff;padding:2px;border:1px solid #e2e8f0;border-radius:6px;">
       <tr>
         <td style="width:{cell_size}px;height:{cell_size}px;background:#1e293b;border-radius:2px;"></td>
-        <td style="width:{cell_size}px;height:{cell_size}px;background:#4f46e5;border-radius:2px;"></td>
+        <td style="width:{cell_size}px;height:{cell_size}px;background:#0284c7;border-radius:2px;"></td>
       </tr>
       <tr>
-        <td style="width:{cell_size}px;height:{cell_size}px;background:#10b981;border-radius:2px;"></td>
+        <td style="width:{cell_size}px;height:{cell_size}px;background:#16a34a;border-radius:2px;"></td>
         <td style="width:{cell_size}px;height:{cell_size}px;background:#0f172a;border-radius:2px;"></td>
       </tr>
     </table>
@@ -77,7 +77,7 @@ def _render_executive_signature_html(creator_name: str = "", tracking_token: str
             <div style="font-size:12px;color:#475569;margin-top:8px;line-height:1.5;">
               <a href="mailto:partnerships@creatorforge.com" style="color:#0f172a;text-decoration:underline;font-weight:600;">partnerships@creatorforge.com</a>
               <span style="color:#cbd5e1;margin:0 6px;">•</span>
-              <a href="https://creatorforge.com" style="color:#4f46e5;text-decoration:none;">creatorforge.com</a>
+              <a href="https://creatorforge.com" style="color:#0284c7;text-decoration:none;">creatorforge.com</a>
               <span style="color:#cbd5e1;margin:0 6px;">•</span>
               <span style="color:#64748b;">San Francisco, CA</span>
             </div>
@@ -118,7 +118,7 @@ def _render_single_concept_card(
     total_concepts: int = 1,
     concept_image_url: Optional[str] = None
 ) -> str:
-    """Renders an individual concept showcase card with clean, modern light styling."""
+    """Renders an individual concept showcase card with clean, modern light styling and Creator Forge palette."""
     app_name = concept.get("name") or concept.get("title") or f"Software Concept #{index + 1}"
     tagline = concept.get("tagline") or concept.get("summary") or concept.get("description") or "Tailored software suite engineered for your community"
     raw_pricing = concept.get("pricing") or concept.get("revenueModel")
@@ -137,9 +137,51 @@ def _render_single_concept_card(
     app_url = mockup_data.get("appUrl") or f"{str(app_name).lower().replace(' ', '')}.app"
     primary_metric = mockup_data.get("primaryMetric") or "$18.4K Projected MRR"
     active_metric = mockup_data.get("activeMetric") or "1,240 Target Users"
-    efficiency_metric = mockup_data.get("efficiencyMetric") or "14-Day MVP Launch"
+    efficiency_metric = mockup_data.get("efficiencyMetric") or "91%"
+    customer_label = concept.get("customer") or concept.get("demographicAlignment") or ""
 
-    active_image = (concept_image_url if index == 0 else None) or concept.get("imageUrl") or concept.get("image_url")
+    # Dynamic Concept Card Image Generation from text:
+    # Converts dynamic concept text (and any admin modifications) into the authentic macOS card PNG image.
+    dynamic_card_image = None
+    try:
+        from app.services.concept_image_generator import generate_concept_card_image
+        import hashlib
+        from pathlib import Path
+
+        text_sig = f"{app_name}_{app_url}_{primary_metric}_{active_metric}_{efficiency_metric}_{pricing}_{customer_label}"
+        sig_hash = hashlib.md5(text_sig.encode('utf-8')).hexdigest()[:12]
+
+        media_dir = Path(__file__).resolve().parent.parent.parent / "static" / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        card_png_name = f"concept_mockup_{sig_hash}.png"
+        card_png_path = media_dir / card_png_name
+
+        if not card_png_path.exists():
+            png_data = generate_concept_card_image({
+                "name": app_name,
+                "appUrl": app_url,
+                "primaryMetric": primary_metric,
+                "activeMetric": active_metric,
+                "efficiencyMetric": efficiency_metric,
+                "customer": customer_label,
+                "pricing": pricing
+            })
+            with open(card_png_path, "wb") as f:
+                f.write(png_data)
+
+        dynamic_card_image = f"/api/static/media/{card_png_name}"
+    except Exception as e:
+        logger.warning(f"Could not generate dynamic card image: {e}")
+
+    # Prioritize dynamic card image or explicit admin customImageUrl
+    active_image = (
+        concept.get("customImageUrl")
+        or dynamic_card_image
+        or concept.get("imageUrl")
+        or concept.get("image_url")
+        or (mockup_data.get("imageUrl") if isinstance(mockup_data, dict) else None)
+        or (concept_image_url if index == 0 else None)
+    )
     if not active_image:
         niche_key = "default"
         for k in CATEGORY_MOCKUP_IMAGES.keys():
@@ -148,12 +190,25 @@ def _render_single_concept_card(
                 break
         active_image = CATEGORY_MOCKUP_IMAGES.get(niche_key, CATEGORY_MOCKUP_IMAGES["default"])
 
+    # Harmonious Creator Forge palette (No generic purple)
+    raw_brand = concept.get("brandColor") or ""
+    purple_shades = ["#8b5cf6", "#6366f1", "#7c3aed", "#a855f7", "#9333ea", "#4f46e5", "#c084fc", "#e879f9", "#d946ef", "#805ad5"]
+    if not raw_brand or any(p in raw_brand.lower() for p in purple_shades):
+        brand_color = "#16A34A" if index == 0 else ("#0F172A" if index == 1 else "#0284C7")
+    else:
+        brand_color = raw_brand
+
+    is_modified = bool(concept.get("isModifiedByAdmin") or concept.get("customImageUrl"))
+    modified_badge = ""
+    if is_modified:
+        modified_badge = '<span style="background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;padding:2px 7px;border-radius:6px;font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;margin-right:6px;">✓ Customized</span>'
+
     features_html = ""
     key_features = concept.get("keyFeatures") or concept.get("features") or []
     if key_features and isinstance(key_features, list):
         f_items = "".join(
             f'<li style="margin-bottom:6px;line-height:1.5;color:#334155;font-size:13px;">'
-            f'<span style="color:#10b981;font-weight:bold;margin-right:6px;">✓</span>{html.escape(str(f))}</li>'
+            f'<span style="color:#16a34a;font-weight:bold;margin-right:6px;">✓</span>{html.escape(str(f))}</li>'
             for f in key_features[:4]
         )
         features_html = f'''
@@ -175,10 +230,19 @@ def _render_single_concept_card(
         </div>
         '''
 
+    demographic = concept.get("demographicAlignment") or concept.get("customer") or ""
+    demographic_html = ""
+    if demographic:
+        demographic_html = f'''
+        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;margin-top:8px;font-size:12px;color:#475569;line-height:1.5;">
+          <strong style="color:#0f172a;">Target Audience:</strong> {html.escape(demographic)}
+        </div>
+        '''
+
     image_element = ""
     if active_image:
         image_element = f'''
-        <div style="margin:14px 0 8px 0;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;background:#f8fafc;">
+        <div style="margin:14px 0 10px 0;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;background:#0f172a;box-shadow:0 3px 10px rgba(15,23,42,0.06);">
           <img src="{active_image}" alt="{html.escape(app_name)} Visual Mockup" width="556" style="width:100%;max-width:556px;height:auto;display:block;object-fit:cover;" />
         </div>
         '''
@@ -187,7 +251,7 @@ def _render_single_concept_card(
 
     return f'''
     <!-- CONCEPT SHOWCASE CARD #{index + 1} (Light Clean Theme) -->
-    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0 24px 0;background:#f8fafc;border-radius:16px;border:1px solid #e2e8f0;overflow:hidden;">
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0 24px 0;background:#f8fafc;border-radius:16px;border:1px solid #e2e8f0;border-top:3px solid {brand_color};overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
       <!-- Window Chrome Header -->
       <tr>
         <td style="padding:12px 18px;background:#ffffff;border-bottom:1px solid #e2e8f0;">
@@ -196,12 +260,13 @@ def _render_single_concept_card(
               <td align="left" style="vertical-align:middle;">
                 <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:5px;"></span>
                 <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#f59e0b;margin-right:5px;"></span>
-                <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#10b981;margin-right:10px;"></span>
+                <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#16a34a;margin-right:10px;"></span>
                 <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#64748b;background:#f1f5f9;padding:3px 8px;border-radius:6px;border:1px solid #e2e8f0;">
                   https://{html.escape(app_url)}
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
+                {modified_badge}
                 <span style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;margin-right:6px;">
                   {concept_badge}
                 </span>
@@ -223,7 +288,7 @@ def _render_single_concept_card(
                 <div style="font-size:17px;font-weight:800;color:#0f172a;letter-spacing:-0.3px;">
                   {html.escape(app_name)}
                 </div>
-                <div style="font-size:13px;color:#6366f1;font-weight:600;margin-top:2px;">
+                <div style="font-size:13px;color:{brand_color};font-weight:600;margin-top:2px;">
                   {html.escape(tagline)}
                 </div>
               </td>
@@ -243,23 +308,40 @@ def _render_single_concept_card(
             <tr>
               <td width="32%" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;">
                 <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Est. Revenue</div>
-                <div style="font-size:13px;font-weight:800;color:#059669;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(primary_metric)}</div>
+                <div style="font-size:13px;font-weight:800;color:#16a34a;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(primary_metric)}</div>
               </td>
               <td width="2%">&nbsp;</td>
               <td width="32%" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;">
                 <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Target Users</div>
-                <div style="font-size:13px;font-weight:800;color:#7c3aed;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(active_metric)}</div>
+                <div style="font-size:13px;font-weight:800;color:#0284c7;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(active_metric)}</div>
               </td>
               <td width="2%">&nbsp;</td>
               <td width="32%" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;">
                 <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Build Speed</div>
-                <div style="font-size:13px;font-weight:800;color:#0284c7;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(efficiency_metric)}</div>
+                <div style="font-size:13px;font-weight:800;color:#0f172a;margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">{html.escape(efficiency_metric)}</div>
               </td>
             </tr>
           </table>
 
           {problem_html}
+          {demographic_html}
           {features_html}
+
+          <!-- 1-Click Select Action for Concept -->
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;padding-top:12px;border-top:1px solid #f1f5f9;">
+            <tr>
+              <td align="left" style="vertical-align:middle;">
+                <span style="font-size:11px;color:#64748b;font-weight:500;">
+                  Prefer this direction?
+                </span>
+              </td>
+              <td align="right" style="vertical-align:middle;">
+                <a href="mailto:partnerships@creatorforge.com?subject=Interested in Concept {index + 1}: {html.escape(app_name)}&body=I will be interested in Concept {index + 1} ({html.escape(app_name)}). Let's build and launch this together!" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
+                  Select Concept #{index + 1} &rarr;
+                </a>
+              </td>
+            </tr>
+          </table>
         </td>
       </tr>
     </table>
@@ -302,20 +384,38 @@ def render_concept_showcase_html(
             concept_image_url=concept_image_url
         ))
 
-    cta_and_replies = '''
-    <div style="margin:22px 0 16px 0;">
-      <a href="#deck-preview" style="display:inline-block;padding:10px 20px;border-radius:10px;background:#0f172a;color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;margin-bottom:8px;">
-        📄 Review 3-Concept Deck (PDF)
-      </a>
-      <a href="#book-chat" style="display:inline-block;padding:10px 18px;border-radius:10px;background:#ffffff;border:1px solid #cbd5e1;color:#334155;font-size:13px;font-weight:600;text-decoration:none;margin-bottom:8px;">
-        📅 Book 15-Min Intro Chat
-      </a>
-    </div>
-    <div style="margin:12px 0 20px 0;font-size:12px;color:#94a3b8;">
-      <span style="color:#64748b;font-weight:600;margin-right:6px;">Quick Reply:</span>
-      <span style="display:inline-block;background:#f1f5f9;color:#334155;padding:4px 12px;border-radius:20px;font-size:11px;margin:2px;border:1px solid #e2e8f0;">&ldquo;Sounds interesting, send it over&rdquo;</span>
-      <span style="display:inline-block;background:#f1f5f9;color:#334155;padding:4px 12px;border-radius:20px;font-size:11px;margin:2px;border:1px solid #e2e8f0;">&ldquo;Send deck first&rdquo;</span>
-      <span style="display:inline-block;background:#f1f5f9;color:#334155;padding:4px 12px;border-radius:20px;font-size:11px;margin:2px;border:1px solid #e2e8f0;">&ldquo;Not right now&rdquo;</span>
+    # Dynamic 1-click response buttons for each concept
+    concept_buttons = []
+    for idx, c in enumerate(concept_list):
+        c_name = c.get("name") or f"Concept {idx + 1}"
+        c_num = idx + 1
+        mailto_url = f"mailto:partnerships@creatorforge.com?subject=Interested in Concept {c_num}: {html.escape(c_name)}&body=I will be interested in Concept {c_num} ({html.escape(c_name)}). Let's build and launch this together!"
+        concept_buttons.append(
+            f'<a href="{mailto_url}" style="display:inline-block;background:#0f172a;color:#ffffff;padding:9px 15px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;margin:4px 6px 4px 0;border:1px solid #1e293b;">'
+            f'👉 &ldquo;I will be interested in Concept {c_num}&rdquo;'
+            f'</a>'
+        )
+    buttons_html = "".join(concept_buttons)
+
+    cta_and_replies = f'''
+    <!-- 🚀 HOW TO MOVE FORWARD CALLOUT -->
+    <div style="margin:24px 0 20px 0;padding:18px 20px;background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #16a34a;border-radius:12px;">
+      <div style="font-size:13px;font-weight:800;color:#0f172a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
+        🚀 How to Move Forward (Select Your Preferred Concept):
+      </div>
+      <p style="margin:0 0 10px 0;font-size:13px;color:#334155;line-height:1.55;">
+        Under our 50/50 partnership, Creator Forge covers <strong>100% of engineering, hosting, payment infrastructure, and MVP deployment at zero financial cost to you</strong>.
+        To move forward, <strong>simply reply to this email</strong> with your preferred concept:
+      </p>
+      <div style="margin:8px 0 12px 0;padding:10px 14px;background:#ffffff;border:1px dashed #94a3b8;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#0f172a;">
+        💬 <strong>&ldquo;I will be interested in Concept 1&rdquo;</strong> (or Concept 2, Concept 3)
+      </div>
+      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
+        Or click below to reply in 1 click:
+      </div>
+      <div style="margin-top:6px;">
+        {buttons_html}
+      </div>
     </div>
     '''
 
@@ -383,7 +483,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
             {cta_label}
           </a>
           <div style="margin-top:6px;font-size:11px;color:#64748b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
-            Direct link: <a href="{raw_url}" style="color:#6366f1;text-decoration:underline;">{raw_url}</a>
+            Direct link: <a href="{raw_url}" style="color:#0284c7;text-decoration:underline;">{raw_url}</a>
           </div>
         </div>
         '''
@@ -437,14 +537,14 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     # Unordered Lists
     raw_html = re.sub(
         r'<ul>',
-        r'<ul style="margin:12px 0 16px 0;padding-left:20px;color:#6366f1;line-height:1.6;">',
+        r'<ul style="margin:12px 0 16px 0;padding-left:20px;color:#16a34a;line-height:1.6;">',
         raw_html
     )
 
     # Ordered Lists
     raw_html = re.sub(
         r'<ol>',
-        r'<ol style="margin:12px 0 16px 0;padding-left:22px;color:#6366f1;line-height:1.6;">',
+        r'<ol style="margin:12px 0 16px 0;padding-left:22px;color:#0284c7;line-height:1.6;">',
         raw_html
     )
 
@@ -459,7 +559,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     # Blockquotes
     raw_html = re.sub(
         r'<blockquote>\s*<p>(.*?)</p>\s*</blockquote>',
-        r'<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #6366f1;background:#f8fafc;border-radius:0 8px 8px 0;color:#334155;font-size:14px;line-height:1.6;font-style:italic;">\1</blockquote>',
+        r'<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #16a34a;background:#f8fafc;border-radius:0 8px 8px 0;color:#334155;font-size:14px;line-height:1.6;font-style:italic;">\1</blockquote>',
         raw_html,
         flags=re.DOTALL
     )
@@ -474,7 +574,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     # Anchor links
     raw_html = re.sub(
         r'<a\s+href="([^"]+)">([^<]+)</a>',
-        r'<a href="\1" target="_blank" style="color:#6366f1;font-weight:600;text-decoration:underline;">\2</a>',
+        r'<a href="\1" target="_blank" style="color:#0284c7;font-weight:600;text-decoration:underline;">\2</a>',
         raw_html
     )
 
@@ -493,7 +593,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
     if "50/50" in raw_html and ("venture model" in raw_html.lower() or "partner" in raw_html.lower()):
         hero_card_html = '''
         <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin:20px 0;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-          <div style="font-size:15px;font-weight:700;color:#312e81;margin-bottom:8px;">
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:8px;">
             Creator Forge <span style="color:#f59e0b;">⚡</span> <span style="color:#94a3b8;font-weight:normal;">|</span> <span style="color:#334155;font-size:14px;font-weight:600;">50/50 Venture Model</span>
           </div>
           <p style="margin:0 0 16px 0;color:#334155;font-size:14px;line-height:1.6;">
@@ -502,17 +602,17 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
           <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-top:1px solid #f1f5f9;padding-top:12px;">
             <tr>
               <td width="32%" style="background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #f1f5f9;vertical-align:top;">
-                <div style="font-size:11px;font-weight:700;color:#4f46e5;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Full Delivery</div>
+                <div style="font-size:11px;font-weight:700;color:#0284c7;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Full Delivery</div>
                 <div style="font-size:12px;color:#1e293b;font-weight:500;line-height:1.4;">100% Engineering, UI/UX &amp; QA</div>
               </td>
               <td width="2%">&nbsp;</td>
               <td width="32%" style="background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #f1f5f9;vertical-align:top;">
-                <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Zero Risk</div>
+                <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Zero Risk</div>
                 <div style="font-size:12px;color:#1e293b;font-weight:500;line-height:1.4;">$0 Upfront Cost &amp; Co-ownership</div>
               </td>
               <td width="2%">&nbsp;</td>
               <td width="32%" style="background:#f8fafc;border-radius:8px;padding:12px;border:1px solid #f1f5f9;vertical-align:top;">
-                <div style="font-size:11px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Hands-Off Ops</div>
+                <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Hands-Off Ops</div>
                 <div style="font-size:12px;color:#1e293b;font-weight:500;line-height:1.4;">Global Hosting, Billing &amp; 24/7 Support</div>
               </td>
             </tr>
@@ -605,7 +705,7 @@ def format_luxury_html_email(
       line-height: 1.65;
     }}
     a {{
-      color: #6366f1;
+      color: #0284c7;
       text-decoration: underline;
     }}
     @media only screen and (max-width: 600px) {{
