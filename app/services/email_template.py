@@ -404,6 +404,7 @@ def _render_single_concept_card(
           </table>
         </td>
       </tr>
+    </table>
     '''
 
 
@@ -415,6 +416,7 @@ def render_concept_showcase_html(
     """
     Renders an eye-catching, responsive concept showcase for Step 5 & Step 6 emails.
     Shows the full breakdown of all engineered concepts with visual mockups, prominent prices, and features.
+    Guarantees Concept 1, Concept 2, and Concept 3 are all positioned above the "How to Move Forward" callout.
     """
     if not concepts and not concept_image_url:
         return ""
@@ -459,29 +461,35 @@ def render_concept_showcase_html(
         )
     buttons_html = "".join(concept_buttons)
 
+    # 🚀 HOW TO MOVE FORWARD CALLOUT - Positioned cleanly below ALL concept cards
     cta_and_replies = f'''
-    <!-- 🚀 HOW TO MOVE FORWARD CALLOUT -->
-    <div style="margin:24px 0 20px 0;padding:18px 20px;background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #16a34a;border-radius:12px;">
-      <div style="font-size:13px;font-weight:800;color:#0f172a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
-        🚀 How to Move Forward (Select Your Preferred Concept):
-      </div>
-      <p style="margin:0 0 10px 0;font-size:13px;color:#334155;line-height:1.55;">
-        Under our 50/50 partnership, Creator Forge covers <strong>100% of engineering, hosting, payment infrastructure, and MVP deployment at zero financial cost to you</strong>.
-        To move forward, <strong>simply reply to this email</strong> with your preferred concept:
-      </p>
-      <div style="margin:8px 0 12px 0;padding:10px 14px;background:#ffffff;border:1px dashed #94a3b8;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#0f172a;">
-        💬 <strong>&ldquo;I will be interested in Concept 1&rdquo;</strong> (or Concept 2, Concept 3)
-      </div>
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
-        Or click below to reply in 1 click:
-      </div>
-      <div style="margin-top:6px;">
-        {buttons_html}
-      </div>
-    </div>
+    <!-- 🚀 HOW TO MOVE FORWARD CALLOUT (Placed strictly below all 3 concepts) -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:24px 0 20px 0;">
+      <tr>
+        <td style="padding:18px 20px;background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #16a34a;border-radius:12px;">
+          <div style="font-size:13px;font-weight:800;color:#0f172a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
+            🚀 How to Move Forward (Select Your Preferred Concept):
+          </div>
+          <p style="margin:0 0 10px 0;font-size:13px;color:#334155;line-height:1.55;">
+            Under our 50/50 partnership, Creator Forge covers <strong>100% of engineering, hosting, payment infrastructure, and MVP deployment at zero financial cost to you</strong>.
+            To move forward, <strong>simply reply to this email</strong> with your preferred concept:
+          </p>
+          <div style="margin:8px 0 12px 0;padding:10px 14px;background:#ffffff;border:1px dashed #94a3b8;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#0f172a;">
+            💬 <strong>&ldquo;I will be interested in Concept 1&rdquo;</strong> (or Concept 2, Concept 3)
+          </div>
+          <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
+            Or click below to reply in 1 click:
+          </div>
+          <div style="margin-top:6px;">
+            {buttons_html}
+          </div>
+        </td>
+      </tr>
+    </table>
     '''
 
-    return header_bar + "".join(cards) + cta_and_replies
+    all_cards_html = "".join(cards)
+    return header_bar + all_cards_html + cta_and_replies
 
 
 def convert_markdown_to_clean_html(markdown_text: str) -> str:
