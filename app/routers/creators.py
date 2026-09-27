@@ -1240,20 +1240,27 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
     product_concepts = []
     selected_concept_id = None
     selected_concept = None
+    has_studio_replied = False
     try:
         if c.discovery_notes and c.discovery_notes.startswith("{"):
             import json
             parsed = json.loads(c.discovery_notes)
             reply_classification = parsed.get("reply_classification")
             reply_text = parsed.get("reply_text")
+            has_studio_replied = bool(parsed.get("has_studio_replied"))
             product_concepts = parsed.get("product_concepts") or []
             selected_concept_id = parsed.get("selected_concept_id") or parsed.get("selectedConceptId")
             selected_concept = parsed.get("selected_concept") or parsed.get("selectedConcept")
     except Exception:
         pass
 
-    # Uncontacted Guard: A creator who was NEVER contacted CANNOT have an outreach reply!
-    is_contacted = c.status in ("contacted", "pitched", "ready_for_launch", "partnered")
+    # Uncontacted Guard: Prevent phantom replies for newly discovered creators who have not been contacted
+    is_contacted = (
+        c.status in ("contacted", "in_review", "qualified", "approved", "pitched", "ready_for_launch", "partnered", "launched", "active", "building")
+        or bool(reply_classification)
+        or bool(getattr(c, "threads", None))
+        or bool(getattr(c, "outreach_messages", None))
+    )
     if not is_contacted:
         reply_classification = None
         reply_text = None
@@ -1283,6 +1290,8 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
         "projectId": project_id,
         "has_project": bool(matched_proj),
         "hasProject": bool(matched_proj),
+        "has_studio_replied": has_studio_replied,
+        "hasStudioReplied": has_studio_replied,
         "reply_classification": reply_classification,
         "reply_text": reply_text,
         "product_concepts": product_concepts,

@@ -464,8 +464,18 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
 
         # Update email_public and status to contacted
         creator.email_public = to_email
-        if creator.status in ("discovered", "in_review", "new", None):
+        if creator.status in ("discovered", "new", None):
             creator.status = "contacted"
+
+        # Record studio reply activity so CRM knows admin has replied
+        try:
+            import json
+            notes = json.loads(creator.discovery_notes) if (creator.discovery_notes and creator.discovery_notes.startswith("{")) else {}
+            notes["has_studio_replied"] = True
+            notes["last_studio_reply_at"] = datetime.utcnow().isoformat()
+            creator.discovery_notes = json.dumps(notes)
+        except Exception:
+            pass
         db.commit()
 
     # Format beautiful luxury HTML template
@@ -538,16 +548,34 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     db.commit()
     db.refresh(msg)
 
-    thread = Thread(
-        creator_id=creator.id if creator else None,
-        outreach_message_id=msg.id,
-        status="open",
-        created_at=datetime.utcnow(),
-        last_activity=datetime.utcnow()
-    )
-    db.add(thread)
-    db.commit()
-    db.refresh(thread)
+    # Link to existing thread or initialize new thread
+    thread = db.query(Thread).filter(Thread.creator_id == creator.id).order_by(Thread.created_at.desc()).first() if creator else None
+    if thread:
+        from app.config import settings
+        from app.models.outreach import Reply
+        admin_from = settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "partnerships@creatorforge.com"
+        outgoing_reply = Reply(
+            thread_id=thread.id,
+            from_address=admin_from,
+            subject=subject_to_send,
+            body=payload.body,
+            classification="other",
+            ai_summary="Outgoing reply from you"
+        )
+        db.add(outgoing_reply)
+        thread.last_activity = datetime.utcnow()
+        db.commit()
+    else:
+        thread = Thread(
+            creator_id=creator.id if creator else None,
+            outreach_message_id=msg.id,
+            status="open",
+            created_at=datetime.utcnow(),
+            last_activity=datetime.utcnow()
+        )
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
 
     return {
         "status": "sent",

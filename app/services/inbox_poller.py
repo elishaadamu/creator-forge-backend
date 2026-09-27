@@ -188,7 +188,7 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         contacted_creators = [
             c for c in all_creators 
             if (c.email_public or "").lower().strip() == from_email_clean
-            and c.status in ("contacted", "pitched", "ready_for_launch", "partnered")
+            and c.status in ("contacted", "in_review", "qualified", "approved", "pitched", "ready_for_launch", "partnered", "launched", "active", "building")
         ]
         if len(contacted_creators) == 1:
             creator_id = contacted_creators[0].id
@@ -205,7 +205,7 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email_clean}%"), Contact.contact_type == "email").first()
         if contact and contact.creator_id:
             c_candidate = db.get(Creator, contact.creator_id)
-            if c_candidate and c_candidate.status in ("contacted", "pitched", "ready_for_launch", "partnered"):
+            if c_candidate and c_candidate.status in ("contacted", "in_review", "qualified", "approved", "pitched", "ready_for_launch", "partnered", "launched", "active", "building"):
                 creator_id = contact.creator_id
 
     # Strictly do NOT assign unrecognized/marketing emails to random creators
