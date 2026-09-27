@@ -755,10 +755,26 @@ def delete_creator(
     from app.models.project import CoLaunchProject
 
     try:
+        creator_email = (creator.email_public or "").strip().lower()
+
         thread_ids = [t.id for t in db.query(Thread.id).filter(Thread.creator_id == real_id).all()]
+        if creator_email:
+            more_thread_ids = [t.id for t in db.query(Thread.id).filter(
+                (Thread.recipient_email.ilike(creator_email)) |
+                (Thread.creator_email.ilike(creator_email))
+            ).all()]
+            thread_ids = list(set(thread_ids + more_thread_ids))
+
         if thread_ids:
             db.query(Reply).filter(Reply.thread_id.in_(thread_ids)).delete(synchronize_session=False)
             db.query(FollowUp).filter(FollowUp.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+            db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
+
+        if creator_email:
+            db.query(Reply).filter(Reply.from_address.ilike(creator_email)).delete(synchronize_session=False)
+            db.query(OutreachMessage).filter(OutreachMessage.creator_email.ilike(creator_email)).delete(synchronize_session=False)
+            db.query(SuppressionList).filter(SuppressionList.email.ilike(creator_email)).delete(synchronize_session=False)
+
         db.query(Thread).filter(Thread.creator_id == real_id).delete(synchronize_session=False)
         db.query(OutreachMessage).filter(OutreachMessage.creator_id == real_id).delete(synchronize_session=False)
         db.query(SuppressionList).filter(SuppressionList.creator_id == real_id).delete(synchronize_session=False)

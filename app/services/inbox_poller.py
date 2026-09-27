@@ -4,6 +4,7 @@ from email.header import decode_header
 import imaplib
 import logging
 import re
+import urllib.parse
 from datetime import datetime
 from email.utils import parseaddr
 from typing import Optional, List
@@ -28,10 +29,21 @@ def _decode_str(val, charset=None):
     return val
 
 def _clean_email_body(body: str) -> str:
-    """Strip quoted text from email replies."""
+    """Strip quoted text from email replies and decode URL form-encoded strings."""
     if not body: return body
-    import re
     
+    # Clean URL/form-encoded text where spaces became "+" (e.g. "I+will+be+interested+in+Concept+3...")
+    if "+" in body and ("I+will" in body or "Concept+" in body or "Let's+build" in body or ("+" in body[:60] and " " not in body[:30])):
+        try:
+            body = urllib.parse.unquote_plus(body)
+        except Exception:
+            body = body.replace("+", " ")
+    elif "%20" in body or "%28" in body or "%29" in body:
+        try:
+            body = urllib.parse.unquote(body)
+        except Exception:
+            pass
+
     # Replace \r\n with \n
     body = body.replace('\r\n', '\n')
     
@@ -67,7 +79,14 @@ def _clean_email_body(body: str) -> str:
             
         cleaned.append(line)
         
-    return '\n'.join(cleaned).strip()
+    res = '\n'.join(cleaned).strip()
+    # Final safety unquote if leftover +
+    if "+" in res and ("I+will" in res or "Concept+" in res or "interested+in" in res):
+        try:
+            res = urllib.parse.unquote_plus(res)
+        except Exception:
+            res = res.replace("+", " ")
+    return res
 
 def _parse_email_message(msg):
     # Parse Subject
@@ -75,6 +94,16 @@ def _parse_email_message(msg):
     if msg["Subject"]:
         headers = decode_header(msg["Subject"])
         subject = "".join([_decode_str(val, charset) for val, charset in headers])
+        if "+" in subject and ("Interested+in" in subject or "Concept+" in subject):
+            try:
+                subject = urllib.parse.unquote_plus(subject)
+            except Exception:
+                subject = subject.replace("+", " ")
+        elif "%20" in subject:
+            try:
+                subject = urllib.parse.unquote(subject)
+            except Exception:
+                pass
         
     # Parse From
     from_raw = msg.get("From", "")

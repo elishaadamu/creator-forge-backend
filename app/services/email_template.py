@@ -10,6 +10,7 @@ Provides:
 import os
 import re
 import html
+import urllib.parse
 from typing import Optional, List, Dict, Any
 import markdown
 
@@ -393,7 +394,7 @@ def _render_single_concept_card(
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
-                <a href="mailto:{get_contact_reply_email()}?subject=Interested in Concept {index + 1}: {html.escape(app_name)}&body=I will be interested in Concept {index + 1} ({html.escape(app_name)}). Let's build and launch this together!" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
+                <a href="mailto:{get_contact_reply_email()}?subject={urllib.parse.quote(f'Interested in Concept {index + 1}: {app_name}')}&body={urllib.parse.quote(f'I will be interested in Concept {index + 1} ({app_name}). Let\'s build and launch this together!')}" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
                   Select Concept #{index + 1} &rarr;
                 </a>
               </td>
@@ -446,7 +447,9 @@ def render_concept_showcase_html(
     for idx, c in enumerate(concept_list):
         c_name = c.get("name") or f"Concept {idx + 1}"
         c_num = idx + 1
-        mailto_url = f"mailto:{contact_reply_to}?subject=Interested in Concept {c_num}: {html.escape(c_name)}&body=I will be interested in Concept {c_num} ({html.escape(c_name)}). Let's build and launch this together!"
+        subj_encoded = urllib.parse.quote(f"Interested in Concept {c_num}: {c_name}")
+        body_encoded = urllib.parse.quote(f"I will be interested in Concept {c_num} ({c_name}). Let's build and launch this together!")
+        mailto_url = f"mailto:{contact_reply_to}?subject={subj_encoded}&body={body_encoded}"
         concept_buttons.append(
             f'<a href="{mailto_url}" style="display:inline-block;background:#0f172a;color:#ffffff;padding:9px 15px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;margin:4px 6px 4px 0;border:1px solid #1e293b;">'
             f'👉 &ldquo;I will be interested in Concept {c_num}&rdquo;'

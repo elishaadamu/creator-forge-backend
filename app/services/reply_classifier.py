@@ -65,6 +65,25 @@ def record_reply(
     if not thread:
         raise ValueError("Thread not found")
 
+    import urllib.parse
+    # Decode URL form-encoded strings if spaces became "+" (e.g. "I+will+be+interested+in+Concept+3...")
+    if body and "+" in body and ("I+will" in body or "Concept+" in body or "Let's+build" in body or ("+" in body[:50] and " " not in body[:25])):
+        try:
+            body = urllib.parse.unquote_plus(body)
+        except Exception:
+            body = body.replace("+", " ")
+    elif body and ("%20" in body or "%28" in body or "%29" in body):
+        try:
+            body = urllib.parse.unquote(body)
+        except Exception:
+            pass
+
+    if subject and "+" in subject and ("Interested+in" in subject or "Concept+" in subject):
+        try:
+            subject = urllib.parse.unquote_plus(subject)
+        except Exception:
+            subject = subject.replace("+", " ")
+
     # Immediate opt-out handling — no delay, no AI needed
     if _detect_opt_out(body):
         _handle_opt_out(db, thread, from_address, body, actor)

@@ -1,5 +1,6 @@
 import logging
 import json
+import urllib.parse
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -308,8 +309,27 @@ def run_autonomous_creator_progression(db: Session, reply: Reply):
     elif isinstance(creator.niche, str) and creator.niche:
         niche = creator.niche
 
-    body_lower = (reply.body or "").lower().strip()
-    reply_subj = (reply.subject or "").lower().strip()
+    raw_reply_body = reply.body or ""
+    if "+" in raw_reply_body and ("+" in raw_reply_body[:50] or "I+will" in raw_reply_body or "Concept+" in raw_reply_body or (" " not in raw_reply_body[:25])):
+        try:
+            raw_reply_body = urllib.parse.unquote_plus(raw_reply_body)
+        except Exception:
+            raw_reply_body = raw_reply_body.replace("+", " ")
+    elif "%20" in raw_reply_body:
+        try:
+            raw_reply_body = urllib.parse.unquote(raw_reply_body)
+        except Exception:
+            pass
+
+    body_lower = raw_reply_body.lower().strip()
+
+    raw_subj = reply.subject or ""
+    if "+" in raw_subj and ("Interested+in" in raw_subj or "Concept+" in raw_subj):
+        try:
+            raw_subj = urllib.parse.unquote_plus(raw_subj)
+        except Exception:
+            raw_subj = raw_subj.replace("+", " ")
+    reply_subj = raw_subj.lower().strip()
 
     # Retrieve existing Opportunity Pitch message
     pitch_msg = (
