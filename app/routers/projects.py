@@ -199,6 +199,9 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "productInfrastructure": (proj.metadata_info or {}).get("product_infrastructure") or (proj.metadata_info or {}).get("productInfrastructure"),
         "diySubscription": (proj.metadata_info or {}).get("diy_subscription") or (proj.metadata_info or {}).get("diySubscription"),
         "isDIY": bool((proj.metadata_info or {}).get("is_diy") or (proj.metadata_info or {}).get("isDIY") or ((proj.metadata_info or {}).get("diy_subscription") or {}).get("active") or ((proj.metadata_info or {}).get("diySubscription") or {}).get("active")),
+        "diyOfferStatus": (proj.metadata_info or {}).get("diy_offer_status") or (proj.metadata_info or {}).get("diyOfferStatus") or "offer_sent",
+        "diyOfferSentAt": (proj.metadata_info or {}).get("diy_offer_sent_at") or (proj.metadata_info or {}).get("diyOfferSentAt"),
+        "diyFee": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or 50.0),
         "currentPresales": float(proj.current_presales or 0.0),
         "visitors": int(proj.visitors or 0),
         "conversionRate": float(proj.conversion_rate or 0.0),
@@ -956,6 +959,16 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         val = bool(body.get("isDIY") if "isDIY" in body else body.get("is_diy"))
         cur_meta["is_diy"] = val
         cur_meta["isDIY"] = val
+
+    if "diyOfferStatus" in body or "diy_offer_status" in body:
+        dos = body.get("diyOfferStatus") or body.get("diy_offer_status")
+        cur_meta["diy_offer_status"] = dos
+        cur_meta["diyOfferStatus"] = dos
+
+    if "diyOfferSentAt" in body or "diy_offer_sent_at" in body:
+        dosa = body.get("diyOfferSentAt") or body.get("diy_offer_sent_at")
+        cur_meta["diy_offer_sent_at"] = dosa
+        cur_meta["diyOfferSentAt"] = dosa
 
     proj.metadata_info = cur_meta
     flag_modified(proj, "metadata_info")
