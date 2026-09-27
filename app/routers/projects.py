@@ -197,6 +197,8 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "launchReport": (proj.metadata_info or {}).get("launch_report") or (proj.metadata_info or {}).get("launchReport"),
         "launchStatus": (proj.metadata_info or {}).get("launch_status") or (proj.metadata_info or {}).get("launchStatus", "PREP"),
         "productInfrastructure": (proj.metadata_info or {}).get("product_infrastructure") or (proj.metadata_info or {}).get("productInfrastructure"),
+        "diySubscription": (proj.metadata_info or {}).get("diy_subscription") or (proj.metadata_info or {}).get("diySubscription"),
+        "isDIY": bool((proj.metadata_info or {}).get("is_diy") or (proj.metadata_info or {}).get("isDIY") or ((proj.metadata_info or {}).get("diy_subscription") or {}).get("active") or ((proj.metadata_info or {}).get("diySubscription") or {}).get("active")),
         "currentPresales": float(proj.current_presales or 0.0),
         "visitors": int(proj.visitors or 0),
         "conversionRate": float(proj.conversion_rate or 0.0),
@@ -941,6 +943,19 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         if proj.telemetry and isinstance(exps, list):
             proj.telemetry.experiments = exps
             flag_modified(proj.telemetry, "experiments")
+
+    if "diySubscription" in body or "diy_subscription" in body:
+        diy_data = body.get("diySubscription") or body.get("diy_subscription")
+        cur_meta["diy_subscription"] = diy_data
+        cur_meta["diySubscription"] = diy_data
+        if isinstance(diy_data, dict) and diy_data.get("active"):
+            cur_meta["is_diy"] = True
+            cur_meta["isDIY"] = True
+
+    if "isDIY" in body or "is_diy" in body:
+        val = bool(body.get("isDIY") if "isDIY" in body else body.get("is_diy"))
+        cur_meta["is_diy"] = val
+        cur_meta["isDIY"] = val
 
     proj.metadata_info = cur_meta
     flag_modified(proj, "metadata_info")
