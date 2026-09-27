@@ -306,6 +306,8 @@ def _render_single_concept_card(
     '''
 
     concept_badge = f"CONCEPT #{index + 1}" if total_concepts > 1 else "PROPOSED SOFTWARE PRODUCT"
+    select_action_subject = urllib.parse.quote(f"Interested in Concept {index + 1}: {app_name}")
+    select_action_body = urllib.parse.quote(f"I will be interested in Concept {index + 1} ({app_name}). Let's build and launch this together!")
 
     return f'''
     <!-- CONCEPT SHOWCASE CARD #{index + 1} (Light Clean Theme) -->
@@ -394,7 +396,7 @@ def _render_single_concept_card(
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
-                <a href="mailto:{get_contact_reply_email()}?subject={urllib.parse.quote(f'Interested in Concept {index + 1}: {app_name}')}&body={urllib.parse.quote(f'I will be interested in Concept {index + 1} ({app_name}). Let\'s build and launch this together!')}" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
+                <a href="mailto:{get_contact_reply_email()}?subject={select_action_subject}&body={select_action_body}" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
                   Select Concept #{index + 1} &rarr;
                 </a>
               </td>

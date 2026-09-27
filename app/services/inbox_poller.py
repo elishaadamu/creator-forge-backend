@@ -142,26 +142,55 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
     # 1. Primary & 100% Reliable: Direct Creator Tracking Token
     # Matches [CF-CID:<creator_id>] embedded in the subject or quoted email body
     cid_match = re.search(r"cf-cid:([a-z0-9\-_]+)", all_text)
+    handle_match = re.search(r"handle:@([a-z0-9_.\-]+)", all_text) or re.search(r"\[#([a-z0-9_.\-]+)\]", all_text)
+    cand_handle = handle_match.group(1).strip() if handle_match else None
+
     if cid_match:
         cand_id = cid_match.group(1).strip()
         c = db.get(Creator, cand_id)
         if c:
             creator_id = c.id
-        else:
-            # Token belongs to an explicitly deleted creator — DO NOT match to other creators
-            return None
-
-    # 2. Handle token match: Handle:@<handle> or [#<handle>]
-    if not creator_id:
-        handle_match = re.search(r"handle:@([a-z0-9_.\-]+)", all_text) or re.search(r"\[#([a-z0-9_.\-]+)\]", all_text)
-        if handle_match:
-            cand_handle = handle_match.group(1).strip()
+        elif cand_handle:
+            # Fall back to handle matching
             c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
             if c:
                 creator_id = c.id
-            else:
-                # Handle token belongs to a deleted creator — DO NOT match to other creators
-                return None
+        if not creator_id:
+            # Token represents a genuine outreach dispatch from Creator Forge.
+            # Auto-register the creator with cand_id and cand_handle so inbound reply is NEVER dropped!
+            new_handle = cand_handle or from_email_clean.split("@")[0].lower()
+            c = Creator(
+                id=cand_id,
+                handle=new_handle,
+                platform="youtube",
+                display_name=cand_handle.capitalize() if cand_handle else from_email_clean.split("@")[0].capitalize(),
+                email_public=from_email_clean,
+                status="contacted"
+            )
+            db.add(c)
+            db.commit()
+            db.refresh(c)
+            creator_id = c.id
+
+    # 2. Handle token match: Handle:@<handle> or [#<handle>]
+    if not creator_id and cand_handle:
+        c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
+        if c:
+            creator_id = c.id
+        else:
+            import uuid
+            c = Creator(
+                id=str(uuid.uuid4()),
+                handle=cand_handle,
+                platform="youtube",
+                display_name=cand_handle.capitalize(),
+                email_public=from_email_clean,
+                status="contacted"
+            )
+            db.add(c)
+            db.commit()
+            db.refresh(c)
+            creator_id = c.id
 
     if all_creators is None:
         all_creators = db.query(Creator).all()
@@ -223,13 +252,16 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         return None
 
     has_sent_outreach = db.query(OutreachMessage).filter(
-        OutreachMessage.creator_id == creator_id,
-        OutreachMessage.status.in_(["sent", "delivered", "delivered_simulated"])
+        OutreachMessage.creator_id == creator_id
     ).first()
 
-    is_contacted_status = matched_creator.status in ("contacted", "pitched", "ready_for_launch", "partnered")
+    existing_thread = db.query(Thread).filter(Thread.creator_id == creator_id).first()
 
-    if not has_sent_outreach and not is_contacted_status:
+    is_contacted_status = matched_creator.status in (
+        "contacted", "in_review", "approved", "pitched", "ready_for_launch", "partnered", "replied"
+    )
+
+    if not has_sent_outreach and not is_contacted_status and not existing_thread and not (cid_match or handle_match):
         logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has not received outreach yet. Ignoring incoming email from {from_email_clean}.")
         return None
 
@@ -268,18 +300,18 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
     new_replies_count = 0
     candidate_messages = []
     try:
-        socket.setdefaulttimeout(8)  # 8s socket timeout to prevent hang
-        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=8)
+        socket.setdefaulttimeout(20)  # 20s socket timeout for reliable payload download
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=20)
         mail.login(settings.GOOGLE_EMAIL, settings.GOOGLE_APP_PASSWORD.replace(" ", ""))
         mail.select("INBOX")
         
-        # Search recent messages (fetch last 20 message IDs for instant response)
+        # Search recent messages (fetch last 10 message IDs for instant response)
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             return {"status": "success", "new_replies": 0, "processed": 0}
             
         all_ids = messages[0].split()
-        email_ids = all_ids[-15:]  # Check last 15 emails for responsive sync
+        email_ids = all_ids[-10:]  # Check last 10 emails
         status, msg_data = mail.fetch(b",".join(email_ids), "(RFC822)")
         if status == "OK" and msg_data:
             for response_part in msg_data:

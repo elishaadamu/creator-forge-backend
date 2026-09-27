@@ -160,7 +160,8 @@ def classify_reply(
     lower = (reply.body or "").lower().strip()
     neg_patterns = [
         "not interested", "am not interested", "i am not interested", "im not interested",
-        "i'm not interested", "no thanks", "no thank you", "uninterested", "not for me",
+        "i'm not interested", "not interest", "am not interest", "i am not interest", "sorry",
+        "no thanks", "no thank you", "uninterested", "not for me",
         "not right now", "decline", "pass on this", "pass", "please remove", "unsubscribe",
         "stop", "dont contact", "don't contact", "not looking"
     ]
@@ -182,6 +183,7 @@ def classify_reply(
         "yes", "interested", "would be interested", "i would be interested", "i'm interested", "im interested",
         "love to", "sounds great", "sounds good", "sounds awesome", "sounds amazing", "looks great", "looks good",
         "sure", "sure thing", "sure, send it over", "send it over", "send over", "send it", "go ahead",
+        "go ahead with the process", "let's go ahead", "lets go ahead", "ahead with the process",
         "let's talk", "lets talk", "let's do it", "lets do it", "let's connect", "lets connect",
         "count me in", "happy to chat", "open to", "schedule a call", "thanks for reaching out",
         "let me know next steps", "ready to move forward", "agreed", "agree", "deal", "i'm in", "im in",

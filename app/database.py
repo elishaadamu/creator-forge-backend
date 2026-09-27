@@ -30,11 +30,21 @@ def create_configured_engine(url: str):
     )
 
 
-try:
-    engine = create_configured_engine(settings.DATABASE_URL)
-except Exception as _e:
-    print(f"[DB INIT] PostgreSQL driver/connection error: {_e}. Falling back to local SQLite database.")
-    engine = create_configured_engine(fallback_sqlite_url)
+def get_working_engine():
+    db_url = settings.DATABASE_URL
+    if db_url and ("postgres" in db_url or "postgresql" in db_url):
+        try:
+            eng = create_configured_engine(db_url)
+            from sqlalchemy import text
+            with eng.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return eng
+        except Exception as _e:
+            print(f"[DB INIT] PostgreSQL connection failed ({_e}). Falling back to local SQLite database.")
+            return create_configured_engine(fallback_sqlite_url)
+    return create_configured_engine(db_url or fallback_sqlite_url)
+
+engine = get_working_engine()
 
 
 @event.listens_for(engine, "before_cursor_execute")

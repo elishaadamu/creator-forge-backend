@@ -413,14 +413,23 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     creator = None
     if payload.creator_id:
         creator = db.get(Creator, payload.creator_id)
+    if not creator and payload.subject:
+        import re
+        h_match = re.search(r"\[#([a-zA-Z0-9_.\-]+)\]", payload.subject)
+        if h_match:
+            c_handle_cand = h_match.group(1).strip()
+            creator = db.query(Creator).filter(Creator.handle.ilike(f"%{c_handle_cand}%")).first()
     if not creator and to_email:
         creator = db.query(Creator).filter(Creator.email_public == to_email).first()
     if not creator:
+        import re
+        h_match = re.search(r"\[#([a-zA-Z0-9_.\-]+)\]", payload.subject)
+        cand_h = h_match.group(1).strip() if h_match else to_email.split("@")[0].lower()[:30]
         creator = Creator(
-            id=str(uuid.uuid4()),
-            handle=to_email.split("@")[0].lower()[:30],
+            id=payload.creator_id if payload.creator_id else str(uuid.uuid4()),
+            handle=cand_h,
             platform="youtube",
-            display_name=to_email.split("@")[0].capitalize(),
+            display_name=cand_h.capitalize(),
             email_public=to_email,
             status="contacted"
         )
@@ -784,6 +793,7 @@ def _thread_dict(t: Thread) -> dict:
         "recipient_email": recipient_email,
         "creator_avatar": creator_avatar,
         "outreach_message_id": t.outreach_message_id,
+        "subject": original_subject or (t.replies[0].subject if t.replies else None),
         "original_subject": original_subject,
         "original_body": original_body,
         "status": t.status,
