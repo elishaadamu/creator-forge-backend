@@ -1783,6 +1783,23 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
     raise HTTPException(404, f"No project found matching slug '{slug}'")
 
 
+@router.delete("")
+@router.delete("/")
+def delete_all_projects(db: Session = Depends(get_db)):
+    """Delete all co-launch projects, associated validation records, and all uploaded Cloudinary files."""
+    from app.integrations.cloudinary_service import delete_all_files_for_project
+    projects = db.query(CoLaunchProject).all()
+    count = len(projects)
+    for proj in projects:
+        try:
+            delete_all_files_for_project(proj)
+        except Exception as e:
+            logger.warning(f"[DeleteAllProjects] Cloudinary purge error: {e}")
+        db.delete(proj)
+    db.commit()
+    return {"status": "success", "deleted_count": count, "message": f"Deleted {count} co-launch projects."}
+
+
 @router.delete("/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db)):
     """Delete a co-launch project, all validation records, and all uploaded Cloudinary files."""
@@ -1799,4 +1816,5 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
     db.delete(proj)
     db.commit()
     return {"status": "success", "message": f"Project '{project_id}' and all associated Cloudinary files deleted."}
+
 

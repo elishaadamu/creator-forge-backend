@@ -407,7 +407,10 @@ class CreatorUpdate(BaseModel):
     email_public: Optional[str] = None
     email: Optional[str] = None
     notes: Optional[str] = None
+    discovery_notes: Optional[str] = None
     status: Optional[str] = None
+    reply_classification: Optional[str] = None
+    reply_text: Optional[str] = None
     selected_concept_id: Optional[str] = None
     selectedConceptId: Optional[str] = None
     selected_concept: Optional[Dict[str, Any]] = None
@@ -437,29 +440,68 @@ def update_creator_details(
     
     data = body.model_dump(exclude_unset=True)
     target_email = (body.email_public or body.email or "").strip()
+    is_email_changing = bool(target_email and target_email.lower() != (c.email_public or "").strip().lower())
+
     if target_email:
         c.email_public = target_email
 
     for field, val in data.items():
-        if field not in ("email", "email_public", "selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept") and hasattr(c, field):
+        if field not in ("email", "email_public", "selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept", "reply_classification", "reply_text", "discovery_notes") and hasattr(c, field):
             setattr(c, field, val)
+
+    # Manage discovery_notes JSON attributes
+    import json
+    notes = {}
+    if c.discovery_notes and c.discovery_notes.startswith("{"):
+        try:
+            notes = json.loads(c.discovery_notes)
+        except Exception:
+            notes = {}
+
+    if "discovery_notes" in data and data["discovery_notes"]:
+        try:
+            passed_notes = json.loads(data["discovery_notes"])
+            notes.update(passed_notes)
+        except Exception:
+            pass
+
+    # Explicit reply classification updates
+    if "reply_classification" in data:
+        notes["reply_classification"] = data["reply_classification"]
+    if "reply_text" in data:
+        notes["reply_text"] = data["reply_text"]
+
+    # When email is modified or added to an uncontacted creator: ALWAYS clear stale reply classifications!
+    is_uncontacted = c.status not in ("contacted", "pitched", "ready_for_launch", "partnered")
+    if is_email_changing and is_uncontacted:
+        notes["reply_classification"] = None
+        notes["reply_text"] = None
+        notes.pop("reply_classification", None)
+        notes.pop("reply_text", None)
+        # Purge any old orphan threads that had this email
+        try:
+            from app.models.outreach import Thread, Reply
+            orphan_threads = db.query(Thread).filter(
+                (Thread.creator_id == c.id) |
+                (Thread.recipient_email.ilike(target_email)) |
+                (Thread.creator_email.ilike(target_email))
+            ).all()
+            for ot in orphan_threads:
+                db.query(Reply).filter(Reply.thread_id == ot.id).delete(synchronize_session=False)
+                db.delete(ot)
+        except Exception as th_err:
+            logger.warning(f"Error purging orphan threads on email change: {th_err}")
 
     # Persist selected_concept_id and selected_concept to discovery_notes JSON
     if any(k in data for k in ("selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept")):
-        import json
-        notes = {}
-        if c.discovery_notes and c.discovery_notes.startswith("{"):
-            try:
-                notes = json.loads(c.discovery_notes)
-            except Exception:
-                notes = {}
         sel_id = data.get("selected_concept_id") or data.get("selectedConceptId")
         if sel_id:
             notes["selected_concept_id"] = sel_id
         sel_concept = data.get("selected_concept") or data.get("selectedConcept")
         if sel_concept:
             notes["selected_concept"] = sel_concept
-        c.discovery_notes = json.dumps(notes)
+
+    c.discovery_notes = json.dumps(notes)
     
     if target_email:
         try:
@@ -743,6 +785,19 @@ def delete_creator(
         ).first()
 
     if not creator:
+        # Fallback: check if there is an orphan CoLaunchProject matching this ID, handle, or name!
+        from app.models.project import CoLaunchProject
+        orphan_projs = db.query(CoLaunchProject).filter(
+            (CoLaunchProject.id == creator_id) |
+            (CoLaunchProject.creator_id == creator_id) |
+            (CoLaunchProject.creator_handle.ilike(f"%{clean_handle}%")) |
+            (CoLaunchProject.creator_name.ilike(f"%{creator_id.strip()}%"))
+        ).all()
+        if orphan_projs:
+            for op in orphan_projs:
+                db.delete(op)
+            db.commit()
+            return {"status": "success", "deleted_projects": len(orphan_projs), "message": f"Deleted {len(orphan_projs)} orphan projects"}
         raise HTTPException(404, "Creator not found")
 
     real_id = creator.id
@@ -790,9 +845,12 @@ def delete_creator(
         # Purge all Cloudinary assets and co-launch projects associated with this creator
         try:
             from app.integrations.cloudinary_service import delete_all_files_for_project, delete_media_from_cloudinary
+            clean_h = (creator.handle or '').lstrip('@').strip().lower()
             creator_projs = db.query(CoLaunchProject).filter(
                 (CoLaunchProject.creator_id == real_id) |
-                (CoLaunchProject.creator_handle.ilike(f"%{creator.handle or ''}%"))
+                (CoLaunchProject.creator_handle.ilike(f"%{clean_h}%")) |
+                (CoLaunchProject.creator_name.ilike(f"%{creator.display_name or ''}%")) |
+                (CoLaunchProject.creator_email.ilike(f"%{creator_email}%") if creator_email else False)
             ).all()
             for p in creator_projs:
                 delete_all_files_for_project(p)
@@ -1192,6 +1250,12 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
             selected_concept = parsed.get("selected_concept") or parsed.get("selectedConcept")
     except Exception:
         pass
+
+    # Uncontacted Guard: A creator who was NEVER contacted CANNOT have an outreach reply!
+    is_contacted = c.status in ("contacted", "pitched", "ready_for_launch", "partnered")
+    if not is_contacted:
+        reply_classification = None
+        reply_text = None
 
     clean_h = (c.handle or "").lstrip("@").strip().lower()
     clean_email = (c.email_public or "").strip().lower()

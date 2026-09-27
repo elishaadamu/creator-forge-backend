@@ -184,35 +184,60 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
                 creator_id = c.id
                 break
 
-    # 4. Match against Creator table (email_public) with multiple-creator disambiguation
+    # 4. Match against Creator table (email_public) - strictly enforce that creator was contacted
     if not creator_id and not is_admin_email:
-        matching_creators = [c for c in all_creators if (c.email_public or "").lower().strip() == from_email_clean]
-        if len(matching_creators) == 1:
-            creator_id = matching_creators[0].id
-        elif len(matching_creators) > 1:
-            # If multiple creators share this email (e.g. test environment or agency address):
-            # Prefer the creator with the most recent open outreach thread
+        # A creator who was NEVER contacted CANNOT have an outreach reply!
+        contacted_creators = [
+            c for c in all_creators 
+            if (c.email_public or "").lower().strip() == from_email_clean
+            and c.status in ("contacted", "pitched", "ready_for_launch", "partnered")
+        ]
+        if len(contacted_creators) == 1:
+            creator_id = contacted_creators[0].id
+        elif len(contacted_creators) > 1:
             recent_thread = db.query(Thread).filter(
-                Thread.creator_id.in_([c.id for c in matching_creators])
+                Thread.creator_id.in_([c.id for c in contacted_creators])
             ).order_by(Thread.last_activity.desc()).first()
             if recent_thread:
                 return recent_thread.id
-            creator_id = matching_creators[0].id
+            creator_id = contacted_creators[0].id
 
     # 6. Match against Contacts table
     if not creator_id and not is_admin_email:
         contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email_clean}%"), Contact.contact_type == "email").first()
         if contact and contact.creator_id:
-            creator_id = contact.creator_id
+            c_candidate = db.get(Creator, contact.creator_id)
+            if c_candidate and c_candidate.status in ("contacted", "pitched", "ready_for_launch", "partnered"):
+                creator_id = contact.creator_id
 
     # Strictly do NOT assign unrecognized/marketing emails to random creators
     if not creator_id:
+        return None
+
+    # STRICT UNCONTACTED GUARD:
+    # A creator who was NEVER contacted (no sent OutreachMessage and not in contacted/pitched status)
+    # CANNOT have an outreach reply!
+    from app.models.outreach import OutreachMessage
+    matched_creator = db.get(Creator, creator_id)
+    if not matched_creator:
+        return None
+
+    has_sent_outreach = db.query(OutreachMessage).filter(
+        OutreachMessage.creator_id == creator_id,
+        OutreachMessage.status.in_(["sent", "delivered", "delivered_simulated"])
+    ).first()
+
+    is_contacted_status = matched_creator.status in ("contacted", "pitched", "ready_for_launch", "partnered")
+
+    if not has_sent_outreach and not is_contacted_status:
+        logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has not received outreach yet. Ignoring incoming email from {from_email_clean}.")
         return None
 
     # Find or create latest thread for this specific creator
     thread = db.query(Thread).filter(Thread.creator_id == creator_id).order_by(Thread.created_at.desc()).first()
     if not thread:
         thread = Thread(creator_id=creator_id, status="open", created_at=datetime.utcnow(), last_activity=datetime.utcnow())
+
         db.add(thread)
         db.commit()
         db.refresh(thread)
