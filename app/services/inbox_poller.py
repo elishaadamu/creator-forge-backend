@@ -151,45 +151,14 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         if c:
             creator_id = c.id
         elif cand_handle:
-            # Fall back to handle matching
             c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
             if c:
                 creator_id = c.id
-        if not creator_id:
-            # Token represents a genuine outreach dispatch from Creator Forge.
-            # Auto-register the creator with cand_id and cand_handle so inbound reply is NEVER dropped!
-            new_handle = cand_handle or from_email_clean.split("@")[0].lower()
-            c = Creator(
-                id=cand_id,
-                handle=new_handle,
-                platform="youtube",
-                display_name=cand_handle.capitalize() if cand_handle else from_email_clean.split("@")[0].capitalize(),
-                email_public=from_email_clean,
-                status="contacted"
-            )
-            db.add(c)
-            db.commit()
-            db.refresh(c)
-            creator_id = c.id
 
     # 2. Handle token match: Handle:@<handle> or [#<handle>]
     if not creator_id and cand_handle:
         c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
         if c:
-            creator_id = c.id
-        else:
-            import uuid
-            c = Creator(
-                id=str(uuid.uuid4()),
-                handle=cand_handle,
-                platform="youtube",
-                display_name=cand_handle.capitalize(),
-                email_public=from_email_clean,
-                status="contacted"
-            )
-            db.add(c)
-            db.commit()
-            db.refresh(c)
             creator_id = c.id
 
     if all_creators is None:

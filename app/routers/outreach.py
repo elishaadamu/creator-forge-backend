@@ -419,8 +419,7 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
         if h_match:
             c_handle_cand = h_match.group(1).strip()
             creator = db.query(Creator).filter(Creator.handle.ilike(f"%{c_handle_cand}%")).first()
-    if not creator and to_email:
-        creator = db.query(Creator).filter(Creator.email_public == to_email).first()
+    # DO NOT match by email fallback across creators — test emails are often reused for multiple creators
     if not creator:
         import re
         h_match = re.search(r"\[#([a-zA-Z0-9_.\-]+)\]", payload.subject)
@@ -445,7 +444,7 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     if creator:
         c_handle = (creator.handle or "").lstrip("@").strip()
         c_id = str(creator.id).strip()
-        tracking_token = f"[CF-CID:{c_id} | Handle:@{c_handle}]"
+        tracking_token = f"[CF-STAGE:STEP3_INQUIRY | CF-CID:{c_id} | Handle:@{c_handle}]"
         
         # Ensure handle or token is in subject if not already present
         if f"[#{c_handle}]" not in subject_to_send and f"CF-CID" not in subject_to_send:
@@ -463,10 +462,11 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
         body_text = re.sub(r'\bundefined\s+content\b', 'content', body_text, flags=re.IGNORECASE)
         body_text = re.sub(r'\bundefined\b', 'channel', body_text, flags=re.IGNORECASE)
 
-        # Record email_public on creator if empty
-        if not creator.email_public:
-            creator.email_public = to_email
-            db.commit()
+        # Update email_public and status to contacted
+        creator.email_public = to_email
+        if creator.status in ("discovered", "in_review", "new", None):
+            creator.status = "contacted"
+        db.commit()
 
     # Format beautiful luxury HTML template
     resolved_concepts = payload.concepts
