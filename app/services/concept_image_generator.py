@@ -139,10 +139,9 @@ def generate_concept_card_image(
     # Red, Yellow, Green macOS dots
     draw.ellipse([24 * scale, dot_y - dot_r, 24 * scale + dot_r * 2, dot_y + dot_r], fill=(239, 68, 68))
     draw.ellipse([42 * scale, dot_y - dot_r, 42 * scale + dot_r * 2, dot_y + dot_r], fill=(245, 158, 11))
-    draw.ellipse([60 * scale, dot_y - dot_r, 60 * scale + dot_r * 2, dot_y + dot_r], fill=(16, 185, 129))
-
-    # URL in clean monospace
-    draw.text((82 * scale, dot_y - 7 * scale), app_url, fill=(148, 163, 184, 255), font=font_url)
+    # Architecture Spec title in clean monospace (no URL)
+    spec_label = f"{name} • Software Spec"
+    draw.text((82 * scale, dot_y - 7 * scale), spec_label, fill=(148, 163, 184, 255), font=font_url)
 
     # Right Badge: MVP Ready pill
     badge_w = 90 * scale

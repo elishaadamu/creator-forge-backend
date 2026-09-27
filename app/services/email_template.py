@@ -7,6 +7,7 @@ Provides:
 3. Clean, high-deliverability light HTML styling for all email clients (Gmail, Apple Mail, Outlook).
 4. Elegant concept preview showcase for Step 5 & Step 6 creator proposals.
 """
+import os
 import re
 import html
 from typing import Optional, List, Dict, Any
@@ -53,9 +54,25 @@ def _render_creator_forge_logo_html(size: int = 28) -> str:
     '''
 
 
+def get_contact_reply_email() -> str:
+    """
+    Retrieves the active contact and reply email address directly from .env / settings.
+    Ensures that any changes to FROM_EMAIL or ADMIN_EMAIL in .env automatically propagate
+    to concept cards, 1-click mailto links, and email signatures.
+    """
+    try:
+        from app.config import settings
+        env_from = os.getenv("FROM_EMAIL") or getattr(settings, "FROM_EMAIL", None)
+        env_admin = os.getenv("ADMIN_EMAIL") or getattr(settings, "ADMIN_EMAIL", None)
+        return (env_from or env_admin or "creatorforgeweb@12019303.brevosend.com").strip()
+    except Exception:
+        return os.getenv("FROM_EMAIL", "creatorforgeweb@12019303.brevosend.com").strip()
+
+
 def _render_executive_signature_html(creator_name: str = "", tracking_token: str = "") -> str:
     """Renders a real 1-on-1 executive email signature with brand card elements."""
     logo_html = _render_creator_forge_logo_html(32)
+    contact_email = get_contact_reply_email()
     ref_footnote = ""
     if tracking_token:
         ref_footnote = f'''
@@ -75,7 +92,7 @@ def _render_executive_signature_html(creator_name: str = "", tracking_token: str
             <div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.2;">Alex Rivera</div>
             <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:3px;">Head of Venture Partnerships • Creator Forge</div>
             <div style="font-size:12px;color:#475569;margin-top:8px;line-height:1.5;">
-              <a href="mailto:partnerships@creatorforge.com" style="color:#0f172a;text-decoration:underline;font-weight:600;">partnerships@creatorforge.com</a>
+              <a href="mailto:{contact_email}" style="color:#0f172a;text-decoration:underline;font-weight:600;">{html.escape(contact_email)}</a>
               <span style="color:#cbd5e1;margin:0 6px;">•</span>
               <a href="https://creatorforge.com" style="color:#0284c7;text-decoration:none;">creatorforge.com</a>
               <span style="color:#cbd5e1;margin:0 6px;">•</span>
@@ -140,55 +157,23 @@ def _render_single_concept_card(
     efficiency_metric = mockup_data.get("efficiencyMetric") or "91%"
     customer_label = concept.get("customer") or concept.get("demographicAlignment") or ""
 
-    # Dynamic Concept Card Image Generation from text:
-    # Converts dynamic concept text (and any admin modifications) into the authentic macOS card PNG image.
-    dynamic_card_image = None
-    try:
-        from app.services.concept_image_generator import generate_concept_card_image
-        import hashlib
-        from pathlib import Path
+    # Determine software archetype for concrete specification
+    raw_mockup_type = str(concept.get("mockupType") or "").lower()
+    if not raw_mockup_type:
+        raw_mockup_type = "saas_os" if index == 0 else ("ai_copilot" if index == 1 else "knowledge_hub")
 
-        text_sig = f"{app_name}_{app_url}_{primary_metric}_{active_metric}_{efficiency_metric}_{pricing}_{customer_label}"
-        sig_hash = hashlib.md5(text_sig.encode('utf-8')).hexdigest()[:12]
-
-        media_dir = Path(__file__).resolve().parent.parent.parent / "static" / "media"
-        media_dir.mkdir(parents=True, exist_ok=True)
-        card_png_name = f"concept_mockup_{sig_hash}.png"
-        card_png_path = media_dir / card_png_name
-
-        if not card_png_path.exists():
-            png_data = generate_concept_card_image({
-                "name": app_name,
-                "appUrl": app_url,
-                "primaryMetric": primary_metric,
-                "activeMetric": active_metric,
-                "efficiencyMetric": efficiency_metric,
-                "customer": customer_label,
-                "pricing": pricing
-            })
-            with open(card_png_path, "wb") as f:
-                f.write(png_data)
-
-        dynamic_card_image = f"/api/static/media/{card_png_name}"
-    except Exception as e:
-        logger.warning(f"Could not generate dynamic card image: {e}")
-
-    # Prioritize dynamic card image or explicit admin customImageUrl
-    active_image = (
-        concept.get("customImageUrl")
-        or dynamic_card_image
-        or concept.get("imageUrl")
-        or concept.get("image_url")
-        or (mockup_data.get("imageUrl") if isinstance(mockup_data, dict) else None)
-        or (concept_image_url if index == 0 else None)
-    )
-    if not active_image:
-        niche_key = "default"
-        for k in CATEGORY_MOCKUP_IMAGES.keys():
-            if k in (concept.get("category", "") or "").lower() or k in (tagline or "").lower() or k in (app_name or "").lower():
-                niche_key = k
-                break
-        active_image = CATEGORY_MOCKUP_IMAGES.get(niche_key, CATEGORY_MOCKUP_IMAGES["default"])
+    if "copilot" in raw_mockup_type or "ai" in raw_mockup_type:
+        archetype_badge_text = "AI Copilot Engine"
+        mod_1_label = "[01] CONTEXT & INTELLIGENCE"
+        mod_2_label = "[02] NEURAL PIPELINE"
+    elif "knowledge" in raw_mockup_type or "hub" in raw_mockup_type or "vault" in raw_mockup_type:
+        archetype_badge_text = "Knowledge Hub & Vault"
+        mod_1_label = "[01] CURATED VAULT"
+        mod_2_label = "[02] COMMUNITY WORKSPACE"
+    else:
+        archetype_badge_text = "SaaS Operating System"
+        mod_1_label = "[01] CORE ENGINE"
+        mod_2_label = "[02] CLIENT WORKFLOW"
 
     # Harmonious Creator Forge palette (No generic purple)
     raw_brand = concept.get("brandColor") or ""
@@ -239,20 +224,92 @@ def _render_single_concept_card(
         </div>
         '''
 
-    image_element = ""
-    if active_image:
-        image_element = f'''
-        <div style="margin:14px 0 10px 0;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;background:#0f172a;box-shadow:0 3px 10px rgba(15,23,42,0.06);">
-          <img src="{active_image}" alt="{html.escape(app_name)} Visual Mockup" width="556" style="width:100%;max-width:556px;height:auto;display:block;object-fit:cover;" />
-        </div>
-        '''
+    feat_1_title = html.escape(str(key_features[0])) if (key_features and len(key_features) > 0) else f"{html.escape(app_name)} Engine"
+    feat_1_desc = "Unified workflow automation engineered for high-retention execution."
+    feat_2_title = html.escape(str(key_features[1])) if (key_features and len(key_features) > 1) else "Interactive Interface"
+    feat_2_desc = f"Bespoke software interface tailored directly for {html.escape(customer_label or 'your community')}."
+
+    # Native Software Architecture Blueprint Specification (Pure Email-Safe HTML/CSS, Zero External Images)
+    architecture_canvas_html = f'''
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:16px 0 14px 0;background:#0f172a;border-radius:12px;border:1px solid #1e293b;overflow:hidden;box-shadow:0 3px 10px rgba(15,23,42,0.08);">
+      <tr>
+        <td style="padding:9px 14px;background:#1e293b;border-bottom:1px solid #334155;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td align="left">
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:800;color:#38bdf8;letter-spacing:0.8px;text-transform:uppercase;">
+                  ⚡ ARCHITECTURE SPECIFICATION &bull; {archetype_badge_text.upper()}
+                </span>
+              </td>
+              <td align="right">
+                <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;margin-right:4px;"></span>
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:700;color:#34d399;text-transform:uppercase;">
+                  MVP READY
+                </span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:12px 14px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="31%" style="vertical-align:top;background:#131d31;border:1px solid #27354f;border-radius:8px;padding:9px 10px;">
+                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;font-weight:800;color:#38bdf8;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">
+                  {mod_1_label}
+                </div>
+                <div style="font-size:11px;font-weight:700;color:#f8fafc;line-height:1.3;margin-bottom:4px;">
+                  {feat_1_title}
+                </div>
+                <div style="font-size:10px;color:#94a3b8;line-height:1.35;">
+                  {feat_1_desc}
+                </div>
+              </td>
+              <td width="3%">&nbsp;</td>
+              <td width="31%" style="vertical-align:top;background:#131d31;border:1px solid #27354f;border-radius:8px;padding:9px 10px;">
+                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;font-weight:800;color:#34d399;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">
+                  {mod_2_label}
+                </div>
+                <div style="font-size:11px;font-weight:700;color:#f8fafc;line-height:1.3;margin-bottom:4px;">
+                  {feat_2_title}
+                </div>
+                <div style="font-size:10px;color:#94a3b8;line-height:1.35;">
+                  {feat_2_desc}
+                </div>
+              </td>
+              <td width="3%">&nbsp;</td>
+              <td width="31%" style="vertical-align:top;background:#131d31;border:1px solid #27354f;border-radius:8px;padding:9px 10px;">
+                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;font-weight:800;color:#fbbf24;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">
+                  [03] REVENUE ENGINE
+                </div>
+                <div style="font-size:11px;font-weight:700;color:#f8fafc;line-height:1.3;margin-bottom:4px;">
+                  {html.escape(pricing)}
+                </div>
+                <div style="font-size:10px;color:#94a3b8;line-height:1.35;">
+                  50/50 Creator Split &bull; Automated Stripe Billing
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:6px 14px;background:#090d16;border-top:1px solid #1e293b;text-align:center;">
+          <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;">
+            100% ENGINEERED &amp; HOSTED BY CREATOR FORGE &bull; ZERO UPFRONT COST &bull; 50/50 CO-LAUNCH
+          </span>
+        </td>
+      </tr>
+    </table>
+    '''
 
     concept_badge = f"CONCEPT #{index + 1}" if total_concepts > 1 else "PROPOSED SOFTWARE PRODUCT"
 
     return f'''
     <!-- CONCEPT SHOWCASE CARD #{index + 1} (Light Clean Theme) -->
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:18px 0 24px 0;background:#f8fafc;border-radius:16px;border:1px solid #e2e8f0;border-top:3px solid {brand_color};overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-      <!-- Window Chrome Header -->
+      <!-- Window Chrome Header (No URL, Pure Software Spec Archetype) -->
       <tr>
         <td style="padding:12px 18px;background:#ffffff;border-bottom:1px solid #e2e8f0;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
@@ -261,8 +318,8 @@ def _render_single_concept_card(
                 <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:5px;"></span>
                 <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#f59e0b;margin-right:5px;"></span>
                 <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#16a34a;margin-right:10px;"></span>
-                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#64748b;background:#f1f5f9;padding:3px 8px;border-radius:6px;border:1px solid #e2e8f0;">
-                  https://{html.escape(app_url)}
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;font-weight:700;color:#334155;background:#f1f5f9;padding:3px 9px;border-radius:6px;border:1px solid #cbd5e1;letter-spacing:0.5px;text-transform:uppercase;">
+                  {archetype_badge_text.upper()}
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
@@ -301,7 +358,7 @@ def _render_single_concept_card(
             </tr>
           </table>
 
-          {image_element}
+          {architecture_canvas_html}
 
           <!-- Metric Highlights Grid -->
           <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:14px;">
@@ -336,7 +393,7 @@ def _render_single_concept_card(
                 </span>
               </td>
               <td align="right" style="vertical-align:middle;">
-                <a href="mailto:partnerships@creatorforge.com?subject=Interested in Concept {index + 1}: {html.escape(app_name)}&body=I will be interested in Concept {index + 1} ({html.escape(app_name)}). Let's build and launch this together!" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
+                <a href="mailto:{get_contact_reply_email()}?subject=Interested in Concept {index + 1}: {html.escape(app_name)}&body=I will be interested in Concept {index + 1} ({html.escape(app_name)}). Let's build and launch this together!" style="display:inline-block;padding:7px 15px;background:{brand_color};color:#ffffff;font-size:11px;font-weight:700;text-decoration:none;border-radius:7px;letter-spacing:0.3px;">
                   Select Concept #{index + 1} &rarr;
                 </a>
               </td>
@@ -344,7 +401,6 @@ def _render_single_concept_card(
           </table>
         </td>
       </tr>
-    </table>
     '''
 
 
@@ -385,11 +441,12 @@ def render_concept_showcase_html(
         ))
 
     # Dynamic 1-click response buttons for each concept
+    contact_reply_to = get_contact_reply_email()
     concept_buttons = []
     for idx, c in enumerate(concept_list):
         c_name = c.get("name") or f"Concept {idx + 1}"
         c_num = idx + 1
-        mailto_url = f"mailto:partnerships@creatorforge.com?subject=Interested in Concept {c_num}: {html.escape(c_name)}&body=I will be interested in Concept {c_num} ({html.escape(c_name)}). Let's build and launch this together!"
+        mailto_url = f"mailto:{contact_reply_to}?subject=Interested in Concept {c_num}: {html.escape(c_name)}&body=I will be interested in Concept {c_num} ({html.escape(c_name)}). Let's build and launch this together!"
         concept_buttons.append(
             f'<a href="{mailto_url}" style="display:inline-block;background:#0f172a;color:#ffffff;padding:9px 15px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;margin:4px 6px 4px 0;border:1px solid #1e293b;">'
             f'👉 &ldquo;I will be interested in Concept {c_num}&rdquo;'

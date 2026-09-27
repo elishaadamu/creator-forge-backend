@@ -73,11 +73,11 @@ class Settings:
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
     BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
-    FROM_EMAIL: str = os.getenv("FROM_EMAIL", "partnerships@creatorforge.com")
+    FROM_EMAIL: str = os.getenv("FROM_EMAIL", "creatorforgeweb@12019303.brevosend.com")
     FROM_NAME: str = os.getenv("FROM_NAME", "Creator Partnerships Team")
     GOOGLE_EMAIL: str = os.getenv("GOOGLE_EMAIL", "")
     GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
-    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "creatorforgeweb@gmail.com")
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "creatorforgeweb@12019303.brevosend.com")
     RECIPIENT_EMAIL: str = os.getenv("RECIPIENT_EMAIL", "adamsfair12@gmail.com")
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://creator-forge-frontend.vercel.app")
 

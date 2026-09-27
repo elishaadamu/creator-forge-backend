@@ -107,16 +107,45 @@ class EmailProvider:
         display_name = from_name or settings.FROM_NAME or "Creator Forge"
         sender_email = (
             from_email
-            or settings.GOOGLE_EMAIL
             or settings.FROM_EMAIL
-            or "partnerships@creatorforge.com"
+            or settings.ADMIN_EMAIL
+            or settings.GOOGLE_EMAIL
+            or "creatorforgeweb@12019303.brevosend.com"
         ).strip()
 
         errors = []
 
+        # ── 0. Brevo HTTPS API Direct (Port 443 — Verified sending domain) ─────
+        # If sender_email matches Brevo verified domain or BREVO_API_KEY is configured,
+        # prioritize Brevo HTTPS API with matching replyTo.
+        if settings.BREVO_API_KEY and ("brevosend.com" in sender_email or not (settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD)):
+            try:
+                brevo_payload = {
+                    "sender": {"name": display_name, "email": sender_email},
+                    "to": [{"email": to_email}],
+                    "replyTo": {"email": sender_email, "name": display_name},
+                    "subject": subject,
+                    "htmlContent": body_html,
+                    "textContent": body_text,
+                }
+                req = urllib.request.Request(
+                    "https://api.brevo.com/v3/smtp/email",
+                    data=json.dumps(brevo_payload).encode("utf-8"),
+                    headers={
+                        "api-key": settings.BREVO_API_KEY.strip(),
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    if resp.status in (200, 201):
+                        logger.info(f"[EmailProvider] Sent email to {to_email} via Brevo HTTPS API (sender: {sender_email})")
+                        return {"message_id": str(uuid.uuid4()), "status": "sent", "provider": "brevo"}
+            except Exception as e_brevo:
+                errors.append(f"Brevo HTTPS (443): {e_brevo}")
+                logger.warning(f"[EmailProvider] Brevo API error: {e_brevo}, trying fallback providers...")
+
         # ── 1. Google SMTP Direct (Port 465 SSL & Port 587 STARTTLS) ──────────
-        # Priority #1: When sending with Google credentials, native Google SMTP signs with Google's DKIM
-        # and originates from Google MX IPs, ensuring 100% SPF/DKIM/DMARC pass and inbox delivery (no spam quarantine).
         if settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD:
             smtp_user = settings.GOOGLE_EMAIL.strip()
             smtp_password = settings.GOOGLE_APP_PASSWORD.replace(" ", "").strip()
@@ -124,6 +153,7 @@ class EmailProvider:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
             msg["From"] = f"{display_name} <{smtp_user}>"
+            msg["Reply-To"] = sender_email
             msg["To"] = to_email
             msg.attach(MIMEText(body_text, "plain"))
             msg.attach(MIMEText(body_html, "html"))
