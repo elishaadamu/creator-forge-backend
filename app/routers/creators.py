@@ -1408,6 +1408,10 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
             (project_map.get("by_email", {}).get(clean_email) if clean_email else None)
         )
 
+    project_id = None
+    if matched_proj:
+        project_id = matched_proj.get("id") if isinstance(matched_proj, dict) else getattr(matched_proj, "id", None)
+
     effective_status = "launched" if matched_proj else c.status
     recent_posts = []
     if getattr(c, "content_samples", None) and len(c.content_samples) > 0:
