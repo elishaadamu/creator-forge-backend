@@ -134,7 +134,8 @@ def _render_single_concept_card(
     concept: Dict[str, Any],
     index: int = 0,
     total_concepts: int = 1,
-    concept_image_url: Optional[str] = None
+    concept_image_url: Optional[str] = None,
+    tracking_token: str = ""
 ) -> str:
     """Renders an individual concept showcase card with clean, modern light styling and Creator Forge palette."""
     app_name = concept.get("name") or concept.get("title") or f"Software Concept #{index + 1}"
@@ -306,8 +307,9 @@ def _render_single_concept_card(
     '''
 
     concept_badge = f"CONCEPT #{index + 1}" if total_concepts > 1 else "PROPOSED SOFTWARE PRODUCT"
-    select_action_subject = urllib.parse.quote(f"Interested in Concept {index + 1}: {app_name}")
-    select_action_body = urllib.parse.quote(f"I will be interested in Concept {index + 1} ({app_name}). Let's build and launch this together!")
+    token_suffix = f" {tracking_token}" if tracking_token else ""
+    select_action_subject = urllib.parse.quote(f"Interested in Concept {index + 1}: {app_name}{token_suffix}")
+    select_action_body = urllib.parse.quote(f"I will be interested in Concept {index + 1} ({app_name}). Let's build and launch this together!{token_suffix}")
 
     return f'''
     <!-- CONCEPT SHOWCASE CARD #{index + 1} (Light Clean Theme) -->
@@ -411,7 +413,8 @@ def _render_single_concept_card(
 def render_concept_showcase_html(
     concepts: Optional[List[Dict[str, Any]]] = None,
     concept_image_url: Optional[str] = None,
-    creator_name: str = ""
+    creator_name: str = "",
+    tracking_token: str = ""
 ) -> str:
     """
     Renders an eye-catching, responsive concept showcase for Step 5 & Step 6 emails.
@@ -442,17 +445,19 @@ def render_concept_showcase_html(
             concept=c,
             index=idx,
             total_concepts=total_count,
-            concept_image_url=concept_image_url
+            concept_image_url=concept_image_url,
+            tracking_token=tracking_token
         ))
 
     # Dynamic 1-click response buttons for each concept
     contact_reply_to = get_contact_reply_email()
     concept_buttons = []
+    token_suffix = f" {tracking_token}" if tracking_token else ""
     for idx, c in enumerate(concept_list):
         c_name = c.get("name") or f"Concept {idx + 1}"
         c_num = idx + 1
-        subj_encoded = urllib.parse.quote(f"Interested in Concept {c_num}: {c_name}")
-        body_encoded = urllib.parse.quote(f"I will be interested in Concept {c_num} ({c_name}). Let's build and launch this together!")
+        subj_encoded = urllib.parse.quote(f"Interested in Concept {c_num}: {c_name}{token_suffix}")
+        body_encoded = urllib.parse.quote(f"I will be interested in Concept {c_num} ({c_name}). Let's build and launch this together!{token_suffix}")
         mailto_url = f"mailto:{contact_reply_to}?subject={subj_encoded}&body={body_encoded}"
         concept_buttons.append(
             f'<a href="{mailto_url}" style="display:inline-block;background:#0f172a;color:#ffffff;padding:9px 15px;border-radius:8px;font-size:12px;font-weight:700;text-decoration:none;margin:4px 6px 4px 0;border:1px solid #1e293b;">'
@@ -746,7 +751,8 @@ def format_luxury_html_email(
     concept_card_html = render_concept_showcase_html(
         concepts=active_concepts,
         concept_image_url=concept_image_url,
-        creator_name=creator_name
+        creator_name=creator_name,
+        tracking_token=active_token
     )
 
     signature_html = _render_executive_signature_html(creator_name, active_token)

@@ -5,7 +5,7 @@ import imaplib
 import logging
 import re
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parseaddr
 from typing import Optional, List
 
@@ -131,7 +131,7 @@ def _parse_email_message(msg):
     cleaned_body = _clean_email_body(raw_body)
     return subject, from_email, cleaned_body, raw_body
 
-def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = "", raw_body: str = "", all_creators: Optional[List[Creator]] = None) -> Optional[str]:
+def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = "", raw_body: str = "", all_creators: Optional[List[Creator]] = None, msg_datetime: Optional[datetime] = None) -> Optional[str]:
     """Attempt to find the thread ID for a creator using tracking tokens, handle, subject, or email."""
     if not from_email:
         return None
@@ -161,6 +161,14 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         if c:
             creator_id = c.id
 
+    # CRITICAL TOKEN GUARD:
+    # If the email explicitly contained a tracking token ([#handle] or [CF-CID:...]),
+    # but that token did NOT match any active creator in the database:
+    # DO NOT fall through to from_email matching! That email was sent for a different or deleted creator.
+    if not creator_id and (cid_match or handle_match):
+        logger.info(f"[Inbox Poller] Explicit token ({cand_handle or (cid_match.group(0) if cid_match else '')}) did not match any active creator in DB. Rejecting attribution fallback.")
+        return None
+
     if all_creators is None:
         all_creators = db.query(Creator).all()
 
@@ -172,8 +180,8 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         return None
 
     # 3. Match against Creator display_name or handle in subject line
+    subj_lower = (subject or "").lower()
     if not creator_id and subject:
-        subj_lower = subject.lower()
         sorted_creators = sorted(all_creators, key=lambda x: len(x.display_name or ""), reverse=True)
         for c in sorted_creators:
             c_name = (c.display_name or "").lower().strip()
@@ -193,14 +201,23 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         if len(contacted_creators) == 1:
             creator_id = contacted_creators[0].id
         elif len(contacted_creators) > 1:
-            recent_thread = db.query(Thread).filter(
-                Thread.creator_id.in_([c.id for c in contacted_creators])
-            ).order_by(Thread.last_activity.desc()).first()
-            if recent_thread:
-                return recent_thread.id
-            creator_id = contacted_creators[0].id
+            # If multiple creators share this email (e.g. test addresses), disambiguate by subject line
+            matching_by_subj = [
+                c for c in contacted_creators
+                if (c.display_name and len(c.display_name) >= 3 and c.display_name.lower() in subj_lower) or
+                   (c.handle and len(c.handle) >= 3 and c.handle.lower().lstrip("@") in subj_lower)
+            ]
+            if len(matching_by_subj) == 1:
+                creator_id = matching_by_subj[0].id
+            else:
+                recent_thread = db.query(Thread).filter(
+                    Thread.creator_id.in_([c.id for c in contacted_creators])
+                ).order_by(Thread.last_activity.desc()).first()
+                if recent_thread:
+                    return recent_thread.id
+                creator_id = contacted_creators[0].id
 
-    # 6. Match against Contacts table
+    # 5. Match against Contacts table
     if not creator_id and not is_admin_email:
         contact = db.query(Contact).filter(Contact.value.ilike(f"%{from_email_clean}%"), Contact.contact_type == "email").first()
         if contact and contact.creator_id:
@@ -212,33 +229,35 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
     if not creator_id:
         return None
 
-    # STRICT UNCONTACTED GUARD:
-    # A creator who was NEVER contacted (no sent OutreachMessage and not in contacted/pitched status)
-    # CANNOT have an outreach reply!
+    # STRICT UNCONTACTED & TIMING GUARD:
+    # A creator who was NEVER contacted (no sent OutreachMessage) cannot have an outreach reply!
     from app.models.outreach import OutreachMessage
     matched_creator = db.get(Creator, creator_id)
     if not matched_creator:
         return None
 
-    has_sent_outreach = db.query(OutreachMessage).filter(
-        OutreachMessage.creator_id == creator_id
-    ).first()
+    sent_outreach = db.query(OutreachMessage).filter(
+        OutreachMessage.creator_id == creator_id,
+        OutreachMessage.status == "sent"
+    ).order_by(OutreachMessage.sent_at.desc()).first()
 
-    existing_thread = db.query(Thread).filter(Thread.creator_id == creator_id).first()
-
-    is_contacted_status = matched_creator.status in (
-        "contacted", "in_review", "approved", "pitched", "ready_for_launch", "partnered", "replied"
-    )
-
-    if not has_sent_outreach and not is_contacted_status and not existing_thread and not (cid_match or handle_match):
-        logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has not received outreach yet. Ignoring incoming email from {from_email_clean}.")
-        return None
+    # If matching purely by sender email (without an explicit tracking token in the email):
+    if not (cid_match or handle_match):
+        if not sent_outreach:
+            logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has no sent outreach message. Ignoring unaddressed email from {from_email_clean}.")
+            return None
+        # Timing guard: The email received in Gmail MUST be sent after or around the time outreach was sent
+        if msg_datetime and sent_outreach.sent_at:
+            msg_dt_naive = msg_datetime.replace(tzinfo=None) if msg_datetime.tzinfo else msg_datetime
+            sent_at_naive = sent_outreach.sent_at.replace(tzinfo=None) if sent_outreach.sent_at.tzinfo else sent_outreach.sent_at
+            if msg_dt_naive < (sent_at_naive - timedelta(seconds=60)):
+                logger.info(f"[Inbox Poller] Email from {from_email_clean} dated {msg_dt_naive} was sent before outreach was sent ({sent_at_naive}). Ignoring stale email.")
+                return None
 
     # Find or create latest thread for this specific creator
     thread = db.query(Thread).filter(Thread.creator_id == creator_id).order_by(Thread.created_at.desc()).first()
     if not thread:
         thread = Thread(creator_id=creator_id, status="open", created_at=datetime.utcnow(), last_activity=datetime.utcnow())
-
         db.add(thread)
         db.commit()
         db.refresh(thread)
@@ -309,7 +328,15 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
                         if (admin_email and from_lower == admin_email) or (from_email and from_lower == from_email):
                             continue
 
-                        candidate_messages.append((from_email_sender, subject, body, raw_body))
+                        msg_date_hdr = msg.get("Date")
+                        msg_datetime = None
+                        if msg_date_hdr:
+                            try:
+                                msg_datetime = email.utils.parsedate_to_datetime(msg_date_hdr)
+                            except Exception:
+                                msg_datetime = None
+
+                        candidate_messages.append((from_email_sender, subject, body, raw_body, msg_datetime))
                     except Exception as item_err:
                         logger.debug(f"IMAP item parse error: {item_err}")
                         continue
@@ -319,8 +346,8 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
             db = SessionLocal()
             try:
                 all_creators = db.query(Creator).all()
-                for from_email, subject, body, raw_body in candidate_messages:
-                    thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body, all_creators=all_creators)
+                for from_email, subject, body, raw_body, msg_datetime in candidate_messages:
+                    thread_id = _find_thread_for_sender(db, from_email, subject, body, raw_body, all_creators=all_creators, msg_datetime=msg_datetime)
                     if thread_id:
                         # Check if this exact reply was already recorded for this creator across ANY thread
                         target_thread = db.get(Thread, thread_id)
@@ -346,6 +373,7 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
                                     from_address=from_email,
                                     subject=subject,
                                     body=body,
+                                    received_at=msg_datetime or datetime.utcnow(),
                                     actor="imap_poller"
                                 )
                                 new_replies_count += 1
