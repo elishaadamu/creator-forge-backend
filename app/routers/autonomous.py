@@ -1,6 +1,6 @@
 import logging
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -925,7 +925,7 @@ class DecisionEmailGenerateSchema(BaseModel):
     creator_id: Optional[str] = None
     creator_name: Optional[str] = "Creator"
     creator_handle: Optional[str] = None
-    niche: Optional[str] = "Creator Economy"
+    niche: Optional[Union[str, List[str]]] = "Creator Economy"
     platform: Optional[str] = "YouTube"
     decision: str = "approved"  # "approved" or "rejected"
     custom_notes: Optional[str] = None
@@ -938,6 +938,8 @@ def generate_decision_email(payload: DecisionEmailGenerateSchema):
     first_name = c_name.split()[0] if c_name else "there"
     c_handle = (payload.creator_handle or "").lstrip("@").strip()
     niche = payload.niche or "your space"
+    if isinstance(niche, list):
+        niche = ", ".join(niche) if niche else "your space"
     platform = payload.platform or "social"
     decision = (payload.decision or "approved").lower().strip()
     is_approved = decision in ("approved", "accepted")
