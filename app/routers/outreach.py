@@ -394,6 +394,8 @@ class DirectEmailRequest(BaseModel):
     creator_id: Optional[str] = None
     concept_image_url: Optional[str] = None
     concepts: Optional[List[dict]] = None
+    is_rejection: Optional[bool] = None
+    include_concepts: Optional[bool] = None
 
 
 
@@ -478,19 +480,42 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
             pass
         db.commit()
 
+    # Check if this email is a rejection or opt-out notice
+    all_subject_body = f"{subject_to_send} {body_text}".lower()
+    is_rejection_email = (
+        payload.is_rejection is True
+        or payload.include_concepts is False
+        or (payload.concepts is not None and len(payload.concepts) == 0)
+        or "reject" in all_subject_body
+        or "partnership update" in all_subject_body
+        or "regarding creator forge partnership" in all_subject_body
+        or "will not be proceeding" in all_subject_body
+        or "won't be able to move forward" in all_subject_body
+        or "prioritizing specific software verticals" in all_subject_body
+        or (creator and getattr(creator, "status", None) == "rejected")
+    )
+
     # Format beautiful luxury HTML template
     resolved_concepts = payload.concepts
     resolved_concept_image = payload.concept_image_url
-    if not resolved_concepts and creator:
-        notes_str = getattr(creator, "discovery_notes", None) or getattr(creator, "niche_data", None)
-        if notes_str:
-            try:
-                nd = json.loads(notes_str) if isinstance(notes_str, str) else notes_str
-                resolved_concepts = nd.get("product_concepts") or nd.get("concepts")
-            except Exception:
-                pass
 
-    if not resolved_concept_image and resolved_concepts and len(resolved_concepts) > 0:
+    if is_rejection_email:
+        # Strictly NEVER attach concept lists to a rejection notice
+        resolved_concepts = None
+        resolved_concept_image = None
+    elif not resolved_concepts and creator:
+        # Only pull concepts from notes if explicitly requested or if body/subject discusses concepts
+        is_pitch_outreach = bool(re.search(r"concept 1|concept 2|concept 3|blueprint|opportunity deck|software concepts|pitch", all_subject_body))
+        if payload.include_concepts is True or is_pitch_outreach:
+            notes_str = getattr(creator, "discovery_notes", None) or getattr(creator, "niche_data", None)
+            if notes_str:
+                try:
+                    nd = json.loads(notes_str) if isinstance(notes_str, str) else notes_str
+                    resolved_concepts = nd.get("product_concepts") or nd.get("concepts")
+                except Exception:
+                    pass
+
+    if not is_rejection_email and not resolved_concept_image and resolved_concepts and len(resolved_concepts) > 0:
         first_c = resolved_concepts[0]
         if isinstance(first_c, dict):
             mockup = first_c.get("mockup") if isinstance(first_c.get("mockup"), dict) else {}
@@ -656,25 +681,43 @@ def send_thread_reply(thread_id: str, payload: SendReplyRequest, actor: str = "o
     # Resolve concept mockup preview for replies
     reply_concept_image = payload.concept_image_url
     reply_concepts = payload.concepts
-    if not reply_concepts and thread.creator:
-        creator_notes = getattr(thread.creator, "discovery_notes", None) or getattr(thread.creator, "niche_data", None)
-        if creator_notes:
-            try:
-                nd = json.loads(creator_notes) if isinstance(creator_notes, str) else creator_notes
-                reply_concepts = nd.get("product_concepts") or nd.get("concepts")
-                if not reply_concept_image and reply_concepts:
-                    first_c = reply_concepts[0]
-                    mockup = first_c.get("mockup") if isinstance(first_c.get("mockup"), dict) else {}
-                    reply_concept_image = (
-                        first_c.get("customImageUrl")
-                        or first_c.get("imageUrl")
-                        or first_c.get("image_url")
-                        or first_c.get("mockup_url")
-                        or mockup.get("imageUrl")
-                        or mockup.get("previewUrl")
-                    )
-            except Exception:
-                pass
+
+    all_reply_text = f"{subject} {payload.body}".lower()
+    is_rejection_reply = (
+        (payload.concepts is not None and len(payload.concepts) == 0)
+        or "reject" in all_reply_text
+        or "partnership update" in all_reply_text
+        or "regarding creator forge partnership" in all_reply_text
+        or "will not be proceeding" in all_reply_text
+        or "won't be able to move forward" in all_reply_text
+        or "prioritizing specific software verticals" in all_reply_text
+        or (thread.creator and getattr(thread.creator, "status", None) == "rejected")
+    )
+
+    if is_rejection_reply:
+        reply_concepts = None
+        reply_concept_image = None
+    elif not reply_concepts and thread.creator:
+        is_pitch_reply = bool(re.search(r"concept 1|concept 2|concept 3|blueprint|opportunity deck|software concepts|pitch", all_reply_text))
+        if is_pitch_reply:
+            creator_notes = getattr(thread.creator, "discovery_notes", None) or getattr(thread.creator, "niche_data", None)
+            if creator_notes:
+                try:
+                    nd = json.loads(creator_notes) if isinstance(creator_notes, str) else creator_notes
+                    reply_concepts = nd.get("product_concepts") or nd.get("concepts")
+                    if not reply_concept_image and reply_concepts:
+                        first_c = reply_concepts[0]
+                        mockup = first_c.get("mockup") if isinstance(first_c.get("mockup"), dict) else {}
+                        reply_concept_image = (
+                            first_c.get("customImageUrl")
+                            or first_c.get("imageUrl")
+                            or first_c.get("image_url")
+                            or first_c.get("mockup_url")
+                            or mockup.get("imageUrl")
+                            or mockup.get("previewUrl")
+                        )
+                except Exception:
+                    pass
 
     # Send the email with luxury responsive HTML formatting
     c_name = thread.creator.display_name if thread.creator else ""
@@ -762,9 +805,21 @@ def _reply_dict(r: Reply) -> dict:
     admin_emails = {
         (settings.GOOGLE_EMAIL or "").lower().strip(),
         (settings.FROM_EMAIL or "").lower().strip(),
+        "creatorforgeweb@gmail.com",
+        "creatorforgestudio@gmail.com",
+        "partnerships@creatorforge.com",
+        "noreply@creatorforge.com",
+        "hello@creatorforge.com",
     }
     admin_emails.discard("")
-    is_outgoing = (r.from_address or "").lower().strip() in admin_emails or r.ai_summary == "Outgoing reply from you"
+    from_addr = (r.from_address or "").lower().strip()
+    is_outgoing = (
+        from_addr in admin_emails
+        or r.ai_summary == "Outgoing reply from you"
+        or "creatorforge" in from_addr
+        or "brevosend" in from_addr
+        or from_addr.startswith("admin@")
+    )
     return {
         "id": r.id, "thread_id": r.thread_id, "from_address": r.from_address,
         "subject": r.subject, "body": r.body,

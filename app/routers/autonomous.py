@@ -1119,7 +1119,11 @@ Generate a comprehensive JSON object with:
    - "customer": Primary target user persona
    - "keyFeatures": Array of 3-4 distinct features
    - "audienceEvidence": Why this audience will pay
-   - "pricing": e.g. "$29/mo Starter • $79/mo Pro"
+   - "pricing": MUST be DISTINCT and UNIQUE across all 3 concepts:
+     * Concept 1 (saas_os): Lower barrier recurring tool pricing, e.g. "$19/mo Starter • $49/mo Pro"
+     * Concept 2 (ai_copilot): Mid-tier utility AI pricing, e.g. "$29/mo Pro • $79/mo Copilot Tier"
+     * Concept 3 (knowledge_hub): High-ticket membership pricing, e.g. "$49/mo Membership • $149 One-time Access" or "$69/mo VIP Mastermind"
+     CRITICAL: DO NOT repeat the same pricing string or identical prices across the 3 concepts!
    - "competition": Competitor landscape & unfair advantage
    - "mvpDifficulty": "Low (2 weeks)" or "Medium (3 weeks)"
    - "opportunityScore": Integer 90-98
@@ -1140,14 +1144,28 @@ Return valid JSON only matching the structure above."""
 
     import json, re
     archetypes = ["saas_os", "ai_copilot", "knowledge_hub"]
+    default_tiered_pricings = [
+        "$19/mo Starter • $49/mo Pro",
+        "$29/mo Pro • $79/mo Studio Copilot",
+        "$49/mo Membership • $149/mo VIP Mastermind",
+    ]
+
+    def _sanitize_concepts_data(c_list):
+        seen_pricings = set()
+        for i, concept in enumerate(c_list):
+            if i < len(archetypes):
+                concept["mockupType"] = archetypes[i]
+            p = (concept.get("pricing") or "").strip()
+            if not p or p in seen_pricings:
+                concept["pricing"] = default_tiered_pricings[i % len(default_tiered_pricings)]
+            seen_pricings.add(concept.get("pricing"))
+
     if raw:
         try:
             data = json.loads(raw)
             if "product_concepts" in data and len(data["product_concepts"]) > 0:
                 data["is_ai_generated"] = True
-                for i, concept in enumerate(data["product_concepts"]):
-                    if i < len(archetypes):
-                        concept["mockupType"] = archetypes[i]
+                _sanitize_concepts_data(data["product_concepts"])
                 if payload.creator_id:
                     try:
                         with SessionLocal() as db:
@@ -1169,9 +1187,7 @@ Return valid JSON only matching the structure above."""
                     data = json.loads(m.group())
                     if "product_concepts" in data and len(data["product_concepts"]) > 0:
                         data["is_ai_generated"] = True
-                        for i, concept in enumerate(data["product_concepts"]):
-                            if i < len(archetypes):
-                                concept["mockupType"] = archetypes[i]
+                        _sanitize_concepts_data(data["product_concepts"])
                         if payload.creator_id:
                             try:
                                 with SessionLocal() as db:
