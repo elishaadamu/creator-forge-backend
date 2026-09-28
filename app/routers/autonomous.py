@@ -1038,7 +1038,7 @@ class AudienceAndConceptsGenerateSchema(BaseModel):
     creator_id: Optional[str] = None
     creator_name: Optional[str] = "Creator"
     creator_handle: Optional[str] = None
-    niche: Optional[str] = "Creator Economy"
+    niche: Optional[Union[str, List[str]]] = "Creator Economy"
     platform: Optional[str] = "YouTube"
     followers: Optional[str] = "250K"
     bio: Optional[str] = None
@@ -1054,6 +1054,8 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
     first_name = c_name.split()[0] if c_name else "Partner"
     c_handle = (payload.creator_handle or "").lstrip("@").strip()
     niche = payload.niche or "Tech & Creator Tools"
+    if isinstance(niche, list):
+        niche = ", ".join(niche) if niche else "Tech & Creator Tools"
     platform = payload.platform or "YouTube"
     followers = payload.followers or "250K"
     bio = payload.bio or ""
