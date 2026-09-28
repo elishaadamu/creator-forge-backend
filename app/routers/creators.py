@@ -407,6 +407,28 @@ def get_youtube_videos_endpoint(
     }
 
 
+@router.get("/youtube-comments")
+def get_youtube_comments_endpoint(
+    video_id: Optional[str] = None,
+    url: Optional[str] = None,
+    limit: int = 10
+):
+    """
+    Fetch real public comments directly from YouTube for a specific video.
+    """
+    target = video_id or url
+    if not target:
+        raise HTTPException(400, "video_id or url is required")
+    from app.services.scraper import fetch_youtube_video_comments
+    comments = fetch_youtube_video_comments(target, limit=limit)
+    return {
+        "success": True,
+        "video_id": target,
+        "count": len(comments),
+        "comments": comments
+    }
+
+
 @router.get("/{creator_id}")
 def get_creator(creator_id: str, db: Session = Depends(get_db)):
     c = db.get(Creator, creator_id)

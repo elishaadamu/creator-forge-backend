@@ -775,7 +775,104 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
         except Exception as tube_err:
             logger.debug(f"[YouTube Innertube Videos] Error: {tube_err}")
 
-    return videos
+    return videos[:limit]
+
+
+def fetch_youtube_video_comments(video_id_or_url: str, limit: int = 10) -> list[dict]:
+    """
+    Fetch real public audience comments for a YouTube video using Innertube next endpoint.
+    Returns list of real comment objects with author handle, text, upvotes, and timestamp.
+    """
+    if not video_id_or_url:
+        return []
+    vid = str(video_id_or_url).strip()
+    if 'v=' in vid:
+        vid = vid.split('v=')[-1].split('&')[0].split('#')[0].strip()
+    elif 'youtu.be/' in vid:
+        vid = vid.split('youtu.be/')[-1].split('?')[0].split('#')[0].strip()
+    elif '/watch/' in vid:
+        vid = vid.split('/watch/')[-1].split('?')[0].strip()
+
+    if not vid:
+        return []
+
+    url = 'https://www.youtube.com/youtubei/v1/next?prettyPrint=false'
+    payload = {
+        'context': {'client': {'clientName': 'WEB', 'clientVersion': '2.20240101.01.00'}},
+        'videoId': vid
+    }
+    
+    comments = []
+    seen_texts = set()
+    try:
+        r1 = httpx.post(url, headers=HEADERS, json=payload, timeout=8)
+        if r1.status_code == 200:
+            d1 = r1.json()
+            # 1. Microformat check for featured comment
+            try:
+                mf_comments = d1.get('microformat', {}).get('microformatDataRenderer', {}).get('videoDetails', {}).get('comments', [])
+                for mc in mf_comments:
+                    author_name = mc.get('author', {}).get('name') or mc.get('author', {}).get('alternateName') or ''
+                    text = (mc.get('text') or '').strip()
+                    upvotes = mc.get('upvoteCount') or 0
+                    if text and text not in seen_texts:
+                        seen_texts.add(text)
+                        clean_author = author_name if author_name.startswith('@') else f'@{author_name}' if author_name else '@viewer'
+                        comments.append({
+                            'id': f'mf_{len(comments)}',
+                            'author': clean_author,
+                            'text': text,
+                            'likes': str(upvotes),
+                            'published': 'Recent'
+                        })
+            except Exception:
+                pass
+
+            # 2. Extract comment-item-section continuation token
+            token = None
+            try:
+                sections = d1.get('contents', {}).get('twoColumnWatchNextResults', {}).get('results', {}).get('results', {}).get('contents', [])
+                for sec in sections:
+                    if 'itemSectionRenderer' in sec and sec['itemSectionRenderer'].get('sectionIdentifier') == 'comment-item-section':
+                        for c in sec['itemSectionRenderer'].get('contents', []):
+                            if 'continuationItemRenderer' in c:
+                                token = c['continuationItemRenderer']['continuationEndpoint']['continuationCommand']['token']
+                                break
+            except Exception:
+                pass
+
+            if token:
+                payload2 = {
+                    'context': {'client': {'clientName': 'WEB', 'clientVersion': '2.20240101.01.00'}},
+                    'continuation': token
+                }
+                r2 = httpx.post(url, headers=HEADERS, json=payload2, timeout=8)
+                if r2.status_code == 200:
+                    d2 = r2.json()
+                    mutations = d2.get('frameworkUpdates', {}).get('entityBatchUpdate', {}).get('mutations', [])
+                    for m in mutations:
+                        p = m.get('payload', {}).get('commentEntityPayload', {})
+                        if p:
+                            author = p.get('author', {}).get('displayName') or p.get('author', {}).get('channelTitle') or ''
+                            content = (p.get('properties', {}).get('content', {}).get('content') or '').strip()
+                            likes_raw = p.get('toolbar', {}).get('likeCountNotliked') or '0'
+                            time_text = p.get('properties', {}).get('publishedTime') or ''
+                            clean_author = author if author.startswith('@') else f'@{author}' if author else '@viewer'
+                            if content and content not in seen_texts:
+                                seen_texts.add(content)
+                                comments.append({
+                                    'id': f'comm_{len(comments)}',
+                                    'author': clean_author,
+                                    'text': content,
+                                    'likes': likes_raw.strip() if str(likes_raw).strip() else '0',
+                                    'published': time_text
+                                })
+                                if len(comments) >= limit:
+                                    break
+    except Exception as e:
+        logger.debug(f"[YouTube Comments Fetch] Error for video {vid}: {e}")
+
+    return comments[:limit]
 
 
 def _clean_url(url: str) -> str:
