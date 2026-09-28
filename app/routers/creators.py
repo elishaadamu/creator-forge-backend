@@ -382,6 +382,31 @@ def list_creators(
     return [_creator_dict(c, project_map=project_map) for c in creators]
 
 
+@router.get("/youtube-videos")
+def get_youtube_videos_endpoint(
+    handle: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch verified YouTube video uploads directly from YouTube channel RSS/Innertube.
+    """
+    target = handle or channel_id
+    if not target:
+        raise HTTPException(400, "handle or channel_id is required")
+    from app.services.scraper import fetch_youtube_channel_videos
+    videos = fetch_youtube_channel_videos(target, limit=limit)
+    return {
+        "success": True,
+        "target": target,
+        "count": len(videos),
+        "videos": videos,
+        "recent_posts": videos,
+        "recentPosts": videos,
+    }
+
+
 @router.get("/{creator_id}")
 def get_creator(creator_id: str, db: Session = Depends(get_db)):
     c = db.get(Creator, creator_id)
@@ -395,6 +420,91 @@ def get_creator(creator_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Creator not found")
     project_map = _build_project_map(db)
     return _creator_dict(c, project_map=project_map)
+
+
+@router.get("/{creator_id}/videos")
+def get_creator_videos_endpoint(
+    creator_id: str,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Get real video uploads for a creator. Checks cached content samples, falls back to live YouTube fetch.
+    """
+    c = db.get(Creator, creator_id)
+    if not c:
+        clean = creator_id.lstrip("@").strip().lower()
+        c = db.query(Creator).filter(
+            (Creator.id == creator_id) |
+            (Creator.handle.ilike(f"%{clean}%")) |
+            (Creator.display_name.ilike(f"%{clean}%"))
+        ).first()
+
+    if not c:
+        from app.services.scraper import fetch_youtube_channel_videos
+        videos = fetch_youtube_channel_videos(creator_id, limit=limit)
+        return {
+            "success": True,
+            "creator_id": creator_id,
+            "videos": videos,
+            "recent_posts": videos,
+            "recentPosts": videos
+        }
+
+    # 1. If content_samples exist in DB, use them
+    if getattr(c, "content_samples", None) and len(c.content_samples) > 0:
+        vids = []
+        for s in c.content_samples[:limit]:
+            vid_id = s.content_url.split("v=")[-1] if "v=" in (s.content_url or "") else s.id
+            vids.append({
+                "id": s.id,
+                "videoId": vid_id,
+                "title": s.caption or "Channel Upload",
+                "caption": s.caption or "",
+                "url": s.content_url or f"https://www.youtube.com/watch?v={vid_id}",
+                "views": s.views or 0,
+                "likes": s.likes or 0,
+                "comments": s.comments or 0,
+            })
+        if len(vids) > 0:
+            return {"success": True, "creator_id": c.id, "videos": vids, "recent_posts": vids, "recentPosts": vids}
+
+    # 2. Otherwise fetch live from YouTube
+    from app.services.scraper import fetch_youtube_channel_videos
+    handle = c.handle or c.display_name or creator_id
+    videos = fetch_youtube_channel_videos(handle, limit=limit)
+
+    # Cache into DB content_samples if found
+    if videos and db:
+        try:
+            from app.models.creator import ContentSample
+            for v in videos[:6]:
+                raw_views = v.get("views", 0)
+                try:
+                    num_views = int(str(raw_views).replace(",", "").replace(" views", "").replace("K", "000").replace("M", "000000").split(".")[0] or 0)
+                except Exception:
+                    num_views = 0
+                sample = ContentSample(
+                    creator_id=c.id,
+                    platform=c.platform or "youtube",
+                    content_url=v.get("url", ""),
+                    content_type="video",
+                    caption=v.get("title", ""),
+                    views=num_views
+                )
+                db.add(sample)
+            db.commit()
+        except Exception as cache_err:
+            logger.debug(f"[Videos Endpoint] Cache error: {cache_err}")
+            db.rollback()
+
+    return {
+        "success": True,
+        "creator_id": c.id,
+        "videos": videos,
+        "recent_posts": videos,
+        "recentPosts": videos
+    }
 
 
 class CreatorUpdate(BaseModel):
@@ -1277,7 +1387,27 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
         )
 
     effective_status = "launched" if matched_proj else c.status
-    project_id = matched_proj.id if matched_proj else getattr(c, "project_id", None)
+    recent_posts = []
+    if getattr(c, "content_samples", None) and len(c.content_samples) > 0:
+        for s in c.content_samples[:6]:
+            vid_id = s.content_url.split("v=")[-1] if "v=" in (s.content_url or "") else s.id
+            recent_posts.append({
+                "id": s.id,
+                "videoId": vid_id,
+                "title": s.caption or "Channel Upload",
+                "caption": s.caption or "",
+                "url": s.content_url or f"https://www.youtube.com/watch?v={vid_id}",
+                "views": s.views or 0,
+                "likes": s.likes or 0,
+                "comments": s.comments or 0,
+            })
+    elif c.discovery_notes and c.discovery_notes.startswith("{"):
+        try:
+            import json
+            parsed = json.loads(c.discovery_notes)
+            recent_posts = parsed.get("recent_posts") or parsed.get("recentPosts") or parsed.get("videos") or []
+        except Exception:
+            pass
 
     return {
         "id": c.id, "handle": c.handle, "platform": c.platform,
@@ -1300,6 +1430,9 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
         "selectedConceptId": selected_concept_id,
         "selected_concept": selected_concept,
         "selectedConcept": selected_concept,
+        "recent_posts": recent_posts,
+        "recentPosts": recent_posts,
+        "videos": recent_posts,
         "discovery_source": c.discovery_source,
         "engagement_score": c.engagement_score,
         "created_at": c.created_at.isoformat() if c.created_at else None,

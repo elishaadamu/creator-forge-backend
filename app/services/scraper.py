@@ -608,13 +608,174 @@ def scrape_youtube(handle: str) -> dict:
         if any(k in bio_lower for k in keywords) and tag not in result["niche"]:
             result["niche"].append(tag)
 
-    # Extract email from full channel description if not already found
-    if not result.get("email_public") and result.get("bio"):
-        contacts = _extract_contacts_from_text(result["bio"])
-        if contacts["emails"]:
-            result["email_public"] = contacts["emails"][0]
+    # Step 2: Fetch real video uploads via YouTube RSS feed & Innertube
+    cid = result.get("channel_id") or ""
+    vids = fetch_youtube_channel_videos(cid or clean_h, limit=6)
+    result["recent_posts"] = vids
+    result["recentPosts"] = vids
+    result["videos"] = vids
 
     return result
+
+
+def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> list[dict]:
+    """
+    Fetch the real uploaded videos for a YouTube channel using RSS feed with Innertube Browse fallback.
+    Returns list of verified video items:
+    [
+        {
+            "id": video_id,
+            "videoId": video_id,
+            "title": video_title,
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "views": formatted_views,
+            "description": description_text,
+            "thumbnail": thumbnail_url,
+            "publishedAt": published_iso
+        }
+    ]
+    """
+    if not handle_or_channel_id:
+        return []
+
+    clean = str(handle_or_channel_id).strip()
+    if "youtube.com/" in clean:
+        clean = clean.split("youtube.com/")[-1].split("?")[0].strip("/")
+    
+    clean_h = clean.lstrip("@").strip()
+    channel_id = clean_h if clean_h.startswith("UC") and len(clean_h) == 24 else None
+
+    # Step 1: If channel_id is not already known, resolve it via YouTube channel page or search
+    if not channel_id:
+        try:
+            r_page = httpx.get(f"https://www.youtube.com/@{clean_h}", headers=HEADERS, timeout=8, follow_redirects=True)
+            if r_page.status_code == 200:
+                m_cid = re.search(r'itemprop="channelId"\s+content="(UC[a-zA-Z0-9_\-]{22})"', r_page.text)
+                if not m_cid:
+                    m_cid = re.search(r'"channelId":\s*"(UC[a-zA-Z0-9_\-]{22})"', r_page.text)
+                if not m_cid:
+                    m_cid = re.search(r'youtube\.com/channel/(UC[a-zA-Z0-9_\-]{22})', r_page.text)
+                if m_cid:
+                    channel_id = m_cid.group(1)
+        except Exception as e:
+            logger.debug(f"[YouTube Video Fetch] Page check error for {clean_h}: {e}")
+
+    # Fallback to innertube search to resolve channel_id
+    if not channel_id:
+        try:
+            info = innertube_fetch_channel(clean_h)
+            if info and info.get("channel_id"):
+                channel_id = info["channel_id"]
+        except Exception as e:
+            logger.debug(f"[YouTube Video Fetch] Innertube search error for {clean_h}: {e}")
+
+    videos = []
+
+    # Step 2: Try public YouTube RSS Feed (Fastest, zero-token, 100% accurate real video titles)
+    if channel_id:
+        try:
+            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+            r_rss = httpx.get(rss_url, headers=HEADERS, timeout=8)
+            if r_rss.status_code == 200 and "<entry>" in r_rss.text:
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(r_rss.text)
+                ns = {
+                    "atom": "http://www.w3.org/2005/Atom",
+                    "yt": "http://www.youtube.com/xml/schemas/2015",
+                    "media": "http://search.yahoo.com/mrss/"
+                }
+                for entry in root.findall("atom:entry", ns)[:limit]:
+                    vid_elem = entry.find("yt:videoId", ns)
+                    title_elem = entry.find("atom:title", ns)
+                    if vid_elem is None or title_elem is None:
+                        continue
+                    vid_id = vid_elem.text.strip()
+                    v_title = title_elem.text.strip()
+                    
+                    link_elem = entry.find("atom:link", ns)
+                    v_url = link_elem.attrib.get("href") if link_elem is not None else f"https://www.youtube.com/watch?v={vid_id}"
+                    
+                    desc_elem = entry.find("media:group/media:description", ns)
+                    v_desc = desc_elem.text.strip() if desc_elem is not None and desc_elem.text else ""
+                    
+                    thumb_elem = entry.find("media:group/media:thumbnail", ns)
+                    v_thumb = thumb_elem.attrib.get("url") if thumb_elem is not None else f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+                    
+                    stats_elem = entry.find("media:group/media:community/media:statistics", ns)
+                    raw_views = stats_elem.attrib.get("views") if stats_elem is not None else "0"
+                    
+                    pub_elem = entry.find("atom:published", ns)
+                    pub_date = pub_elem.text.strip() if pub_elem is not None else ""
+                    
+                    try:
+                        iv = int(raw_views)
+                        views_fmt = f"{iv:,} views" if iv < 1000 else (f"{iv/1000:.1f}K views" if iv < 1000000 else f"{iv/1000000:.1f}M views")
+                    except Exception:
+                        views_fmt = "Verified upload"
+
+                    videos.append({
+                        "id": vid_id,
+                        "videoId": vid_id,
+                        "title": v_title,
+                        "url": v_url,
+                        "views": views_fmt,
+                        "description": v_desc[:250],
+                        "thumbnail": v_thumb,
+                        "publishedAt": pub_date
+                    })
+        except Exception as rss_err:
+            logger.debug(f"[YouTube Video RSS] Error: {rss_err}")
+
+    # Step 3: If RSS didn't return videos, try Innertube browse API
+    if not videos and channel_id:
+        try:
+            b_payload = {
+                "context": {
+                    "client": {
+                        "hl": "en",
+                        "gl": "US",
+                        "clientName": "WEB",
+                        "clientVersion": "2.20240401.01.00",
+                    }
+                },
+                "browseId": channel_id,
+                "params": "EgZ2aWRlb3PyBgQKAjoA",
+            }
+            rv = httpx.post("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", json=b_payload, headers=HEADERS, timeout=10)
+            if rv.status_code == 200:
+                d = rv.json()
+                tabs = d.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
+                for tab in tabs:
+                    grid = tab.get("tabRenderer", {}).get("content", {}).get("richGridRenderer", {})
+                    items = grid.get("contents", [])
+                    for item in items:
+                        vr = item.get("richItemRenderer", {}).get("content", {}).get("videoRenderer", {})
+                        if vr and vr.get("videoId"):
+                            vid_id = vr["videoId"]
+                            v_title = vr.get("title", {}).get("runs", [{}])[0].get("text") or vr.get("title", {}).get("simpleText") or "Video Upload"
+                            v_views = vr.get("viewCountText", {}).get("simpleText") or "Verified upload"
+                            v_desc = "".join(r.get("text", "") for r in vr.get("descriptionSnippet", {}).get("runs", []))
+                            thumbs = vr.get("thumbnail", {}).get("thumbnails", [])
+                            v_thumb = thumbs[-1].get("url", "") if thumbs else f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+                            
+                            videos.append({
+                                "id": vid_id,
+                                "videoId": vid_id,
+                                "title": v_title,
+                                "url": f"https://www.youtube.com/watch?v={vid_id}",
+                                "views": v_views,
+                                "description": v_desc[:250],
+                                "thumbnail": v_thumb,
+                                "publishedAt": vr.get("publishedTimeText", {}).get("simpleText", "")
+                            })
+                            if len(videos) >= limit:
+                                break
+                    if videos:
+                        break
+        except Exception as tube_err:
+            logger.debug(f"[YouTube Innertube Videos] Error: {tube_err}")
+
+    return videos
 
 
 def _clean_url(url: str) -> str:

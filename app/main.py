@@ -290,6 +290,24 @@ def proxy_avatar(url: str):
         return Response(status_code=404)
 
 
+@app.get("/api/proxy/youtube-feed")
+def proxy_youtube_feed(channel_id: Optional[str] = None, handle: Optional[str] = None):
+    """Fetch live YouTube channel RSS feed / videos server-side and return JSON."""
+    from app.services.scraper import fetch_youtube_channel_videos
+    target = handle or channel_id
+    if not target:
+        return {"success": False, "error": "channel_id or handle is required", "videos": []}
+    videos = fetch_youtube_channel_videos(target, limit=12)
+    return {
+        "success": True,
+        "target": target,
+        "count": len(videos),
+        "videos": videos,
+        "recent_posts": videos,
+        "recentPosts": videos
+    }
+
+
 
 # ── Signup Welcome Email API ──────────────────────────────────────────────────
 class SignupEmailRequest(BaseModel):

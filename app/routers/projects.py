@@ -43,6 +43,12 @@ class CreateProjectRequest(BaseModel):
     mockup: Optional[Dict[str, Any]] = None
     campaign_kit: Optional[Dict[str, Any]] = None
     campaignKit: Optional[Dict[str, Any]] = None
+    recentPosts: Optional[List[Dict[str, Any]]] = None
+    recent_posts: Optional[List[Dict[str, Any]]] = None
+    videos: Optional[List[Dict[str, Any]]] = None
+    channelUrl: Optional[str] = None
+    channelDescription: Optional[str] = None
+    creatorBio: Optional[str] = None
     portalLinkSent: Optional[bool] = False
     skipCreatorEmail: Optional[bool] = False
 
@@ -202,6 +208,10 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "diyOfferStatus": (proj.metadata_info or {}).get("diy_offer_status") or (proj.metadata_info or {}).get("diyOfferStatus") or "offer_sent",
         "diyOfferSentAt": (proj.metadata_info or {}).get("diy_offer_sent_at") or (proj.metadata_info or {}).get("diyOfferSentAt"),
         "diyFee": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or 50.0),
+        "recentPosts": (proj.metadata_info or {}).get("recent_posts") or (proj.metadata_info or {}).get("recentPosts") or (proj.metadata_info or {}).get("videos") or [],
+        "videos": (proj.metadata_info or {}).get("recent_posts") or (proj.metadata_info or {}).get("recentPosts") or (proj.metadata_info or {}).get("videos") or [],
+        "channelUrl": (proj.metadata_info or {}).get("channel_url") or (proj.metadata_info or {}).get("channelUrl") or (f"https://www.youtube.com/@{proj.creator_handle.lstrip('@')}" if proj.creator_handle else None),
+        "channelDescription": (proj.metadata_info or {}).get("channel_description") or (proj.metadata_info or {}).get("channelDescription") or "",
         "currentPresales": float(proj.current_presales or 0.0),
         "visitors": int(proj.visitors or 0),
         "conversionRate": float(proj.conversion_rate or 0.0),
@@ -509,6 +519,13 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         conversion_rate=0.0,
         portal_token="cf_sec_live",
         selected_concept=concept_data,
+        metadata_info={
+            "recent_posts": body.recentPosts or body.recent_posts or body.videos or [],
+            "recentPosts": body.recentPosts or body.recent_posts or body.videos or [],
+            "videos": body.recentPosts or body.recent_posts or body.videos or [],
+            "channel_url": body.channelUrl or (f"https://www.youtube.com/@{body.creatorHandle.lstrip('@')}" if body.creatorHandle else ""),
+            "channel_description": body.channelDescription or body.creatorBio or "",
+        },
         created_at=datetime.utcnow()
     )
     db.add(proj)
