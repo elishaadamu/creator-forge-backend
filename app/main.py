@@ -53,8 +53,8 @@ async def startup():
     await asyncio.to_thread(init_db)
     # Ensure autonomous table is registered
     from app.models.autonomous_campaign import AutonomousCampaign
-    # Start the IMAP poller loop in the background (polls every 15s for instant inbox sync)
-    asyncio.create_task(start_poller_loop(interval_seconds=15))
+    # Start the IMAP poller loop with reduced frequency (300s) to minimize DB operations
+    asyncio.create_task(start_poller_loop(interval_seconds=300))
     # Autonomous scheduler loops are disabled by default for human control
     if settings.ENABLE_AUTONOMOUS_BACKGROUND_SCHEDULER:
         logger.info("[Autonomous Scheduler] Background loops enabled via configuration.")

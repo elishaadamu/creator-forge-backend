@@ -431,19 +431,58 @@ def get_youtube_videos_endpoint(
 def get_youtube_comments_endpoint(
     video_id: Optional[str] = None,
     url: Optional[str] = None,
+    handle: Optional[str] = None,
+    channel: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    creator_id: Optional[str] = None,
     limit: int = 10
 ):
     """
-    Fetch real public comments directly from YouTube for a specific video.
+    Fetch real public comments directly from YouTube for a specific video or creator channel.
+    Resolves channel uploads automatically if handle/channel is supplied.
     """
-    target = video_id or url
+    target = handle or channel or channel_id or creator_id or video_id or url
     if not target:
-        raise HTTPException(400, "video_id or url is required")
-    from app.services.scraper import fetch_youtube_video_comments
-    comments = fetch_youtube_video_comments(target, limit=limit)
+        raise HTTPException(400, "video_id, url, handle, or creator_id is required")
+    from app.services.scraper import fetch_creator_channel_comments
+    comments = fetch_creator_channel_comments(target, platform="youtube", limit=limit)
     return {
         "success": True,
-        "video_id": target,
+        "target": target,
+        "count": len(comments),
+        "comments": comments
+    }
+
+
+@router.get("/{creator_id}/comments")
+def get_creator_comments_endpoint(
+    creator_id: str,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch real public audience comments directly from the creator's channel uploads.
+    Performs minimal single DB lookup to retrieve handle & platform, then scrapes real comments.
+    """
+    c = db.get(Creator, creator_id)
+    if not c:
+        clean = creator_id.lstrip("@").strip().lower()
+        c = db.query(Creator).filter(
+            (Creator.id == creator_id) |
+            (Creator.handle.ilike(f"%{clean}%")) |
+            (Creator.display_name.ilike(f"%{clean}%"))
+        ).first()
+
+    handle = (c.handle if c else creator_id) or creator_id
+    platform = (c.platform if c else "youtube") or "youtube"
+
+    from app.services.scraper import fetch_creator_channel_comments
+    comments = fetch_creator_channel_comments(handle, platform=platform, limit=limit)
+    return {
+        "success": True,
+        "creator_id": creator_id,
+        "handle": handle,
+        "platform": platform,
         "count": len(comments),
         "comments": comments
     }
@@ -1455,6 +1494,15 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
         except Exception:
             pass
 
+    comments = []
+    if c.discovery_notes and c.discovery_notes.startswith("{"):
+        try:
+            import json
+            parsed = json.loads(c.discovery_notes)
+            comments = parsed.get("comments") or parsed.get("audience_comments") or parsed.get("audienceComments") or []
+        except Exception:
+            pass
+
     return {
         "id": c.id, "handle": c.handle, "platform": c.platform,
         "display_name": c.display_name, "bio": c.bio,
@@ -1479,6 +1527,9 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
         "recent_posts": recent_posts,
         "recentPosts": recent_posts,
         "videos": recent_posts,
+        "comments": comments,
+        "audience_comments": comments,
+        "audienceComments": comments,
         "discovery_source": c.discovery_source,
         "engagement_score": c.engagement_score,
         "created_at": c.created_at.isoformat() if c.created_at else None,

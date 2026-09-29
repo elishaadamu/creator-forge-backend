@@ -875,6 +875,72 @@ def fetch_youtube_video_comments(video_id_or_url: str, limit: int = 10) -> list[
     return comments[:limit]
 
 
+def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube", limit: int = 10) -> list[dict]:
+    """
+    Fetch genuine audience comments from a creator's channel uploads across platforms.
+    If the target is a video ID or URL, fetches comments for that video.
+    If it is a creator handle or channel, grabs their latest uploads first and pulls comments.
+    If no real comments exist, returns an empty list without fabrication.
+    """
+    if not handle_or_id:
+        return []
+
+    plat = (platform or "youtube").lower()
+    target = str(handle_or_id).strip()
+
+    if plat == "youtube":
+        # Check if target is directly a video ID (11 chars) or video URL
+        is_direct_video = (
+            "v=" in target
+            or "youtu.be/" in target
+            or "/watch/" in target
+            or (len(target) == 11 and not target.startswith("@") and "/" not in target and " " not in target)
+        )
+        if is_direct_video:
+            return fetch_youtube_video_comments(target, limit=limit)
+
+        clean_handle = target.split("youtube.com/")[-1].split("?")[0].strip("/").lstrip("@")
+        videos = fetch_youtube_channel_videos(clean_handle, limit=3)
+        if not videos:
+            return []
+
+        all_comments = []
+        seen_texts = set()
+        for vid in videos:
+            vid_id = vid.get("videoId") or vid.get("id")
+            vid_title = vid.get("title") or "Channel Upload"
+            vid_url = vid.get("url") or f"https://www.youtube.com/watch?v={vid_id}"
+            if not vid_id:
+                continue
+
+            raw_comments = fetch_youtube_video_comments(vid_id, limit=limit)
+            for c in raw_comments:
+                txt = c.get("text") or ""
+                if txt and txt not in seen_texts:
+                    seen_texts.add(txt)
+                    all_comments.append({
+                        "id": c.get("id"),
+                        "author": c.get("author") or "@viewer",
+                        "text": txt,
+                        "quote": txt,
+                        "likes": c.get("likes") or "0",
+                        "published": c.get("published") or "",
+                        "videoId": vid_id,
+                        "videoTitle": vid_title,
+                        "videoUrl": vid_url,
+                        "source": f"YouTube (@{clean_handle})",
+                    })
+                    if len(all_comments) >= limit:
+                        break
+            if len(all_comments) >= limit:
+                break
+
+        return all_comments[:limit]
+
+    # For TikTok or Instagram: if no scraped comments available, return empty list
+    return []
+
+
 def _clean_url(url: str) -> str:
     """Decode JSON/unicode escapes in URLs (e.g. \\u002F → /)."""
     if not url:

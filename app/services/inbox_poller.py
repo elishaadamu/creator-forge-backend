@@ -412,15 +412,19 @@ async def start_poller_loop(interval_seconds: int = 60):
     global _RUNNING
     _RUNNING = True
     logger.info("Starting IMAP Inbox Poller loop...")
-    await asyncio.sleep(5)  # Let server complete startup and bind to port
+    await asyncio.sleep(10)  # Let server complete startup and bind to port
     while _RUNNING:
+        sleep_dur = interval_seconds
         try:
             # Run the synchronous IMAP polling in a threadpool to avoid blocking the async loop
-            await asyncio.to_thread(poll_inbox_sync)
+            res = await asyncio.to_thread(poll_inbox_sync)
+            if res and res.get("status") == "error":
+                sleep_dur = max(interval_seconds, 180)
         except Exception as e:
             logger.error(f"Error in poller loop: {e}")
+            sleep_dur = max(interval_seconds, 180)
         
-        await asyncio.sleep(interval_seconds)
+        await asyncio.sleep(sleep_dur)
 
 def stop_poller_loop():
     global _RUNNING
