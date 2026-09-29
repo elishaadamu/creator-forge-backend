@@ -368,18 +368,38 @@ def _build_project_map(db: Session) -> dict:
 def list_creators(
     status: Optional[str] = None,
     platform: Optional[str] = None,
+    sort_by: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
 ):
     q = db.query(Creator)
-    if status:
+    if status and status != "all":
         q = q.filter(Creator.status == status)
-    if platform:
+    if platform and platform != "all":
         q = q.filter(Creator.platform == platform)
-    creators = q.order_by(Creator.created_at.desc()).offset(skip).limit(limit).all()
+
+    # Dynamic sorting
+    if sort_by == "followers_desc":
+        q = q.order_by(Creator.follower_count.desc())
+    elif sort_by == "followers_asc":
+        q = q.order_by(Creator.follower_count.asc())
+    elif sort_by == "name_asc":
+        q = q.order_by(Creator.display_name.asc())
+    elif sort_by == "name_desc":
+        q = q.order_by(Creator.display_name.desc())
+    elif sort_by == "score_desc":
+        q = q.order_by(Creator.engagement_score.desc())
+    elif sort_by == "created_at_asc":
+        q = q.order_by(Creator.created_at.asc())
+    else:
+        q = q.order_by(Creator.created_at.desc())
+
+    capped_limit = min(1000, max(1, limit)) if limit > 0 else 50
+    creators = q.offset(skip).limit(capped_limit).all()
     project_map = _build_project_map(db)
     return [_creator_dict(c, project_map=project_map) for c in creators]
+
 
 
 @router.get("/youtube-videos")

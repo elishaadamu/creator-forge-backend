@@ -1350,15 +1350,17 @@ NICHE_SEARCH_EXPANSIONS = {
 }
 
 
-def search_youtube_channels(query: str, limit: int = 5, min_followers: int = 0, max_followers: int = 0) -> list[dict]:
+def search_youtube_channels(query: str, limit: int = 5, min_followers: int = 0, max_followers: int = 0, exclude_handles: set = None) -> list[dict]:
     """
     Search YouTube for creators matching niche keywords with dynamic query expansion & randomized sampling.
+    Filters out any creators in exclude_handles so previously discovered creators are not scouted again.
     """
     import random
     from app.config import settings
 
     raw_channels = []
     q_lower = query.lower().strip()
+    exclude_set = {str(h).lstrip("@").strip().lower() for h in (exclude_handles or []) if h}
 
     # Identify matching niche categories
     matched_expansions = []
@@ -1391,8 +1393,8 @@ def search_youtube_channels(query: str, limit: int = 5, min_followers: int = 0, 
         found = _direct_youtube_search(search_query, limit=30)
         
         for ch in found:
-            key = ch["handle"].lower()
-            if key in seen:
+            key = ch["handle"].lower().lstrip("@")
+            if key in seen or key in exclude_set:
                 continue
             seen.add(key)
             
@@ -1411,11 +1413,11 @@ def search_youtube_channels(query: str, limit: int = 5, min_followers: int = 0, 
 
     # If still need more candidates and strict filter returned few, run broader search queries
     if len(filtered) < limit:
-        for extra_q in [f"{query} creator channel", f"{query} full tutorial", f"{query} podcast"]:
+        for extra_q in [f"{query} creator channel", f"{query} full tutorial", f"{query} podcast", f"{query} guide", f"{query} review"]:
             found = _direct_youtube_search(extra_q, limit=30)
             for ch in found:
-                key = ch["handle"].lower()
-                if key in seen:
+                key = ch["handle"].lower().lstrip("@")
+                if key in seen or key in exclude_set:
                     continue
                 seen.add(key)
                 subs = ch.get("follower_count", 0)

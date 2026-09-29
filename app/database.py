@@ -68,20 +68,11 @@ def get_db():
 
 def init_db():
     global engine, SessionLocal
-    from app.models import creator, campaign, outreach, audit, project  # noqa: F401 — registers models
+    from app.models import creator, campaign, outreach, audit, project, niche, workflow_state  # noqa: F401 — registers models
     from sqlalchemy import text
     try:
-        table_exists = False
-        with engine.connect() as conn:
-            try:
-                conn.execute(text("SELECT 1 FROM creators LIMIT 1"))
-                table_exists = True
-            except Exception:
-                pass
-
-        if not table_exists:
-            print("[DB INIT] Creating missing schema tables...")
-            Base.metadata.create_all(bind=engine)
+        # Always run create_all to ensure all registered tables exist (idempotent)
+        Base.metadata.create_all(bind=engine)
 
         # Migration: ensure campaign_kit column exists on validation_campaigns
         try:
@@ -116,6 +107,7 @@ def init_db():
     
     # Auto-seed the 'default' campaign if missing
     from app.models.campaign import Campaign
+    from app.models.niche import TargetNiche
     db = SessionLocal()
     try:
         default_campaign = db.query(Campaign).filter(Campaign.id == "default").first()
@@ -134,8 +126,45 @@ def init_db():
             db.add(c)
             db.commit()
             print("[DB INIT] Seeding default campaign completed.")
+        
+        # Auto-seed default target niches if missing
+        niche_count = db.query(TargetNiche).count()
+        if niche_count == 0:
+            print("[DB INIT] Seeding default target niches in database...")
+            DEFAULT_NICHES = [
+                # Active defaults
+                ("Tech", "tech", True, "14.2k"),
+                ("Software", "tech", True, "9.8k"),
+                ("SaaS", "tech", True, "6.4k"),
+                ("Fintech", "business", True, "5.1k"),
+                ("Productivity", "business", True, "11.3k"),
+                # Available defaults
+                ("AI Tools", "tech", False, "8.7k"),
+                ("Creator Economy", "creative", False, "7.5k"),
+                ("Gaming", "creative", False, "22.1k"),
+                ("Fitness & Health", "lifestyle", False, "13.9k"),
+                ("E-Commerce", "business", False, "8.2k"),
+                ("Finance", "business", False, "6.9k"),
+                ("Crypto & Web3", "business", False, "4.8k"),
+                ("Design & Creative", "creative", False, "9.1k"),
+                ("Education", "lifestyle", False, "10.5k"),
+                ("Beauty & Lifestyle", "lifestyle", False, "16.7k"),
+                ("Marketing", "business", False, "8.4k"),
+            ]
+            for name, cat, active, cnt in DEFAULT_NICHES:
+                slug_id = name.lower().replace(" & ", "-").replace(" ", "-")
+                db.add(TargetNiche(
+                    id=slug_id,
+                    name=name,
+                    category=cat,
+                    is_active=active,
+                    count=cnt,
+                ))
+            db.commit()
+            print("[DB INIT] Seeding default target niches completed.")
     except Exception as e:
-        print(f"[DB INIT] Warning: Failed to seed default campaign: {e}")
+        print(f"[DB INIT] Warning: Failed to seed defaults: {e}")
         db.rollback()
     finally:
         db.close()
+
