@@ -643,6 +643,7 @@ STRICT REQUIREMENTS:
                     break
         except Exception as ai_disc_err:
             logger.warning(f"[Discovery] AI fresh creator synthesis notice: {ai_disc_err}")
+    candidate_pool = qualifying_candidates
     if not candidate_pool:
         candidate_pool = [c for c in unique_candidates if (int(c.get("follower_count", 0) or 0) <= max_allowed)]
 
