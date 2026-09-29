@@ -7,7 +7,7 @@ from app.models.creator import Creator, Contact
 from app.models.campaign import Campaign
 from app.database import Base
 
-url = os.getenv("DATABASE_URL", "postgres://0a0059eb17b467f0d2d68bf2fbe6b48947ff9ea3ca15b25bce7af7dcd351f7bf:sk_iuYADgFkOSebAPvowfb1O@pooled.db.prisma.io:5432/postgres?sslmode=require")
+url = os.getenv("DATABASE_URL", "postgres://b394e97ad4cc865278655657c5852f636d90086ced63cae9590f9f25216a142d:sk_s3RBlJ7Dxkl4siiezxLp-@pooled.db.prisma.io:5432/postgres?sslmode=require")
 if url.startswith("postgres://"):
     url = url.replace("postgres://", "postgresql://", 1)
 
