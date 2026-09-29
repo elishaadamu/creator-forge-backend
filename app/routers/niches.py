@@ -98,8 +98,8 @@ def add_niche(data: NicheCreateSchema, db: Session = Depends(get_db)):
 
 
 @router.delete("/{name}")
-def remove_niche(name: str, permanent: bool = False, db: Session = Depends(get_db)):
-    """Remove a niche from target selection (or delete permanently if specified)."""
+def remove_niche(name: str, permanent: bool = True, db: Session = Depends(get_db)):
+    """Remove a niche permanently from the DB."""
     name_clean = name.strip()
     existing = db.query(TargetNiche).filter(
         (TargetNiche.name.ilike(name_clean)) | (TargetNiche.id == name_clean)
@@ -108,10 +108,7 @@ def remove_niche(name: str, permanent: bool = False, db: Session = Depends(get_d
     if not existing:
         return {"success": True, "message": "Niche not found or already removed"}
 
-    if permanent or existing.category == "custom":
-        db.delete(existing)
-    else:
-        existing.is_active = False
+    db.delete(existing)
     db.commit()
     return {"success": True, "removed": name_clean}
 
