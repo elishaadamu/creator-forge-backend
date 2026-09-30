@@ -207,7 +207,8 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "isDIY": bool((proj.metadata_info or {}).get("is_diy") or (proj.metadata_info or {}).get("isDIY") or ((proj.metadata_info or {}).get("diy_subscription") or {}).get("active") or ((proj.metadata_info or {}).get("diySubscription") or {}).get("active")),
         "diyOfferStatus": (proj.metadata_info or {}).get("diy_offer_status") or (proj.metadata_info or {}).get("diyOfferStatus") or "offer_sent",
         "diyOfferSentAt": (proj.metadata_info or {}).get("diy_offer_sent_at") or (proj.metadata_info or {}).get("diyOfferSentAt"),
-        "diyFee": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or 50.0),
+        "diyFee": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or (proj.metadata_info or {}).get("diyPassPrice") or 50.0),
+        "diyPassPrice": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or (proj.metadata_info or {}).get("diyPassPrice") or 50.0),
         "recentPosts": (proj.metadata_info or {}).get("recent_posts") or (proj.metadata_info or {}).get("recentPosts") or (proj.metadata_info or {}).get("videos") or [],
         "videos": (proj.metadata_info or {}).get("recent_posts") or (proj.metadata_info or {}).get("recentPosts") or (proj.metadata_info or {}).get("videos") or [],
         "channelUrl": (proj.metadata_info or {}).get("channel_url") or (proj.metadata_info or {}).get("channelUrl") or (f"https://www.youtube.com/@{proj.creator_handle.lstrip('@')}" if proj.creator_handle else None),
@@ -986,6 +987,16 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         dosa = body.get("diyOfferSentAt") or body.get("diy_offer_sent_at")
         cur_meta["diy_offer_sent_at"] = dosa
         cur_meta["diyOfferSentAt"] = dosa
+
+    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body:
+        fee_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
+        try:
+            fee_val = float(fee_raw)
+            cur_meta["diy_fee"] = fee_val
+            cur_meta["diyFee"] = fee_val
+            cur_meta["diyPassPrice"] = fee_val
+        except (ValueError, TypeError):
+            pass
 
     proj.metadata_info = cur_meta
     flag_modified(proj, "metadata_info")
