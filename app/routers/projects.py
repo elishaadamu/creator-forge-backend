@@ -1150,7 +1150,7 @@ def generate_project_campaign_image(
     x_openai_key: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Generate social media post image using gemini-3.1-flash-image with OpenAI DALL-E fallback."""
+    """Generate social media post image using OpenAI image models."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -1161,7 +1161,7 @@ def generate_project_campaign_image(
         c_name = proj.creator_name or "Creator"
         niche = proj.niche or "Tech"
         tagline = proj.product_tagline or ""
-        prompt = f"Create a picture of a sleek modern announcement graphic for {p_name} co-founded with {c_name} in {niche}. {tagline}. Gemini theme, luxury dark mode, vibrant neon accents, futuristic UI overlay, 4k high quality."
+        prompt = f"Create a picture of a sleek modern announcement graphic for {p_name} co-founded with {c_name} in {niche}. {tagline}. Luxury dark mode, vibrant neon accents, futuristic UI overlay, 4k high quality."
 
     from app.services.campaign_media import generate_campaign_social_image
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Campaign AI Media Generator Service
-Integrates:
-- Primary: Google GenAI SDK (gemini-3.1-flash-image & veo-3.1-generate-preview)
-- Fallback: OpenAI API (DALL-E 3 for image & OpenAI Videos for video)
+Exclusively powered by OpenAI:
+- Image Generation: OpenAI Image Models (gpt-image-1, gpt-image-1-mini, chatgpt-image-latest, dall-e-3)
+- Video Generation: OpenAI Video Models (sora-2, sora-2-pro)
 """
 
 import os
@@ -28,23 +28,16 @@ DEFAULT_OPENAI_KEY = (
 )
 
 
-def _get_genai_client(api_key: Optional[str] = None):
-    from google import genai
-    resolved_key = (
-        api_key
-        or getattr(settings, "GEMINI_API_KEY", None)
-        or os.getenv("GEMINI_API_KEY", "")
-    )
-    if resolved_key:
-        return genai.Client(api_key=resolved_key)
-    return genai.Client()
-
-
 def _get_openai_client(api_key: Optional[str] = None):
     from openai import OpenAI
-    resolved_key = api_key or DEFAULT_OPENAI_KEY
+    resolved_key = (
+        api_key
+        or DEFAULT_OPENAI_KEY
+        or os.getenv("OPENAI_API_KEY", "")
+        or getattr(settings, "OPENAI_API_KEY", "")
+    )
     if not resolved_key:
-        raise ValueError("No OpenAI API key provided or configured in environment")
+        raise ValueError("No OpenAI API key provided or configured in environment (OPENAI_API_KEY)")
     return OpenAI(api_key=resolved_key)
 
 
@@ -54,77 +47,54 @@ def generate_campaign_social_image(
     openai_api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Generates high-impact AI campaign graphic.
-    1. Attempts Gemini (gemini-3.1-flash-image, fallback imagen-3.0-generate-002)
-    2. If Gemini fails, automatically falls back to OpenAI DALL-E 3
+    Generates high-impact AI campaign graphic using OpenAI Image API.
+    Tries active OpenAI image models in order: gpt-image-1, gpt-image-1-mini, chatgpt-image-latest, dall-e-3.
     """
+    resolved_key = openai_api_key or api_key
+    oai_client = _get_openai_client(resolved_key)
+
+    logger.info(f"🎨 [OPENAI IMAGE GEN] Requesting image with prompt: {prompt[:120]}...")
+
+    candidate_models = [
+        "gpt-image-1",
+        "gpt-image-1-mini",
+        "chatgpt-image-latest",
+        "dall-e-3",
+        "dall-e-2",
+    ]
+
     image_bytes = None
-    model_used = "gemini-3.1-flash-image"
-    provider_used = "google"
-    gemini_error = None
+    model_used = None
+    last_error = None
 
-    logger.info(f"🎨 [AI IMAGE GEN] Requesting primary Gemini with prompt: {prompt[:120]}...")
+    import httpx
 
-    # Step 1: Attempt Gemini
-    try:
-        client = _get_genai_client(api_key)
+    for m in candidate_models:
         try:
-            interaction = client.interactions.create(
-                model="gemini-3.1-flash-image",
-                input=prompt,
-            )
-            if hasattr(interaction, "output_image") and getattr(interaction.output_image, "data", None):
-                image_bytes = base64.b64decode(interaction.output_image.data)
-            elif hasattr(interaction, "output") and getattr(interaction.output, "data", None):
-                image_bytes = base64.b64decode(interaction.output.data)
-        except Exception as e_interact:
-            logger.warning(f"⚠️ interactions.create(gemini-3.1-flash-image) warning: {e_interact}. Trying imagen fallback...")
-            res = client.models.generate_images(
-                model="imagen-3.0-generate-002",
+            logger.info(f"🎨 Trying OpenAI model: {m}...")
+            # For gpt-image and chatgpt-image models, call images.generate
+            res = oai_client.images.generate(
+                model=m,
                 prompt=prompt,
-            )
-            if res.generated_images:
-                image_bytes = res.generated_images[0].image.image_bytes
-                model_used = "imagen-3.0-generate-002"
-    except Exception as g_err:
-        gemini_error = str(g_err)
-        logger.warning(f"⚠️ Gemini image generation failed ({gemini_error}). Falling back to OpenAI DALL-E 3...")
-
-    # Step 2: Fallback to OpenAI DALL-E 3 if Gemini failed
-    if not image_bytes:
-        try:
-            oai_client = _get_openai_client(openai_api_key)
-            logger.info("🎨 [AI IMAGE GEN] Generating image via OpenAI DALL-E 3 fallback...")
-            # DALL-E 3 supports high quality prompts
-            oai_res = oai_client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size="1024x1024",
-                quality="standard",
-                response_format="b64_json",
                 n=1,
             )
-            if oai_res.data and getattr(oai_res.data[0], "b64_json", None):
-                image_bytes = base64.b64decode(oai_res.data[0].b64_json)
-                model_used = "dall-e-3 (OpenAI Fallback)"
-                provider_used = "openai"
-            elif oai_res.data and getattr(oai_res.data[0], "url", None):
-                import httpx
-                img_resp = httpx.get(oai_res.data[0].url, timeout=30.0)
+            if res.data and getattr(res.data[0], "b64_json", None):
+                image_bytes = base64.b64decode(res.data[0].b64_json)
+                model_used = m
+                break
+            elif res.data and getattr(res.data[0], "url", None):
+                img_resp = httpx.get(res.data[0].url, timeout=30.0)
                 img_resp.raise_for_status()
                 image_bytes = img_resp.content
-                model_used = "dall-e-3 (OpenAI Fallback)"
-                provider_used = "openai"
-        except Exception as oai_err:
-            logger.error(f"❌ OpenAI DALL-E 3 fallback also failed: {oai_err}")
-            raise RuntimeError(
-                f"Gemini image generation failed ({gemini_error or 'unknown'}). OpenAI fallback also failed: {oai_err}"
-            )
+                model_used = m
+                break
+        except Exception as err:
+            last_error = err
+            logger.warning(f"⚠️ Model {m} generation failed: {err}. Trying next candidate...")
+            continue
 
     if not image_bytes:
-        raise ValueError(
-            f"No image data returned from image generation (Gemini error: {gemini_error})"
-        )
+        raise RuntimeError(f"OpenAI image generation failed across available models: {last_error}")
 
     filename = f"campaign_post_{int(time.time())}_{os.urandom(4).hex()}.png"
     filepath = GENERATED_MEDIA_DIR / filename
@@ -135,7 +105,7 @@ def generate_campaign_social_image(
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:image/png;base64,{b64_data}"
 
-    logger.info(f"✅ Generated campaign image saved to {filepath} using {model_used}")
+    logger.info(f"✅ Generated campaign image saved to {filepath} using OpenAI ({model_used})")
 
     return {
         "url": f"/static/generated/{filename}",
@@ -143,8 +113,7 @@ def generate_campaign_social_image(
         "data_url": data_url,
         "prompt": prompt,
         "model": model_used,
-        "provider": provider_used,
-        "fallback_used": (provider_used == "openai")
+        "provider": "openai"
     }
 
 
@@ -155,83 +124,55 @@ def generate_campaign_video(
     max_wait_seconds: int = 360
 ) -> Dict[str, Any]:
     """
-    Generates video teaser/ad.
-    1. Attempts Veo 3.1 (veo-3.1-generate-preview) with operation polling
-    2. If Veo fails, falls back to OpenAI Video API
+    Generates video teaser/ad using OpenAI Video (Sora) API.
+    Tries sora-2, sora-2-pro, or default model.
     """
-    gemini_error = None
-    logger.info(f"🎬 [AI VIDEO GEN] Initiating Veo 3.1 video generation with prompt: {prompt[:120]}...")
+    resolved_key = openai_api_key or api_key
+    oai_client = _get_openai_client(resolved_key)
 
-    # Step 1: Attempt Gemini Veo 3.1
-    try:
-        client = _get_genai_client(api_key)
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
-            prompt=prompt,
-        )
+    logger.info(f"🎬 [OPENAI VIDEO GEN] Initiating OpenAI video generation with prompt: {prompt[:120]}...")
 
-        start_time = time.time()
-        while not operation.done:
-            elapsed = time.time() - start_time
-            if elapsed > max_wait_seconds:
-                raise TimeoutError(f"Veo 3.1 generation timed out after {int(elapsed)}s")
-            logger.info(f"Waiting for Veo 3.1 video generation ({int(elapsed)}s elapsed)...")
-            time.sleep(10)
-            operation = client.operations.get(operation)
+    if not hasattr(oai_client, "videos") or not callable(getattr(oai_client.videos, "create_and_poll", None)):
+        raise RuntimeError("OpenAI client does not expose video generation methods on this version")
 
-        if not operation.response or not operation.response.generated_videos:
-            raise ValueError("No video was generated in Veo 3.1 response")
+    candidate_models = ["sora-2", "sora-2-pro", None]
+    video_bytes = None
+    model_used = "sora-2"
+    last_error = None
 
-        generated_video = operation.response.generated_videos[0]
-        filename = f"campaign_video_{int(time.time())}_{os.urandom(4).hex()}.mp4"
-        filepath = GENERATED_MEDIA_DIR / filename
-
-        client.files.download(file=generated_video.video, destination=str(filepath))
-        logger.info(f"✅ Generated Veo 3.1 video saved to {filepath}")
-
-        return {
-            "url": f"/static/generated/{filename}",
-            "filename": filename,
-            "prompt": prompt,
-            "model": "veo-3.1-generate-preview",
-            "provider": "google",
-            "fallback_used": False
-        }
-    except Exception as g_err:
-        gemini_error = str(g_err)
-        logger.warning(f"⚠️ Veo 3.1 video generation failed ({gemini_error}). Falling back to OpenAI Video...")
-
-    # Step 2: Fallback to OpenAI Video
-    try:
-        oai_client = _get_openai_client(openai_api_key)
-        logger.info("🎬 [AI VIDEO GEN] Polling OpenAI Video API fallback...")
-        
-        # Check if videos client is available on openai
-        if hasattr(oai_client, "videos") and callable(getattr(oai_client.videos, "create_and_poll", None)):
-            video_op = oai_client.videos.create_and_poll(
-                prompt=prompt,
-                model="sora-1",
-                seconds=8,
-            )
+    for vm in candidate_models:
+        try:
+            logger.info(f"🎬 Trying OpenAI video model: {vm or 'default'}...")
+            kwargs = {"prompt": prompt, "seconds": 8}
+            if vm:
+                kwargs["model"] = vm
+            video_op = oai_client.videos.create_and_poll(**kwargs)
             content = oai_client.videos.download_content(video_op.id)
-            filename = f"campaign_video_oai_{int(time.time())}_{os.urandom(4).hex()}.mp4"
-            filepath = GENERATED_MEDIA_DIR / filename
-            with open(filepath, "wb") as f:
-                f.write(content.read() if hasattr(content, "read") else content)
+            raw = content.read() if hasattr(content, "read") else content
+            if raw:
+                video_bytes = raw
+                model_used = vm or "sora-2"
+                break
+        except Exception as v_err:
+            last_error = v_err
+            logger.warning(f"⚠️ OpenAI video model {vm} failed: {v_err}. Trying next...")
+            continue
 
-            logger.info(f"✅ Generated OpenAI video saved to {filepath}")
-            return {
-                "url": f"/static/generated/{filename}",
-                "filename": filename,
-                "prompt": prompt,
-                "model": "sora-1 (OpenAI Fallback)",
-                "provider": "openai",
-                "fallback_used": True
-            }
-        else:
-            raise NotImplementedError("OpenAI client does not expose videos.create_and_poll on this environment")
-    except Exception as oai_err:
-        logger.error(f"❌ OpenAI Video fallback also failed: {oai_err}")
-        raise RuntimeError(
-            f"Veo 3.1 video generation failed ({gemini_error or 'unknown'}). OpenAI video fallback also failed: {oai_err}"
-        )
+    if not video_bytes:
+        raise RuntimeError(f"OpenAI video generation failed: {last_error}")
+
+    filename = f"campaign_video_{int(time.time())}_{os.urandom(4).hex()}.mp4"
+    filepath = GENERATED_MEDIA_DIR / filename
+
+    with open(filepath, "wb") as f:
+        f.write(video_bytes)
+
+    logger.info(f"✅ Generated OpenAI video saved to {filepath} using {model_used}")
+
+    return {
+        "url": f"/static/generated/{filename}",
+        "filename": filename,
+        "prompt": prompt,
+        "model": model_used,
+        "provider": "openai"
+    }
