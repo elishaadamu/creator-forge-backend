@@ -1139,6 +1139,7 @@ def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db:
 class GenerateCampaignMediaRequest(BaseModel):
     prompt: Optional[str] = None
     apiKey: Optional[str] = None
+    openaiApiKey: Optional[str] = None
 
 
 @router.post("/{project_id}/campaign/generate-image")
@@ -1146,9 +1147,10 @@ def generate_project_campaign_image(
     project_id: str,
     body: Optional[GenerateCampaignMediaRequest] = None,
     x_gemini_key: Optional[str] = Header(None),
+    x_openai_key: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Generate social media post image using gemini-3.1-flash-image."""
+    """Generate social media post image using gemini-3.1-flash-image with OpenAI DALL-E fallback."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -1163,11 +1165,12 @@ def generate_project_campaign_image(
 
     from app.services.campaign_media import generate_campaign_social_image
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
+    openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
     try:
-        media_result = generate_campaign_social_image(prompt, api_key=api_key)
+        media_result = generate_campaign_social_image(prompt, api_key=api_key, openai_api_key=openai_key)
     except Exception as e:
         logger.error(f"Image generation error: {e}")
-        raise HTTPException(500, f"Image generation failed: {str(e)}")
+        raise HTTPException(500, detail=f"Image generation failed: {str(e)}")
 
     campaign = proj.validation_campaign
     if not campaign:
@@ -1178,6 +1181,8 @@ def generate_project_campaign_image(
     kit["postImageUrl"] = media_result["url"]
     kit["postImageDataUrl"] = media_result.get("data_url")
     kit["postImagePrompt"] = prompt
+    kit["postImageModel"] = media_result.get("model")
+    kit["postImageProvider"] = media_result.get("provider")
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
 
@@ -1201,9 +1206,10 @@ def generate_project_campaign_video(
     project_id: str,
     body: Optional[GenerateCampaignMediaRequest] = None,
     x_gemini_key: Optional[str] = Header(None),
+    x_openai_key: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Generate 60s campaign video using veo-3.1-generate-preview."""
+    """Generate 60s campaign video using veo-3.1-generate-preview with OpenAI Video fallback."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -1219,11 +1225,12 @@ def generate_project_campaign_video(
 
     from app.services.campaign_media import generate_campaign_video
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
+    openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
     try:
-        media_result = generate_campaign_video(prompt, api_key=api_key)
+        media_result = generate_campaign_video(prompt, api_key=api_key, openai_api_key=openai_key)
     except Exception as e:
         logger.error(f"Video generation error: {e}")
-        raise HTTPException(500, f"Video generation failed: {str(e)}")
+        raise HTTPException(500, detail=f"Video generation failed: {str(e)}")
 
     campaign = proj.validation_campaign
     if not campaign:
@@ -1233,6 +1240,8 @@ def generate_project_campaign_video(
     kit = dict(campaign.campaign_kit or {})
     kit["videoUrl"] = media_result["url"]
     kit["videoPrompt"] = prompt
+    kit["videoModel"] = media_result.get("model")
+    kit["videoProvider"] = media_result.get("provider")
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
 
