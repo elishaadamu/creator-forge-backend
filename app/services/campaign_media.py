@@ -22,22 +22,35 @@ BASE_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 GENERATED_MEDIA_DIR = BASE_STATIC_DIR / "generated"
 GENERATED_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_OPENAI_KEY = (
-    os.getenv("OPENAI_API_KEY")
-    or getattr(settings, "OPENAI_API_KEY", "")
-)
+def _get_live_env_openai_key() -> str:
+    key = os.getenv("OPENAI_API_KEY") or getattr(settings, "OPENAI_API_KEY", "")
+    if key and not (key.endswith("WOYA") or key.endswith("jwwA")):
+        return key.strip().strip('"\'')
+    # Read dynamically from .env
+    env_file = BASE_STATIC_DIR.parent / ".env"
+    if env_file.exists():
+        try:
+            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+                line = line.strip()
+                if line.startswith("OPENAI_API_KEY="):
+                    val = line.split("=", 1)[1].strip().strip('"\'')
+                    if val and not (val.endswith("WOYA") or val.endswith("jwwA")):
+                        return val
+        except Exception:
+            pass
+    return ""
 
 
 def _get_openai_client(api_key: Optional[str] = None):
     from openai import OpenAI
-    resolved_key = (
-        api_key
-        or DEFAULT_OPENAI_KEY
-        or os.getenv("OPENAI_API_KEY", "")
-        or getattr(settings, "OPENAI_API_KEY", "")
-    )
+    candidate = (api_key or "").strip().strip('"\'')
+    if candidate and not (candidate.endswith("WOYA") or candidate.endswith("jwwA")):
+        resolved_key = candidate
+    else:
+        resolved_key = _get_live_env_openai_key()
+
     if not resolved_key:
-        raise ValueError("No OpenAI API key provided or configured in environment (OPENAI_API_KEY)")
+        raise ValueError("No valid OpenAI API key found in request or backend/.env (OPENAI_API_KEY)")
     return OpenAI(api_key=resolved_key)
 
 
