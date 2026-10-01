@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -1134,6 +1134,121 @@ def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db:
     db.commit()
     db.refresh(proj)
     return _format_project_response(proj)
+
+
+class GenerateCampaignMediaRequest(BaseModel):
+    prompt: Optional[str] = None
+    apiKey: Optional[str] = None
+
+
+@router.post("/{project_id}/campaign/generate-image")
+def generate_project_campaign_image(
+    project_id: str,
+    body: Optional[GenerateCampaignMediaRequest] = None,
+    x_gemini_key: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Generate social media post image using gemini-3.1-flash-image."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    prompt = (body.prompt if body else None)
+    if not prompt:
+        p_name = proj.product_name or "New Software"
+        c_name = proj.creator_name or "Creator"
+        niche = proj.niche or "Tech"
+        tagline = proj.product_tagline or ""
+        prompt = f"Create a picture of a sleek modern announcement graphic for {p_name} co-founded with {c_name} in {niche}. {tagline}. Gemini theme, luxury dark mode, vibrant neon accents, futuristic UI overlay, 4k high quality."
+
+    from app.services.campaign_media import generate_campaign_social_image
+    api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
+    try:
+        media_result = generate_campaign_social_image(prompt, api_key=api_key)
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
+        raise HTTPException(500, f"Image generation failed: {str(e)}")
+
+    campaign = proj.validation_campaign
+    if not campaign:
+        campaign = ValidationCampaign(project_id=proj.id)
+        db.add(campaign)
+
+    kit = dict(campaign.campaign_kit or {})
+    kit["postImageUrl"] = media_result["url"]
+    kit["postImageDataUrl"] = media_result.get("data_url")
+    kit["postImagePrompt"] = prompt
+    campaign.campaign_kit = kit
+    flag_modified(campaign, "campaign_kit")
+
+    meta = dict(proj.metadata_info or {})
+    meta["campaign_kit"] = kit
+    proj.metadata_info = meta
+    flag_modified(proj, "metadata_info")
+
+    db.commit()
+    db.refresh(proj)
+
+    return {
+        "success": True,
+        "media": media_result,
+        "project": _format_project_response(proj)
+    }
+
+
+@router.post("/{project_id}/campaign/generate-video")
+def generate_project_campaign_video(
+    project_id: str,
+    body: Optional[GenerateCampaignMediaRequest] = None,
+    x_gemini_key: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Generate 60s campaign video using veo-3.1-generate-preview."""
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    prompt = (body.prompt if body else None)
+    if not prompt:
+        p_name = proj.product_name or "Software Venture"
+        c_name = proj.creator_name or "Creator"
+        niche = proj.niche or "Tech"
+        kit = proj.validation_campaign.campaign_kit if proj.validation_campaign else {}
+        script_snippet = (kit.get("videoScript") if isinstance(kit, dict) else "")[:150]
+        prompt = f"A dynamic, cinematic 60-second video teaser for {p_name} co-founded with {c_name} in the {niche} space. {script_snippet}. High-tech studio lighting, futuristic screen interfaces, dramatic camera work."
+
+    from app.services.campaign_media import generate_campaign_video
+    api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
+    try:
+        media_result = generate_campaign_video(prompt, api_key=api_key)
+    except Exception as e:
+        logger.error(f"Video generation error: {e}")
+        raise HTTPException(500, f"Video generation failed: {str(e)}")
+
+    campaign = proj.validation_campaign
+    if not campaign:
+        campaign = ValidationCampaign(project_id=proj.id)
+        db.add(campaign)
+
+    kit = dict(campaign.campaign_kit or {})
+    kit["videoUrl"] = media_result["url"]
+    kit["videoPrompt"] = prompt
+    campaign.campaign_kit = kit
+    flag_modified(campaign, "campaign_kit")
+
+    meta = dict(proj.metadata_info or {})
+    meta["campaign_kit"] = kit
+    proj.metadata_info = meta
+    flag_modified(proj, "metadata_info")
+
+    db.commit()
+    db.refresh(proj)
+
+    return {
+        "success": True,
+        "media": media_result,
+        "project": _format_project_response(proj)
+    }
 
 
 @router.get("/{project_id}/creator-tasks")

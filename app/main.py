@@ -72,10 +72,13 @@ def shutdown():
 
 # ── Static files + templates (only mount if the directory exists) ─────────────
 BASE_DIR = Path(__file__).resolve().parent.parent
-_static_dir = BASE_DIR / "frontend" / "static"
-_template_dir = BASE_DIR / "frontend" / "templates"
-if _static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+_static_dir = BASE_DIR / "static"
+_static_dir.mkdir(parents=True, exist_ok=True)
+(_static_dir / "generated").mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+_frontend_static = BASE_DIR.parent / "frontend" / "static"
+_template_dir = BASE_DIR.parent / "frontend" / "templates"
 templates = Jinja2Templates(directory=str(_template_dir)) if _template_dir.exists() else None
 
 

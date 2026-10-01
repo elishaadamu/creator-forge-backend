@@ -13,3 +13,5 @@ pg8000>=1.31.2
 fpdf2==2.8.4
 cloudinary>=1.40.0
 markdown>=3.5.0
+google-genai>=1.47.0
+pillow>=10.0.0
