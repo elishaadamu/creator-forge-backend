@@ -1140,6 +1140,7 @@ class GenerateCampaignMediaRequest(BaseModel):
     prompt: Optional[str] = None
     apiKey: Optional[str] = None
     openaiApiKey: Optional[str] = None
+    postImageUrl: Optional[str] = None
 
 
 @router.post("/{project_id}/campaign/generate-image")
@@ -1155,15 +1156,21 @@ def generate_project_campaign_image(
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    prompt = (body.prompt if body else None)
-    if not prompt:
-        p_name = proj.product_name or "New Software"
-        c_name = proj.creator_name or "Creator"
-        niche = proj.niche or "Tech"
-        tagline = proj.product_tagline or ""
-        prompt = f"Create a picture of a sleek modern announcement graphic for {p_name} co-founded with {c_name} in {niche}. {tagline}. Luxury dark mode, vibrant neon accents, futuristic UI overlay, 4k high quality."
+    kit = proj.validation_campaign.campaign_kit if proj.validation_campaign else {}
+    announcement_post = kit.get("announcementPost") if isinstance(kit, dict) else ""
 
-    from app.services.campaign_media import generate_campaign_social_image
+    from app.services.campaign_media import build_creator_channel_image_prompt, generate_campaign_social_image
+    prompt = build_creator_channel_image_prompt(
+        creator_name=proj.creator_name or "Creator",
+        creator_handle=proj.creator_handle or "",
+        niche=proj.niche or "Tech",
+        product_name=proj.product_name or "New Software",
+        product_tagline=proj.product_tagline or "",
+        target_audience=proj.target_audience or "",
+        announcement_post=announcement_post or "",
+        user_prompt=body.prompt if body else None
+    )
+
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
     openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
     try:
@@ -1209,25 +1216,39 @@ def generate_project_campaign_video(
     x_openai_key: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Generate 60s campaign video using veo-3.1-generate-preview with OpenAI Video fallback."""
+    """Generate 60s campaign video teaser using OpenAI with resilient cinematic teaser compilation."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    prompt = (body.prompt if body else None)
-    if not prompt:
-        p_name = proj.product_name or "Software Venture"
-        c_name = proj.creator_name or "Creator"
-        niche = proj.niche or "Tech"
-        kit = proj.validation_campaign.campaign_kit if proj.validation_campaign else {}
-        script_snippet = (kit.get("videoScript") if isinstance(kit, dict) else "")[:150]
-        prompt = f"A dynamic, cinematic 60-second video teaser for {p_name} co-founded with {c_name} in the {niche} space. {script_snippet}. High-tech studio lighting, futuristic screen interfaces, dramatic camera work."
+    kit = proj.validation_campaign.campaign_kit if proj.validation_campaign else {}
+    video_script = kit.get("videoScript") if isinstance(kit, dict) else ""
+    post_image_url = (body.postImageUrl if body and body.postImageUrl else None) or (kit.get("postImageUrl") if isinstance(kit, dict) else None)
 
-    from app.services.campaign_media import generate_campaign_video
+    from app.services.campaign_media import build_creator_channel_video_prompt, generate_campaign_video
+    prompt = build_creator_channel_video_prompt(
+        creator_name=proj.creator_name or "Creator",
+        creator_handle=proj.creator_handle or "",
+        niche=proj.niche or "Tech",
+        product_name=proj.product_name or "Software Venture",
+        product_tagline=proj.product_tagline or "",
+        video_script=video_script or "",
+        user_prompt=body.prompt if body else None
+    )
+
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
     openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
     try:
-        media_result = generate_campaign_video(prompt, api_key=api_key, openai_api_key=openai_key)
+        media_result = generate_campaign_video(
+            prompt,
+            api_key=api_key,
+            openai_api_key=openai_key,
+            creator_name=proj.creator_name,
+            creator_handle=proj.creator_handle,
+            product_name=proj.product_name,
+            niche=proj.niche,
+            post_image_url=post_image_url
+        )
     except Exception as e:
         logger.error(f"Video generation error: {e}")
         raise HTTPException(500, detail=f"Video generation failed: {str(e)}")

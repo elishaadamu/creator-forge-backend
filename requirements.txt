@@ -15,3 +15,5 @@ cloudinary>=1.40.0
 markdown>=3.5.0
 google-genai>=1.47.0
 pillow>=10.0.0
+imageio>=2.30.0
+imageio-ffmpeg>=0.5.0
