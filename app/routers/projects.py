@@ -864,6 +864,11 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
+    meta = body.get("metadataInfo") or body.get("metadata_info")
+    cur_meta = dict(proj.metadata_info or {})
+    if meta is not None and isinstance(meta, dict):
+        cur_meta.update(meta)
+
     phase = body.get("currentPhase") if body.get("currentPhase") is not None else body.get("current_phase")
     if phase is not None:
         proj.current_phase = int(phase)
@@ -897,11 +902,6 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
     if target is not None:
         proj.presale_target = float(target)
 
-    meta = body.get("metadataInfo") or body.get("metadata_info")
-    cur_meta = dict(proj.metadata_info or {})
-    if meta is not None:
-        cur_meta.update(meta)
-
     if "mockupImage" in body or "mockup_image" in body:
         mockup_val = body.get("mockupImage") or body.get("mockup_image")
         if mockup_val and isinstance(mockup_val, str):
@@ -933,10 +933,14 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         cur_meta["messages"] = body["messages"]
 
     if "mvpBuildPlan" in body or "mvp_build_plan" in body:
-        cur_meta["mvp_build_plan"] = body.get("mvpBuildPlan") or body.get("mvp_build_plan")
+        plan_val = body.get("mvpBuildPlan") or body.get("mvp_build_plan")
+        cur_meta["mvp_build_plan"] = plan_val
+        cur_meta["mvpBuildPlan"] = plan_val
 
     if "engineeringTasks" in body or "engineering_tasks" in body:
-        cur_meta["engineering_tasks"] = body.get("engineeringTasks") or body.get("engineering_tasks")
+        tasks_val = body.get("engineeringTasks") or body.get("engineering_tasks")
+        cur_meta["engineering_tasks"] = tasks_val
+        cur_meta["engineeringTasks"] = tasks_val
 
     if "qaResults" in body or "qa_results" in body:
         cur_meta["qa_results"] = body.get("qaResults") or body.get("qa_results")
