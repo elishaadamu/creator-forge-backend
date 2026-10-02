@@ -196,6 +196,11 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "adminActivity": (proj.metadata_info or {}).get("activity_logs", []),
         "aiActivity": (proj.metadata_info or {}).get("activity_logs", []),
         "reservations": (telemetry.reservations if telemetry else []) or [],
+        "buildPlanApproved": bool((proj.metadata_info or {}).get("buildPlanApproved") or (proj.metadata_info or {}).get("build_plan_approved")),
+        "p1Complete": bool((proj.metadata_info or {}).get("p1Complete") or (proj.current_phase or 1) > 1),
+        "phase1Passed": bool((proj.metadata_info or {}).get("phase1Passed") or (proj.current_phase or 1) > 1),
+        "p2Complete": bool((proj.metadata_info or {}).get("p2Complete") or (proj.current_phase or 1) > 2),
+        "phase2Passed": bool((proj.metadata_info or {}).get("phase2Passed") or (proj.current_phase or 1) > 2),
         "mvpBuildPlan": (proj.metadata_info or {}).get("mvp_build_plan") or (proj.metadata_info or {}).get("mvpBuildPlan"),
         "engineeringTasks": (proj.metadata_info or {}).get("engineering_tasks") or (proj.metadata_info or {}).get("engineeringTasks", []),
         "qaResults": (proj.metadata_info or {}).get("qa_results") or (proj.metadata_info or {}).get("qaResults"),
@@ -873,7 +878,11 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
 
     status = body.get("status")
     if status is not None:
-        proj.status = str(status)
+        if str(status) in ["scouting", "pitching", "qualified", "validating", "building", "launched", "killed"]:
+            proj.status = str(status)
+        elif str(status) == "approved":
+            cur_meta["buildPlanApproved"] = True
+            cur_meta["build_plan_approved"] = True
 
     if "productName" in body or "product_name" in body:
         proj.product_name = str(body.get("productName") or body.get("product_name"))
@@ -1037,6 +1046,23 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
             cur_meta["diyPassPrice"] = fee_val
         except (ValueError, TypeError):
             pass
+
+    if "buildPlanApproved" in body or "build_plan_approved" in body:
+        bpa = bool(body.get("buildPlanApproved") or body.get("build_plan_approved"))
+        cur_meta["buildPlanApproved"] = bpa
+        cur_meta["build_plan_approved"] = bpa
+
+    if "p1Complete" in body or "p1_complete" in body:
+        cur_meta["p1Complete"] = bool(body.get("p1Complete") or body.get("p1_complete"))
+
+    if "phase1Passed" in body:
+        cur_meta["phase1Passed"] = bool(body.get("phase1Passed"))
+
+    if "p2Complete" in body or "p2_complete" in body:
+        cur_meta["p2Complete"] = bool(body.get("p2Complete") or body.get("p2_complete"))
+
+    if "phase2Passed" in body:
+        cur_meta["phase2Passed"] = bool(body.get("phase2Passed"))
 
     proj.metadata_info = cur_meta
     flag_modified(proj, "metadata_info")
