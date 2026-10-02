@@ -83,22 +83,33 @@ async def upload_form_file(
             folder=folder or "creator_forge"
         )
 
+        is_text = False
+        lower_fn = file.filename.lower() if file.filename else ""
+        if any(lower_fn.endswith(ext) for ext in [".js", ".jsx", ".ts", ".tsx", ".py", ".md", ".sql", ".json", ".csv", ".txt", ".env", ".yaml", ".yml", ".html", ".css", ".dart"]):
+            is_text = True
+
+        raw_text_content = content_bytes.decode("utf-8", errors="ignore") if is_text else res.get("secure_url")
+
         if project_id and res.get("success"):
             proj = db.get(CoLaunchProject, project_id)
             if proj:
                 cur_meta = dict(proj.metadata_info or {})
                 cur_files = cur_meta.get("project_files", [])
+                cur_files = [f for f in cur_files if f.get("name") != file.filename and f.get("path") != file.filename]
                 new_item = {
                     "id": f"cld-{res.get('public_id')}",
                     "public_id": res.get("public_id"),
                     "name": file.filename,
+                    "path": file.filename,
+                    "folder": folder.split("/")[-1] if ("/" in folder and not folder.endswith("codebase")) else "root",
                     "url": res.get("secure_url"),
+                    "cloudinaryUrl": res.get("secure_url"),
                     "optimizeUrl": res.get("optimize_url"),
                     "thumbnailUrl": res.get("thumbnail_url"),
                     "size": f"{(res.get('bytes', len(content_bytes)) / 1024):.1f} KB",
                     "type": res.get("format") or file.filename.split('.')[-1],
-                    "category": res.get("resource_type") or ("video" if "video" in mime else "image"),
-                    "content": res.get("secure_url"),
+                    "category": "Code" if is_text else (res.get("resource_type") or ("video" if "video" in mime else "image")),
+                    "content": raw_text_content,
                     "updatedAt": "Cloudinary CDN"
                 }
                 cur_files.append(new_item)
