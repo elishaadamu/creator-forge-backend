@@ -57,6 +57,32 @@ def _get_openai_client(api_key: Optional[str] = None):
     return OpenAI(api_key=resolved_key)
 
 
+def _get_live_env_gemini_key() -> str:
+    key = os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")
+    if key and len(key.strip()) > 10:
+        return key.strip().strip('"\'')
+    env_file = BASE_STATIC_DIR.parent / ".env"
+    if env_file.exists():
+        try:
+            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+                line = line.strip()
+                if line.startswith("GEMINI_API_KEY="):
+                    val = line.split("=", 1)[1].strip().strip('"\'')
+                    if val and len(val) > 10:
+                        return val
+        except Exception:
+            pass
+    return ""
+
+
+def _get_genai_client(api_key: Optional[str] = None):
+    from google import genai
+    resolved = (api_key or "").strip().strip('"\'') or _get_live_env_gemini_key()
+    if resolved:
+        return genai.Client(api_key=resolved)
+    return genai.Client()
+
+
 def build_creator_channel_image_prompt(
     creator_name: str,
     creator_handle: str,
@@ -128,23 +154,67 @@ def build_creator_channel_video_prompt(
     user_prompt: Optional[str] = None
 ) -> str:
     """
-    Constructs a cinematic launch video teaser prompt aligned with the creator's channel and script.
+    Constructs a cinematic launch video teaser prompt strictly grounded in the creator's channel and script stages:
+    Hook (0-8s), Problem (8-22s), Solution (22-42s), CTA (42-60s).
     """
-    script_snippet = (video_script or "").strip()[:180]
+    import re
     c_name = creator_name or "Creator"
+    handle = f"@{creator_handle.lstrip('@')}" if creator_handle else ""
     p_name = product_name or "Software Venture"
     niche_name = niche or "Tech"
 
+    hook_text = ""
+    prob_text = ""
+    sol_text = ""
+    cta_text = ""
+    if video_script:
+        raw = video_script.strip()
+        hm = re.search(r'HOOK\s*(?:\([^)]*\))?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,140})', raw, re.IGNORECASE)
+        if hm: hook_text = hm.group(1).strip().strip('"\'')
+
+        pm = re.search(r'PROBLEM\s*(?:\([^)]*\))?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,140})', raw, re.IGNORECASE)
+        if pm: prob_text = pm.group(1).strip().strip('"\'')
+
+        sm = re.search(r'(?:SOLUTION|DEMO)\s*(?:\([^)]*\))?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,140})', raw, re.IGNORECASE)
+        if sm: sol_text = sm.group(1).strip().strip('"\'')
+
+        cm = re.search(r'CTA(?:\s*&[^\n:]*)?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,140})', raw, re.IGNORECASE)
+        if cm: cta_text = cm.group(1).strip().strip('"\'')
+
     prompt_parts = [
-        f"A dynamic, cinematic 60-second video teaser announcing {p_name} co-founded with creator {c_name} in the {niche_name} space.",
-        f"Channel Theme: High-tech creator studio lighting, futuristic screen interfaces, dramatic camera dolly zoom, ultra-sharp commercial quality."
+        f"A dynamic, cinematic 60-second video demo teaser announcing {p_name} ({product_tagline or 'Software Platform'}) co-founded with creator {c_name} {handle} in the {niche_name} space.",
+        "Camera style: Dynamic studio lighting, crisp modern screen recording walkthrough, authentic tech documentary aesthetic."
     ]
-    if script_snippet:
-        prompt_parts.append(f"Script theme: {script_snippet}")
+    if hook_text:
+        prompt_parts.append(f"Hook (0-8s): \"{hook_text}\"")
+    if prob_text:
+        prompt_parts.append(f"Problem (8-22s): \"{prob_text}\"")
+    if sol_text:
+        prompt_parts.append(f"Solution & Demo (22-42s): \"{sol_text}\"")
+    if cta_text:
+        prompt_parts.append(f"Call to Action (42-60s): \"{cta_text}\"")
     if user_prompt and user_prompt.strip():
         prompt_parts.append(f"Additional direction: {user_prompt.strip()}")
 
     return " ".join(prompt_parts)
+
+
+def _wrap_text_lines(text: str, max_chars: int = 40, max_lines: int = 3) -> List[str]:
+    words = text.split()
+    lines = []
+    curr = []
+    for w in words:
+        if sum(len(x) for x in curr) + len(curr) + len(w) <= max_chars:
+            curr.append(w)
+        else:
+            if curr:
+                lines.append(" ".join(curr))
+            curr = [w]
+            if len(lines) >= max_lines:
+                break
+    if curr and len(lines) < max_lines:
+        lines.append(" ".join(curr))
+    return lines
 
 
 def _create_cinematic_mp4_teaser(
@@ -152,25 +222,57 @@ def _create_cinematic_mp4_teaser(
     creator_handle: Optional[str] = None,
     product_name: Optional[str] = None,
     niche: Optional[str] = None,
+    video_script: Optional[str] = None,
     base_image_url: Optional[str] = None,
-    duration_sec: int = 5,
-    fps: int = 24
+    duration_sec: int = 16,
+    fps: int = 15
 ) -> bytes:
     """
-    Compiles a real, high-impact cinematic MP4 launch teaser video using imageio and PIL.
-    Animates the creator post graphic or branded canvas with smooth Ken Burns zoom,
-    studio ambient glow, and crisp launch title card overlays.
+    Compiles a multi-stage cinematic MP4 launch teaser video representing the 4 core phases:
+    Hook (0-8s), Problem (8-22s), Solution (22-42s), CTA (42-60s).
+    Runs for 16 seconds (4 seconds per stage) at 15 fps for smooth, fast rendering.
     """
     import numpy as np
     from PIL import Image, ImageDraw
     import imageio.v3 as iio
+    import re
 
     w, h = 640, 368  # 16:9 divisible by 16 for optimal H.264 encoding
-    n_frames = fps * duration_sec
     c_name = creator_name or "Official Creator"
     handle = f"@{creator_handle.lstrip('@')}" if creator_handle else ""
     p_name = product_name or "New Venture OS"
     n_tag = (niche or "Tech Architecture").upper()
+
+    # Parse stages from script
+    hook = f"Why {niche or 'Modern'} workflows in {c_name}'s community are broken..."
+    problem = "Manual fragmented tools waste 10+ hours every week with painful bottlenecks."
+    solution = f"We engineered {p_name} to automate the entire process in one seamless tool."
+    cta = "Join the official founding cohort — reservation link in bio."
+
+    if video_script:
+        raw = video_script.strip()
+        hm = re.search(r'HOOK\s*(?:\([^)]*\))?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,160})', raw, re.IGNORECASE)
+        if hm and hm.group(1).strip():
+            hook = hm.group(1).strip().strip('"\'')
+
+        pm = re.search(r'PROBLEM\s*(?:\([^)]*\))?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,160})', raw, re.IGNORECASE)
+        if pm and pm.group(1).strip():
+            problem = pm.group(1).strip().strip('"\'')
+
+        sm = re.search(r'(?:SOLUTION|DEMO)\s*(?:\([^)]*\))?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,160})', raw, re.IGNORECASE)
+        if sm and sm.group(1).strip():
+            solution = sm.group(1).strip().strip('"\'')
+
+        cm = re.search(r'CTA(?:\s*&[^\n:]*)?:?\s*(?:["\']|\([^\)]*\)\s*["\']?)?([^"\n\r]{10,160})', raw, re.IGNORECASE)
+        if cm and cm.group(1).strip():
+            cta = cm.group(1).strip().strip('"\'')
+
+    stages = [
+        {"num": "01", "stage": "HOOK (0-8s)", "title": "ATTENTION HOOK", "text": hook, "accent": (245, 158, 11), "tag": "CHANNEL HOOK"},
+        {"num": "02", "stage": "PROBLEM (8-22s)", "title": "VIEWER PAIN POINT", "text": problem, "accent": (244, 63, 94), "tag": "WORKFLOW BOTTLENECK"},
+        {"num": "03", "stage": "SOLUTION (22-42s)", "title": "SOFTWARE DEMO", "text": solution, "accent": (16, 185, 129), "tag": p_name.upper()},
+        {"num": "04", "stage": "CTA (42-60s)", "title": "CALL TO ACTION", "text": cta, "accent": (56, 189, 248), "tag": "CO-LAUNCH ACCESS"}
+    ]
 
     base_img = None
     if base_image_url:
@@ -192,11 +294,18 @@ def _create_cinematic_mp4_teaser(
                 fill=(12 + r // 4, 18 + r // 3, 40 + r // 2)
             )
 
+    frames_per_stage = (fps * duration_sec) // len(stages)
+    n_frames = frames_per_stage * len(stages)
+
     frames = []
     for f in range(n_frames):
-        t = f / float(n_frames)
-        # Smooth cinematic scale 1.0 -> 1.05
-        scale = 1.0 + 0.05 * t
+        s_idx = min(f // frames_per_stage, len(stages) - 1)
+        st = stages[s_idx]
+        stage_t = (f % frames_per_stage) / float(frames_per_stage)
+        total_t = f / float(n_frames)
+
+        # Smooth camera zoom
+        scale = 1.0 + 0.03 * stage_t
         nw, nh = int(w * scale), int(h * scale)
         scaled = base_img.resize((nw, nh), Image.Resampling.BILINEAR)
         left = (nw - w) // 2
@@ -204,19 +313,35 @@ def _create_cinematic_mp4_teaser(
         frame = scaled.crop((left, top, left + w, top + h))
 
         d = ImageDraw.Draw(frame, "RGBA")
-        # Top gradient banner
-        d.rectangle([(0, 0), (w, 46)], fill=(5, 8, 18, 210))
-        # Bottom gradient banner
-        d.rectangle([(0, h - 68), (w, h)], fill=(3, 6, 15, 230))
 
-        # Accent border lines
-        d.line([(0, 46), (w, 46)], fill=(245, 158, 11, 160), width=1)
-        d.line([(0, h - 68), (w, h - 68)], fill=(56, 189, 248, 160), width=1)
+        # Stage Card Overlay
+        accent = st["accent"]
+        d.rectangle([(28, 48), (w - 28, h - 52)], fill=(8, 12, 22, 225), outline=accent, width=1)
 
-        # Text overlays
-        d.text((16, 14), f"OFFICIAL CO-LAUNCH • {n_tag}", fill=(245, 158, 11, 255))
-        d.text((16, h - 56), p_name, fill=(255, 255, 255, 255))
-        d.text((16, h - 34), f"{c_name} {handle} — Founding Cohort Access Open", fill=(203, 213, 225, 240))
+        # Stage badge
+        d.text((44, 62), f"STAGE {st['num']} / 04 • {st['stage']}", fill=accent)
+        d.text((44, 82), st['title'], fill=(255, 255, 255))
+        d.line([(44, 104), (w - 44, 104)], fill=(accent[0], accent[1], accent[2], 120), width=1)
+
+        # Body lines
+        body_lines = _wrap_text_lines(st['text'], max_chars=40, max_lines=3)
+        y_text = 118
+        for b_line in body_lines:
+            d.text((44, y_text), b_line, fill=(226, 232, 240))
+            y_text += 22
+
+        # Top Header Bar & Live Scrubber
+        d.rectangle([(0, 0), (w, 34)], fill=(4, 7, 15, 240))
+        d.text((16, 9), f"OFFICIAL VIDEO TEASER • {p_name.upper()} • {n_tag}", fill=(245, 158, 11))
+        prog_w = max(4, int(w * total_t))
+        d.rectangle([(0, 32), (prog_w, 34)], fill=accent)
+
+        # Bottom Bar
+        d.rectangle([(0, h - 38), (w, h)], fill=(4, 7, 15, 245))
+        d.text((16, h - 26), f"{c_name} {handle} — Co-Launch Video Demo", fill=(203, 213, 225))
+        sim_sec = int(total_t * 60)
+        time_str = f"0:{sim_sec:02d} / 1:00"
+        d.text((w - 92, h - 26), time_str, fill=accent)
 
         frames.append(np.array(frame))
 
@@ -390,57 +515,97 @@ def generate_campaign_video(
     product_name: Optional[str] = None,
     niche: Optional[str] = None,
     post_image_url: Optional[str] = None,
+    video_script: Optional[str] = None,
     project_id: Optional[str] = None,
     generated_by: Optional[str] = "admin",
     max_wait_seconds: int = 360
 ) -> Dict[str, Any]:
     """
-    Generates video teaser/ad using OpenAI Video (Sora) API with resilient cinematic MP4 teaser compilation.
+    Generates video teaser/ad using Google GenAI Veo (veo-3.1-generate-preview) or OpenAI Video (Sora),
+    with resilient multi-stage 16-second cinematic MP4 compilation representing the 4 core phases:
+    Hook (0-8s), Problem (8-22s), Solution (22-42s), CTA (42-60s).
     Saves the video to Cloudinary partitioned strictly under the creator's profile
     (folder: creator_forge/creators/{creator_slug}/campaigns) with local disk caching fallback.
     """
-    resolved_key = openai_api_key or api_key
-    oai_client = _get_openai_client(resolved_key)
-
-    logger.info(f"🎬 [OPENAI VIDEO GEN] Initiating video generation with prompt: {prompt[:120]}...")
-
-    candidate_models = ["sora-2", "sora-2-pro", None]
     video_bytes = None
-    model_used = "sora-2"
-    sora_attempted = False
+    model_used = "veo-3.1-generate-preview"
+    provider_used = "google-genai"
 
-    if hasattr(oai_client, "videos") and callable(getattr(oai_client.videos, "create_and_poll", None)):
-        for vm in candidate_models:
-            try:
-                sora_attempted = True
-                logger.info(f"🎬 Trying OpenAI video model: {vm or 'default'}...")
-                kwargs = {"prompt": prompt, "seconds": 8}
-                if vm:
-                    kwargs["model"] = vm
-                video_op = oai_client.videos.create_and_poll(**kwargs)
-                content = oai_client.videos.download_content(video_op.id)
-                raw = content.read() if hasattr(content, "read") else content
-                if raw:
-                    video_bytes = raw
-                    model_used = vm or "sora-2"
-                    break
-            except Exception as v_err:
-                logger.warning(f"⚠️ OpenAI video model {vm} attempt: {v_err}")
-                continue
+    # 1. Primary AI Video Model: Google GenAI Veo 3.1
+    resolved_gemini_key = api_key or _get_live_env_gemini_key()
+    try:
+        genai_client = _get_genai_client(resolved_gemini_key)
+        if genai_client and hasattr(genai_client, "models") and hasattr(genai_client.models, "generate_videos"):
+            logger.info(f"🎬 [GOOGLE GENAI VEO] Initiating video generation with veo-3.1-generate-preview (prompt: {prompt[:100]}...)...")
+            operation = genai_client.models.generate_videos(
+                model="veo-3.1-generate-preview",
+                prompt=prompt,
+            )
+            poll_start = time.time()
+            max_poll = min(max_wait_seconds, 90)
+            while not operation.done and (time.time() - poll_start) < max_poll:
+                logger.info("Waiting for Veo video generation to complete...")
+                time.sleep(10)
+                operation = genai_client.operations.get(operation)
 
-    # Graceful fallback: If Sora is restricted (404) or failed, compile genuine cinematic MP4 teaser
+            if operation.done and getattr(operation, "response", None):
+                gen_videos = getattr(operation.response, "generated_videos", None)
+                if gen_videos and len(gen_videos) > 0:
+                    dest_temp = GENERATED_MEDIA_DIR / f"veo_temp_{int(time.time())}.mp4"
+                    genai_client.files.download(file=gen_videos[0].video, destination=str(dest_temp))
+                    if dest_temp.exists() and dest_temp.stat().st_size > 0:
+                        video_bytes = dest_temp.read_bytes()
+                        model_used = "veo-3.1-generate-preview"
+                        provider_used = "google-genai"
+                        logger.info("✅ Google GenAI Veo video generation successful!")
+                        try:
+                            dest_temp.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+    except Exception as veo_err:
+        logger.warning(f"⚠️ Google GenAI Veo attempt: {veo_err}. Falling back...")
+
+    # 2. Secondary AI Video Model: OpenAI Video (Sora)
     if not video_bytes:
-        logger.info("🎬 Rendering cinematic MP4 campaign video teaser (Ken Burns studio zoom & brand overlays)...")
+        try:
+            resolved_oai_key = openai_api_key or _get_live_env_openai_key()
+            oai_client = _get_openai_client(resolved_oai_key)
+            if hasattr(oai_client, "videos") and callable(getattr(oai_client.videos, "create_and_poll", None)):
+                for vm in ["sora-2", "sora-2-pro", None]:
+                    try:
+                        logger.info(f"🎬 Trying OpenAI video model: {vm or 'default'}...")
+                        kwargs = {"prompt": prompt, "seconds": 8}
+                        if vm:
+                            kwargs["model"] = vm
+                        video_op = oai_client.videos.create_and_poll(**kwargs)
+                        content = oai_client.videos.download_content(video_op.id)
+                        raw = content.read() if hasattr(content, "read") else content
+                        if raw:
+                            video_bytes = raw
+                            model_used = vm or "sora-2"
+                            provider_used = "openai"
+                            break
+                    except Exception as v_err:
+                        logger.warning(f"⚠️ OpenAI video model {vm} attempt: {v_err}")
+                        continue
+        except Exception as oai_err:
+            logger.warning(f"⚠️ OpenAI video attempt: {oai_err}")
+
+    # 3. Resilient Multi-Stage Cinematic Compilation (Hook, Problem, Solution Demo, CTA)
+    if not video_bytes:
+        logger.info("🎬 Rendering 16s multi-stage cinematic MP4 campaign video teaser (Hook, Problem, Solution, CTA)...")
         video_bytes = _create_cinematic_mp4_teaser(
             creator_name=creator_name,
             creator_handle=creator_handle,
             product_name=product_name,
             niche=niche,
+            video_script=video_script,
             base_image_url=post_image_url,
-            duration_sec=5,
-            fps=24
+            duration_sec=16,
+            fps=15
         )
-        model_used = "launch-teaser"
+        model_used = "launch-teaser-multistage"
+        provider_used = "studio"
 
     filename = f"campaign_video_{int(time.time())}_{os.urandom(4).hex()}.mp4"
     filepath = GENERATED_MEDIA_DIR / filename

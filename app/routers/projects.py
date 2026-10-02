@@ -1320,6 +1320,7 @@ def generate_project_campaign_video(
             product_name=proj.product_name,
             niche=proj.niche,
             post_image_url=post_image_url,
+            video_script=video_script,
             project_id=proj.id,
             generated_by=caller
         )
