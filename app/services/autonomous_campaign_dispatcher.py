@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
-from app.models.co_launch import CoLaunchProject, ValidationCampaign
+from app.models.project import CoLaunchProject, ValidationCampaign
 from app.integrations.email_provider import EmailProvider
 
 logger = logging.getLogger(__name__)

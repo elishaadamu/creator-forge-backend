@@ -1280,9 +1280,21 @@ def generate_project_campaign_image(
     kit["optimizeUrl"] = media_result.get("optimize_url")
     kit["thumbnailUrl"] = media_result.get("thumbnail_url")
     kit["creatorFolder"] = media_result.get("creator_folder")
-    kit["creatorSlug"] = media_result.get("creator_slug")
     kit["isCloudinary"] = media_result.get("is_cloudinary", False)
     kit["generatedBy"] = caller
+
+    # Synchronize regenerated image into posting schedule tasks
+    schedule = list(kit.get("postingSchedule") or [])
+    for t in schedule:
+        ch = (t.get("channel") or "").lower()
+        ti = (t.get("title") or "").lower()
+        dk = t.get("draftKey") or ""
+        if dk == "announcementPost" or "announcement" in ti or "launch" in ti or ("video" not in ch and "story" not in ch and "email" not in ch and "newsletter" not in ch):
+            t["imageUrl"] = media_result["url"]
+            t["postImageUrl"] = media_result["url"]
+            t["imageGeneratedAt"] = datetime.utcnow().isoformat()
+    kit["postingSchedule"] = schedule
+
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
 
@@ -1389,9 +1401,21 @@ def generate_project_campaign_video(
     kit["videoThumbnailUrl"] = media_result.get("thumbnail_url")
     kit["videoOptimizeUrl"] = media_result.get("optimize_url")
     kit["creatorFolder"] = media_result.get("creator_folder")
-    kit["creatorSlug"] = media_result.get("creator_slug")
     kit["isVideoCloudinary"] = media_result.get("is_cloudinary", False)
     kit["generatedBy"] = caller
+
+    # Synchronize regenerated video into posting schedule tasks
+    schedule = list(kit.get("postingSchedule") or [])
+    for t in schedule:
+        ch = (t.get("channel") or "").lower()
+        ti = (t.get("title") or "").lower()
+        dk = t.get("draftKey") or ""
+        if dk == "videoScript" or "video" in ch or "video" in ti or "reel" in ch or "short" in ch or "youtube" in ch:
+            t["videoUrl"] = media_result["url"]
+            t["thumbnailUrl"] = media_result.get("thumbnail_url") or media_result["url"]
+            t["videoGeneratedAt"] = datetime.utcnow().isoformat()
+    kit["postingSchedule"] = schedule
+
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
 
