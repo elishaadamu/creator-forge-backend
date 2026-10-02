@@ -64,13 +64,13 @@ def format_daily_post_kit_email_html(
             full_img_url = f"{base_domain.rstrip('/')}/{image_url.lstrip('/')}"
 
         asset_preview_html += f"""
-        <div style="margin: 20px 0; text-align: center; background: #070a12; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; overflow: hidden;">
-          <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin: 0 0 10px 0; font-family: monospace;">📸 Visual Post Graphic Preview</p>
-          <img src="{full_img_url}" alt="Campaign Post Graphic" style="max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #334155; display: inline-block;" />
+        <div style="margin: 20px 0; text-align: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; overflow: hidden;">
+          <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin: 0 0 12px 0; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">📸 Visual Post Graphic Preview</p>
+          <img src="{full_img_url}" alt="Campaign Post Graphic" style="max-width: 100%; height: auto; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06); display: inline-block;" />
         </div>
         """
         asset_buttons_html += f"""
-        <a href="{full_img_url}" download="post_graphic_{day_num}.png" target="_blank" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 22px; font-weight: 700; font-size: 13px; border-radius: 8px; margin: 6px 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+        <a href="{full_img_url}" download="post_graphic_{day_num}.png" target="_blank" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: 700; font-size: 13px; border-radius: 10px; margin: 6px 4px; box-shadow: 0 2px 6px rgba(37,99,235,0.25);">
           📥 Download Image (PNG)
         </a>
         """
@@ -82,7 +82,7 @@ def format_daily_post_kit_email_html(
             full_vid_url = f"{base_domain.rstrip('/')}/{video_url.lstrip('/')}"
 
         asset_buttons_html += f"""
-        <a href="{full_vid_url}" download="campaign_video_day_{day_num}.mp4" target="_blank" style="display: inline-block; background: #059669; color: #ffffff; text-decoration: none; padding: 12px 22px; font-weight: 700; font-size: 13px; border-radius: 8px; margin: 6px 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+        <a href="{full_vid_url}" download="campaign_video_day_{day_num}.mp4" target="_blank" style="display: inline-block; background: #059669; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: 700; font-size: 13px; border-radius: 10px; margin: 6px 4px; box-shadow: 0 2px 6px rgba(5,150,105,0.25);">
           🎬 Download Video Teaser (MP4)
         </a>
         """
@@ -94,23 +94,28 @@ def format_daily_post_kit_email_html(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Day {day_num} Post Kit: {title}</title>
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0f19; color: #f1f5f9; margin: 0; padding: 24px 12px;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: #111827; border-radius: 16px; border: 1px solid #1f2937; overflow: hidden;">
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 28px 12px;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); overflow: hidden;">
     
+    <!-- Top Accent Bar -->
+    <tr>
+      <td height="4" style="background: linear-gradient(90deg, #2563eb 0%, #10b981 100%); line-height: 4px; font-size: 4px;">&nbsp;</td>
+    </tr>
+
     <!-- Top Header Banner -->
     <tr>
-      <td style="padding: 24px 28px; background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%); border-bottom: 1px solid #1f2937;">
+      <td style="padding: 26px 30px 20px 30px; background-color: #ffffff; border-bottom: 1px solid #f1f5f9;">
         <table width="100%" border="0" cellspacing="0" cellpadding="0">
           <tr>
             <td>
-              <span style="display: inline-block; background-color: #10b981; color: #ffffff; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 20px; font-family: monospace;">
+              <span style="display: inline-block; background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; padding: 4px 12px; border-radius: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
                 🚀 DAY {day_num} POST KIT • MILESTONE {milestone_num}
               </span>
-              <h1 style="color: #ffffff; font-size: 20px; font-weight: 800; margin: 10px 0 4px 0; line-height: 1.3;">
+              <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 12px 0 6px 0; line-height: 1.3;">
                 {title}
               </h1>
-              <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-                Co-Launch Venture: <strong style="color: #38bdf8;">{p_name}</strong> with {c_name} {handle}
+              <p style="color: #64748b; font-size: 13px; margin: 0;">
+                Co-Launch Venture: <strong style="color: #2563eb;">{p_name}</strong> with {c_name} <span style="color: #94a3b8;">{handle}</span>
               </p>
             </td>
           </tr>
@@ -120,16 +125,16 @@ def format_daily_post_kit_email_html(
 
     <!-- Main Content -->
     <tr>
-      <td style="padding: 24px 28px;">
+      <td style="padding: 24px 30px;">
         
         <!-- Quick Guidance Box -->
-        <div style="background-color: #1e293b; border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; border-left: 4px solid #38bdf8;">
+        <div style="background-color: #f8fafc; border-radius: 12px; padding: 16px 20px; margin-bottom: 22px; border: 1px solid #e2e8f0; border-left: 4px solid #2563eb;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
-              <td style="font-size: 12px; color: #cbd5e1; line-height: 1.5;">
-                <strong style="color: #ffffff;">Target Platform:</strong> {ch}<br>
-                <strong style="color: #ffffff;">Recommended Post Time:</strong> {rec_time}<br>
-                <strong style="color: #ffffff;">Action:</strong> Copy caption below, download attached visual asset, and publish!
+              <td style="font-size: 13px; color: #475569; line-height: 1.6;">
+                <strong style="color: #0f172a;">Target Platform:</strong> {ch}<br>
+                <strong style="color: #0f172a;">Recommended Post Time:</strong> {rec_time}<br>
+                <strong style="color: #0f172a;">Action:</strong> Copy caption below, download attached visual asset, and publish!
               </td>
             </tr>
           </table>
@@ -138,32 +143,32 @@ def format_daily_post_kit_email_html(
         <!-- Visual Asset Preview & Downloads -->
         {asset_preview_html}
 
-        {f'<div style="text-align: center; margin: 16px 0;">{asset_buttons_html}</div>' if asset_buttons_html else ''}
+        {f'<div style="text-align: center; margin: 18px 0 24px 0;">{asset_buttons_html}</div>' if asset_buttons_html else ''}
 
         <!-- Ready to Copy Caption Block -->
         <div style="margin-top: 24px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-size: 12px; font-weight: 700; color: #fde047; text-transform: uppercase; letter-spacing: 0.5px; font-family: monospace;">
+            <span style="font-size: 12px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">
               📋 READY-TO-PUBLISH CAPTION
             </span>
-            <span style="font-size: 11px; color: #94a3b8;">(Tap & select all to copy)</span>
+            <span style="font-size: 11px; color: #64748b; font-weight: 500;">(Tap & select all to copy)</span>
           </div>
-          <div style="background-color: #070a12; border: 1px solid #334155; border-radius: 12px; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #f1f5f9; white-space: pre-wrap; word-break: break-word; user-select: all;">
+          <div style="background-color: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 12px; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.65; color: #0f172a; white-space: pre-wrap; word-break: break-word; user-select: all;">
 {clean_caption}
           </div>
         </div>
 
         <!-- Launch Link Reminder -->
-        <div style="margin-top: 20px; padding: 12px 16px; background-color: #070a12; border: 1px solid #1e293b; border-radius: 10px; font-size: 12px; color: #94a3b8;">
-          🔗 <strong style="color: #cbd5e1;">Your Pre-Order Page:</strong> <a href="{target_link}" style="color: #38bdf8; text-decoration: underline;" target="_blank">{target_link}</a>
+        <div style="margin-top: 20px; padding: 14px 18px; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; font-size: 13px; color: #1e40af;">
+          🔗 <strong style="color: #1e3a8a;">Your Pre-Order Page:</strong> <a href="{target_link}" style="color: #2563eb; font-weight: 700; text-decoration: underline;" target="_blank">{target_link}</a>
         </div>
 
         <!-- 3-Step Simple Publishing Flow -->
-        <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid #1f2937;">
-          <p style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin: 0 0 10px 0; letter-spacing: 0.5px;">
+        <div style="margin-top: 26px; padding-top: 20px; border-top: 1px solid #f1f5f9;">
+          <p style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 0 0 10px 0; letter-spacing: 0.6px;">
             HOW TO POST IN 30 SECONDS:
           </p>
-          <ol style="margin: 0; padding-left: 20px; font-size: 12px; color: #cbd5e1; line-height: 1.8;">
+          <ol style="margin: 0; padding-left: 20px; font-size: 13px; color: #475569; line-height: 1.8;">
             <li>Copy the caption block above.</li>
             <li>Click download for the image or video on this email.</li>
             <li>Open {ch} on your phone or computer, paste the caption, attach the asset, and tap Post!</li>
@@ -175,12 +180,12 @@ def format_daily_post_kit_email_html(
 
     <!-- Footer -->
     <tr>
-      <td style="padding: 20px 28px; background-color: #070a12; border-top: 1px solid #1f2937; text-align: center;">
-        <p style="font-size: 11px; color: #64748b; margin: 0 0 6px 0;">
-          Sent autonomously by <strong>Creator Forge Co-Launch Studio</strong> for {c_name} {handle}.
+      <td style="padding: 22px 28px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
+        <p style="font-size: 12px; color: #475569; margin: 0 0 6px 0;">
+          Sent by <strong>Creator Forge Co-Launch Studio</strong> for {c_name} {handle}.
         </p>
-        <p style="font-size: 10px; color: #475569; margin: 0;">
-          Zero app logins required. Post kits are automatically delivered on your scheduled milestone days.
+        <p style="font-size: 11px; color: #94a3b8; margin: 0;">
+          Zero app logins required. Post kits are delivered on your scheduled milestone days.
         </p>
       </td>
     </tr>
