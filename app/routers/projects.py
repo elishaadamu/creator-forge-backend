@@ -113,6 +113,20 @@ class TrackVisitRequest(BaseModel):
     isNewVisitor: Optional[bool] = None
 
 
+class SendCampaignPostEmailRequest(BaseModel):
+    taskId: Optional[str] = None
+    day: Optional[int] = None
+    recipientEmail: Optional[str] = None
+    includeAssets: bool = True
+    caller: Optional[str] = None
+
+
+class ToggleAutonomousDeliveryRequest(BaseModel):
+    enabled: bool
+    recipientEmail: Optional[str] = None
+    preferredHour: Optional[int] = 9
+
+
 def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
     plan = proj.validation_plan
     campaign = proj.validation_campaign
@@ -1381,6 +1395,75 @@ def generate_project_campaign_video(
     return {
         "success": True,
         "media": media_result,
+        "project": _format_project_response(proj)
+    }
+
+
+@router.post("/{project_id}/campaign/send-post-email")
+def send_campaign_post_email_endpoint(
+    project_id: str,
+    body: Optional[SendCampaignPostEmailRequest] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Dispatches a ready-to-publish campaign post kit (caption + visual preview + asset download links)
+    directly to the creator or founder's email inbox. Zero app logins required.
+    """
+    from app.services.autonomous_campaign_dispatcher import dispatch_campaign_post_email
+    try:
+        req = body or SendCampaignPostEmailRequest()
+        result = dispatch_campaign_post_email(
+            db=db,
+            project_id=project_id,
+            task_id=req.taskId,
+            day=req.day,
+            recipient_email=req.recipientEmail,
+            caller=req.caller or "admin"
+        )
+        proj = db.get(CoLaunchProject, project_id)
+        return {
+            **result,
+            "project": _format_project_response(proj) if proj else None
+        }
+    except Exception as e:
+        logger.error(f"Error dispatching campaign post email: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@router.post("/{project_id}/campaign/toggle-autonomous-delivery")
+def toggle_autonomous_delivery_endpoint(
+    project_id: str,
+    body: ToggleAutonomousDeliveryRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Configures autonomous morning delivery of scheduled post kits directly to creator/founder inbox.
+    """
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+
+    campaign = proj.validation_campaign
+    if not campaign:
+        campaign = ValidationCampaign(project_id=proj.id)
+        db.add(campaign)
+
+    kit = dict(campaign.campaign_kit or {})
+    delivery_config = {
+        "enabled": bool(body.enabled),
+        "recipientEmail": (body.recipientEmail or "").strip() or getattr(proj, "creator_email", "") or getattr(proj, "email", ""),
+        "preferredHour": body.preferredHour or 9,
+        "updatedAt": datetime.utcnow().isoformat()
+    }
+    kit["autonomousEmailDelivery"] = delivery_config
+    campaign.campaign_kit = kit
+    flag_modified(campaign, "campaign_kit")
+    db.commit()
+    db.refresh(proj)
+
+    return {
+        "success": True,
+        "config": delivery_config,
         "project": _format_project_response(proj)
     }
 

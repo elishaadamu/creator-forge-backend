@@ -385,47 +385,128 @@ def generate_campaign_social_image(
     (folder: creator_forge/creators/{creator_slug}/campaigns) with local disk caching fallback.
     """
     import re
-    resolved_key = openai_api_key or api_key
-    oai_client = _get_openai_client(resolved_key)
-
-    logger.info(f"🎨 [IMAGE GEN] Requesting image with prompt: {prompt[:120]}...")
-
-    candidate_models = [
-        "gpt-image-1",
-        "gpt-image-1-mini",
-        "chatgpt-image-latest",
-        "dall-e-3",
-        "dall-e-2",
-    ]
-
     image_bytes = None
-    model_used = None
+    model_used = "gpt-image-2.5-sunburst"
+    provider_used = "openai"
     last_error = None
 
-    import httpx
-
-    for m in candidate_models:
-        try:
-            logger.info(f"🎨 Trying image model: {m}...")
-            res = oai_client.images.generate(
-                model=m,
-                prompt=prompt,
-                n=1,
+    # 1. Primary AI Image Model: OpenAI Responses API with gpt-6-astra & gpt-image-2.5-sunburst
+    resolved_key = openai_api_key or api_key
+    try:
+        oai_client = _get_openai_client(resolved_key)
+        if hasattr(oai_client, "responses") and callable(getattr(oai_client.responses, "create", None)):
+            logger.info(f"🎨 [OPENAI RESPONSES API] Requesting image with model='gpt-6-astra' and tool 'gpt-image-2.5-sunburst' (prompt: {prompt[:100]}...)...")
+            stream = oai_client.responses.create(
+                model="gpt-6-astra",
+                input=prompt,
+                stream=True,
+                tools=[
+                    {"type": "image_generation", "model": "gpt-image-2.5-sunburst", "partial_images": 2}
+                ],
             )
-            if res.data and getattr(res.data[0], "b64_json", None):
-                image_bytes = base64.b64decode(res.data[0].b64_json)
-                model_used = m
-                break
-            elif res.data and getattr(res.data[0], "url", None):
-                img_resp = httpx.get(res.data[0].url, timeout=30.0)
-                img_resp.raise_for_status()
-                image_bytes = img_resp.content
-                model_used = m
-                break
-        except Exception as err:
-            last_error = err
-            logger.warning(f"⚠️ Model {m} generation failed: {err}. Trying next candidate...")
-            continue
+            for event in stream:
+                event_type = getattr(event, "type", None) or (event.get("type") if isinstance(event, dict) else None)
+                if event_type == "response.image_generation_call.partial_image":
+                    idx = getattr(event, "partial_image_index", None)
+                    logger.info(f"🎨 [OPENAI] Partial image #{idx} received")
+                elif event_type == "response.completed":
+                    resp_obj = getattr(event, "response", event)
+                    output_list = getattr(resp_obj, "output", []) if hasattr(resp_obj, "output") else (resp_obj.get("output", []) if isinstance(resp_obj, dict) else [])
+                    image_data = [
+                        getattr(output, "result", None) or (output.get("result") if isinstance(output, dict) else None)
+                        for output in output_list
+                        if getattr(output, "type", None) == "image_generation_call" or (isinstance(output, dict) and output.get("type") == "image_generation_call")
+                    ]
+                    if image_data and image_data[0]:
+                        raw_val = image_data[0]
+                        if isinstance(raw_val, str):
+                            image_bytes = base64.b64decode(raw_val)
+                        elif hasattr(raw_val, "data"):
+                            image_bytes = base64.b64decode(raw_val.data)
+                        elif isinstance(raw_val, dict) and "data" in raw_val:
+                            image_bytes = base64.b64decode(raw_val["data"])
+                        elif hasattr(raw_val, "b64_json"):
+                            image_bytes = base64.b64decode(raw_val.b64_json)
+                        elif isinstance(raw_val, dict) and "b64_json" in raw_val:
+                            image_bytes = base64.b64decode(raw_val["b64_json"])
+                        else:
+                            image_bytes = base64.b64decode(str(raw_val))
+                        model_used = "gpt-image-2.5-sunburst"
+                        provider_used = "openai"
+                        logger.info("✅ OpenAI Responses API gpt-image-2.5-sunburst generation successful!")
+                        break
+    except Exception as e_resp:
+        last_error = e_resp
+        logger.warning(f"⚠️ OpenAI Responses API attempt: {e_resp}. Falling back to secondary OpenAI image models...")
+
+    # 2. Secondary AI Image Model: Standard OpenAI Image Models (gpt-image-1, dall-e-3, chatgpt-image-latest)
+    if not image_bytes:
+        try:
+            oai_client = _get_openai_client(resolved_key)
+            logger.info(f"🎨 [OPENAI IMAGES] Requesting image via standard candidate models...")
+            candidate_models = [
+                "gpt-image-1",
+                "gpt-image-1-mini",
+                "chatgpt-image-latest",
+                "dall-e-3",
+                "dall-e-2",
+            ]
+            import httpx
+            for m in candidate_models:
+                try:
+                    logger.info(f"🎨 Trying OpenAI model: {m}...")
+                    res = oai_client.images.generate(
+                        model=m,
+                        prompt=prompt,
+                        n=1,
+                    )
+                    if res.data and getattr(res.data[0], "b64_json", None):
+                        image_bytes = base64.b64decode(res.data[0].b64_json)
+                        model_used = m
+                        provider_used = "openai"
+                        break
+                    elif res.data and getattr(res.data[0], "url", None):
+                        img_resp = httpx.get(res.data[0].url, timeout=30.0)
+                        img_resp.raise_for_status()
+                        image_bytes = img_resp.content
+                        model_used = m
+                        provider_used = "openai"
+                        break
+                except Exception as err:
+                    last_error = err
+                    logger.warning(f"⚠️ Model {m} generation failed: {err}. Trying next candidate...")
+                    continue
+        except Exception as oai_err:
+            logger.warning(f"⚠️ OpenAI image generate fallback error: {oai_err}")
+
+    # 3. Tertiary fallback: Google GenAI (gemini-3.1-flash-image / imagen-3.0-generate-002)
+    if not image_bytes:
+        try:
+            resolved_gemini_key = api_key or _get_live_env_gemini_key()
+            genai_client = _get_genai_client(resolved_gemini_key)
+            if hasattr(genai_client, "interactions") and hasattr(genai_client.interactions, "create"):
+                logger.info("🎨 [GOOGLE GENAI FALLBACK] Requesting image with model='gemini-3.1-flash-image'...")
+                interaction = genai_client.interactions.create(
+                    model="gemini-3.1-flash-image",
+                    input=prompt,
+                )
+                out_img = getattr(interaction, "output_image", None)
+                if out_img and hasattr(out_img, "data"):
+                    image_bytes = base64.b64decode(out_img.data)
+                    model_used = "gemini-3.1-flash-image"
+                    provider_used = "google-genai"
+            if not image_bytes and hasattr(genai_client, "models") and hasattr(genai_client.models, "generate_images"):
+                res = genai_client.models.generate_images(
+                    model="imagen-3.0-generate-002",
+                    prompt=prompt,
+                    config=dict(number_of_images=1, output_mime_type="image/png")
+                )
+                if res and getattr(res, "generated_images", None):
+                    image_bytes = res.generated_images[0].image.image_bytes
+                    model_used = "imagen-3.0-generate-002"
+                    provider_used = "google-genai"
+        except Exception as e_genai:
+            logger.warning(f"⚠️ Google GenAI fallback skipped: {e_genai}")
 
     if not image_bytes:
         raise RuntimeError(f"Image generation failed: {last_error}")
@@ -514,8 +595,8 @@ def generate_campaign_social_image(
         "filename": filename,
         "data_url": data_url,
         "prompt": prompt,
-        "model": "announcement-graphic",
-        "provider": "ai"
+        "model": model_used or "gemini-3.1-flash-image",
+        "provider": provider_used or "google-genai"
     }
 
 
@@ -545,7 +626,7 @@ def generate_campaign_video(
     model_used = "veo-3.1-generate-preview"
     provider_used = "google-genai"
 
-    # 1. Primary AI Video Model: Google GenAI Veo 3.1
+    # 1. Primary AI Video Model: Google GenAI Veo 3.1 (veo-3.1-generate-preview)
     resolved_gemini_key = api_key or _get_live_env_gemini_key()
     try:
         genai_client = _get_genai_client(resolved_gemini_key)
@@ -555,57 +636,37 @@ def generate_campaign_video(
                 model="veo-3.1-generate-preview",
                 prompt=prompt,
             )
+
+            # Poll the operation status until the video is ready
             poll_start = time.time()
-            max_poll = min(max_wait_seconds, 35)  # Render proxy timeout guard
+            max_poll = min(max_wait_seconds, 120)
             while not operation.done and (time.time() - poll_start) < max_poll:
-                logger.info("Waiting for Veo video generation to complete...")
-                time.sleep(7)
+                print("Waiting for video generation to complete...")
+                logger.info("Waiting for video generation to complete...")
+                time.sleep(10)
                 operation = genai_client.operations.get(operation)
 
+            # Download the generated video
             if operation.done and getattr(operation, "response", None):
                 gen_videos = getattr(operation.response, "generated_videos", None)
                 if gen_videos and len(gen_videos) > 0:
-                    dest_temp = GENERATED_MEDIA_DIR / f"veo_temp_{int(time.time())}.mp4"
-                    genai_client.files.download(file=gen_videos[0].video, destination=str(dest_temp))
+                    generated_video = gen_videos[0]
+                    dest_temp = GENERATED_MEDIA_DIR / f"dialogue_example_{int(time.time())}_{os.urandom(4).hex()}.mp4"
+                    genai_client.files.download(file=generated_video.video, destination=str(dest_temp))
                     if dest_temp.exists() and dest_temp.stat().st_size > 0:
                         video_bytes = dest_temp.read_bytes()
                         model_used = "veo-3.1-generate-preview"
                         provider_used = "google-genai"
-                        logger.info("✅ Google GenAI Veo video generation successful!")
+                        print(f"Generated video saved to {dest_temp.name}")
+                        logger.info(f"✅ Generated video saved to {dest_temp.name}")
                         try:
                             dest_temp.unlink(missing_ok=True)
                         except Exception:
                             pass
             elif not operation.done:
-                logger.info("⏳ Veo is still processing in background queue; falling back to ultra-low-memory cinematic teaser to prevent HTTP timeout...")
+                logger.info("⏳ Veo generation took longer than max wait window; compiling cinematic MP4 teaser...")
     except Exception as veo_err:
-        logger.warning(f"⚠️ Google GenAI Veo attempt: {veo_err}. Falling back...")
-
-    # 2. Secondary AI Video Model: OpenAI Video (Sora)
-    if not video_bytes:
-        try:
-            resolved_oai_key = openai_api_key or _get_live_env_openai_key()
-            oai_client = _get_openai_client(resolved_oai_key)
-            if hasattr(oai_client, "videos") and callable(getattr(oai_client.videos, "create_and_poll", None)):
-                for vm in ["sora-2", "sora-2-pro", None]:
-                    try:
-                        logger.info(f"🎬 Trying OpenAI video model: {vm or 'default'}...")
-                        kwargs = {"prompt": prompt, "seconds": 8}
-                        if vm:
-                            kwargs["model"] = vm
-                        video_op = oai_client.videos.create_and_poll(**kwargs)
-                        content = oai_client.videos.download_content(video_op.id)
-                        raw = content.read() if hasattr(content, "read") else content
-                        if raw:
-                            video_bytes = raw
-                            model_used = vm or "sora-2"
-                            provider_used = "openai"
-                            break
-                    except Exception as v_err:
-                        logger.warning(f"⚠️ OpenAI video model {vm} attempt: {v_err}")
-                        continue
-        except Exception as oai_err:
-            logger.warning(f"⚠️ OpenAI video attempt: {oai_err}")
+        logger.warning(f"⚠️ Google GenAI Veo generation error: {veo_err}. Falling back to cinematic teaser...")
 
     # 3. Resilient Multi-Stage Cinematic Compilation (Hook, Problem, Solution Demo, CTA)
     if not video_bytes:
