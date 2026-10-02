@@ -386,15 +386,18 @@ def generate_campaign_video(
     openai_api_key: Optional[str] = None,
     creator_name: Optional[str] = None,
     creator_handle: Optional[str] = None,
+    creator_id: Optional[str] = None,
     product_name: Optional[str] = None,
     niche: Optional[str] = None,
     post_image_url: Optional[str] = None,
+    project_id: Optional[str] = None,
+    generated_by: Optional[str] = "admin",
     max_wait_seconds: int = 360
 ) -> Dict[str, Any]:
     """
-    Generates video teaser/ad using OpenAI Video (Sora) API.
-    If OpenAI Video endpoint is unavailable/restricted (HTTP 404),
-    gracefully compiles a high-fidelity cinematic MP4 campaign video teaser.
+    Generates video teaser/ad using OpenAI Video (Sora) API with resilient cinematic MP4 teaser compilation.
+    Saves the video to Cloudinary partitioned strictly under the creator's profile
+    (folder: creator_forge/creators/{creator_slug}/campaigns) with local disk caching fallback.
     """
     resolved_key = openai_api_key or api_key
     oai_client = _get_openai_client(resolved_key)
@@ -447,17 +450,37 @@ def generate_campaign_video(
 
     logger.info(f"✅ Generated campaign video saved locally to {filepath}")
 
-    # Build creator-specific folder for video
+    # Build creator-specific folder strictly from creator's profile
     clean_handle = (creator_handle or "").replace("@", "").strip()
-    creator_identifier = clean_handle or (creator_name or "").strip().replace(" ", "_") or "creator"
+    creator_identifier = clean_handle or (creator_name or "").strip().replace(" ", "_") or (creator_id or "creator")
     creator_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', creator_identifier).strip('_').lower() or "creator"
     clean_product = re.sub(r'[^a-zA-Z0-9_-]', '_', (product_name or "launch")).strip('_').lower() or "launch"
     cld_folder = f"creator_forge/creators/{creator_slug}/campaigns"
     cld_video_id = f"{creator_slug}_{clean_product}_video_{int(time.time())}"
 
+    tags = [
+        f"creator:{creator_slug}",
+        "campaign_teaser_video",
+        f"project:{project_id or 'general'}",
+        f"generator:{generated_by or 'admin'}"
+    ]
+    if niche:
+        tags.append(f"niche:{re.sub(r'[^a-zA-Z0-9_-]', '_', niche).lower()}")
+
+    context = {
+        "creator_name": creator_name or "Creator",
+        "creator_handle": creator_handle or "",
+        "creator_id": creator_id or "",
+        "product_name": product_name or "Launch Venture",
+        "project_id": project_id or "",
+        "generated_by": generated_by or "admin"
+    }
+
     final_video_url = f"/static/generated/{filename}"
     is_cloudinary = False
     cld_public_id_saved = None
+    optimize_url = None
+    thumbnail_url = None
 
     try:
         from app.integrations.cloudinary_service import upload_media_to_cloudinary
@@ -466,13 +489,18 @@ def generate_campaign_video(
             public_id=cld_video_id,
             folder=cld_folder,
             resource_type="video",
-            tags=[f"creator:{creator_slug}", "campaign_teaser_video"]
+            tags=tags,
+            context=context
         )
         if cld_res.get("success") and cld_res.get("secure_url"):
             final_video_url = cld_res.get("secure_url")
             is_cloudinary = True
             cld_public_id_saved = cld_res.get("public_id")
+            optimize_url = cld_res.get("optimize_url")
+            thumbnail_url = cld_res.get("thumbnail_url")
             logger.info(f"☁️ Successfully uploaded campaign video to Cloudinary under creator folder '{cld_folder}': {final_video_url}")
+        else:
+            logger.warning(f"⚠️ Cloudinary video upload returned error: {cld_res.get('error')}. Using local delivery.")
     except Exception as cld_err:
         logger.warning(f"⚠️ Cloudinary video upload skipped/failed: {cld_err}")
 
@@ -481,6 +509,8 @@ def generate_campaign_video(
         "secure_url": final_video_url,
         "cloudinary_url": final_video_url if is_cloudinary else None,
         "cloudinary_public_id": cld_public_id_saved,
+        "optimize_url": optimize_url or final_video_url,
+        "thumbnail_url": thumbnail_url,
         "creator_folder": cld_folder,
         "creator_slug": creator_slug,
         "is_cloudinary": is_cloudinary,

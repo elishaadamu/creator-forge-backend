@@ -1316,9 +1316,12 @@ def generate_project_campaign_video(
             openai_api_key=openai_key,
             creator_name=proj.creator_name,
             creator_handle=proj.creator_handle,
+            creator_id=proj.creator_id,
             product_name=proj.product_name,
             niche=proj.niche,
-            post_image_url=post_image_url
+            post_image_url=post_image_url,
+            project_id=proj.id,
+            generated_by=caller
         )
     except Exception as e:
         logger.error(f"Video generation error: {e}")
@@ -1334,11 +1337,13 @@ def generate_project_campaign_video(
     kit["videoPrompt"] = prompt
     kit["videoModel"] = media_result.get("model")
     kit["videoProvider"] = media_result.get("provider")
-    kit["cloudinaryPublicId"] = media_result.get("cloudinary_public_id")
-    kit["cloudinaryUrl"] = media_result.get("cloudinary_url")
+    kit["cloudinaryVideoPublicId"] = media_result.get("cloudinary_public_id")
+    kit["cloudinaryVideoUrl"] = media_result.get("cloudinary_url")
+    kit["videoThumbnailUrl"] = media_result.get("thumbnail_url")
+    kit["videoOptimizeUrl"] = media_result.get("optimize_url")
     kit["creatorFolder"] = media_result.get("creator_folder")
     kit["creatorSlug"] = media_result.get("creator_slug")
-    kit["isCloudinary"] = media_result.get("is_cloudinary", False)
+    kit["isVideoCloudinary"] = media_result.get("is_cloudinary", False)
     kit["generatedBy"] = caller
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
@@ -1355,6 +1360,8 @@ def generate_project_campaign_video(
         "public_id": media_result.get("cloudinary_public_id"),
         "name": "Campaign Launch Teaser Video",
         "url": media_result["url"],
+        "thumbnailUrl": media_result.get("thumbnail_url"),
+        "optimizeUrl": media_result.get("optimize_url") or media_result["url"],
         "size": "MP4 1080p",
         "type": "mp4",
         "category": "campaign_media",

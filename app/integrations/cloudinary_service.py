@@ -108,6 +108,12 @@ def upload_media_to_cloudinary(
                 auto_crop_thumbnail = crop_url or secure_url
             except Exception:
                 pass
+        elif result.get("resource_type") == "video":
+            try:
+                v_thumb, _ = cloudinary_url(pub_id, resource_type="video", format="jpg", secure=True)
+                auto_crop_thumbnail = v_thumb or secure_url
+            except Exception:
+                pass
 
         return {
             "success": True,
