@@ -47,7 +47,7 @@ def format_daily_post_kit_email_html(
     handle = f"@{creator_handle.lstrip('@')}" if creator_handle else ""
     p_name = product_name or "Software Platform"
     ch = (channel or "Social Media").upper()
-    rec_time = recommended_time or "11:00 AM - 1:00 PM local audience peak"
+    rec_time = recommended_time or "12:00 AM (Midnight) in creator's local timezone"
     target_link = preorder_url or "https://creatorforge.app/preorder"
 
     # Clean caption for copy block
@@ -282,6 +282,7 @@ def dispatch_campaign_post_email(
 
     # Format HTML
     subject = f"🚀 [Day {selected_task.get('day', 1)} Post Kit] {task_title} • {proj.product_name}"
+    tz_label = kit.get("creatorTimezone") or auto_config.get("timezone") or "local timezone"
     html_content = format_daily_post_kit_email_html(
         creator_name=proj.creator_name,
         creator_handle=proj.creator_handle,
@@ -295,7 +296,8 @@ def dispatch_campaign_post_email(
         caption_text=caption,
         image_url=image_url,
         video_url=video_url,
-        preorder_url=f"https://creatorforge.app/preorder/{(proj.product_name or 'launch').lower().replace(' ', '-')}"
+        preorder_url=f"https://creatorforge.app/preorder/{(proj.product_name or 'launch').lower().replace(' ', '-')}",
+        recommended_time=f"12:00 AM (Midnight) · {tz_label}"
     )
 
     plain_text = f"""

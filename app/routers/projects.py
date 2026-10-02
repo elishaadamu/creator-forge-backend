@@ -124,7 +124,9 @@ class SendCampaignPostEmailRequest(BaseModel):
 class ToggleAutonomousDeliveryRequest(BaseModel):
     enabled: bool
     recipientEmail: Optional[str] = None
-    preferredHour: Optional[int] = 9
+    preferredHour: Optional[int] = 0
+    timezone: Optional[str] = None
+    country: Optional[str] = None
 
 
 def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
@@ -1449,13 +1451,21 @@ def toggle_autonomous_delivery_endpoint(
         db.add(campaign)
 
     kit = dict(campaign.campaign_kit or {})
+    tz = (body.timezone or "").strip() or kit.get("creatorTimezone") or "UTC"
+    country = (body.country or "").strip() or kit.get("creatorCountry") or "United States"
     delivery_config = {
         "enabled": bool(body.enabled),
         "recipientEmail": (body.recipientEmail or "").strip() or getattr(proj, "creator_email", "") or getattr(proj, "email", ""),
-        "preferredHour": body.preferredHour or 9,
+        "preferredHour": 0 if body.preferredHour is None else body.preferredHour,
+        "timezone": tz,
+        "country": country,
+        "dispatchTime": "12:00 AM",
+        "dispatchSchedule": f"12:00 AM ({tz})",
         "updatedAt": datetime.utcnow().isoformat()
     }
     kit["autonomousEmailDelivery"] = delivery_config
+    kit["creatorTimezone"] = tz
+    kit["creatorCountry"] = country
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
     db.commit()
