@@ -48,9 +48,17 @@ def extract_public_id_from_url(url: str) -> str:
         pass
     return ""
 
-def upload_media_to_cloudinary(file_data, public_id=None, resource_type="auto", folder="creator_forge"):
+def upload_media_to_cloudinary(
+    file_data,
+    public_id=None,
+    resource_type="auto",
+    folder="creator_forge",
+    tags=None,
+    context=None,
+    **kwargs
+):
     """
-    Uploads an image, video, PDF, or document to Cloudinary CDN.
+    Uploads an image, video, PDF, or document to Cloudinary CDN with optional creator-level tags and context.
     """
     if not HAS_CLOUDINARY:
         return {
@@ -77,6 +85,12 @@ def upload_media_to_cloudinary(file_data, public_id=None, resource_type="auto", 
         if public_id:
             clean_id = public_id.replace(" ", "_")
             upload_params["public_id"] = clean_id
+        if tags:
+            upload_params["tags"] = tags
+        if context:
+            upload_params["context"] = context
+        if kwargs:
+            upload_params.update(kwargs)
 
         result = cloudinary.uploader.upload(file_data, **upload_params)
         

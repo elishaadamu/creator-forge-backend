@@ -234,16 +234,25 @@ def _create_cinematic_mp4_teaser(
 def generate_campaign_social_image(
     prompt: str,
     api_key: Optional[str] = None,
-    openai_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None,
+    creator_name: Optional[str] = None,
+    creator_handle: Optional[str] = None,
+    creator_id: Optional[str] = None,
+    niche: Optional[str] = None,
+    product_name: Optional[str] = None,
+    project_id: Optional[str] = None,
+    generated_by: Optional[str] = "admin",
 ) -> Dict[str, Any]:
     """
     Generates high-impact AI campaign graphic using OpenAI Image API.
-    Tries active OpenAI image models in order: gpt-image-1, gpt-image-1-mini, chatgpt-image-latest, dall-e-3.
+    Saves image to Cloudinary partitioned strictly under the creator's profile
+    (folder: creator_forge/creators/{creator_slug}/campaigns) with local disk caching fallback.
     """
+    import re
     resolved_key = openai_api_key or api_key
     oai_client = _get_openai_client(resolved_key)
 
-    logger.info(f"🎨 [OPENAI IMAGE GEN] Requesting image with prompt: {prompt[:120]}...")
+    logger.info(f"🎨 [IMAGE GEN] Requesting image with prompt: {prompt[:120]}...")
 
     candidate_models = [
         "gpt-image-1",
@@ -261,7 +270,7 @@ def generate_campaign_social_image(
 
     for m in candidate_models:
         try:
-            logger.info(f"🎨 Trying OpenAI model: {m}...")
+            logger.info(f"🎨 Trying image model: {m}...")
             res = oai_client.images.generate(
                 model=m,
                 prompt=prompt,
@@ -283,7 +292,7 @@ def generate_campaign_social_image(
             continue
 
     if not image_bytes:
-        raise RuntimeError(f"OpenAI image generation failed across available models: {last_error}")
+        raise RuntimeError(f"Image generation failed: {last_error}")
 
     filename = f"campaign_post_{int(time.time())}_{os.urandom(4).hex()}.png"
     filepath = GENERATED_MEDIA_DIR / filename
@@ -294,15 +303,80 @@ def generate_campaign_social_image(
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:image/png;base64,{b64_data}"
 
-    logger.info(f"✅ Generated campaign image saved to {filepath} using OpenAI ({model_used})")
+    logger.info(f"✅ Generated campaign image saved locally to {filepath}")
+
+    # Build creator-profile partitioned Cloudinary folder and public ID
+    clean_handle = (creator_handle or "").replace("@", "").strip()
+    creator_identifier = clean_handle or (creator_name or "").strip().replace(" ", "_") or (creator_id or "creator")
+    creator_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', creator_identifier).strip('_').lower() or "creator"
+    clean_product = re.sub(r'[^a-zA-Z0-9_-]', '_', (product_name or "launch")).strip('_').lower() or "launch"
+    timestamp = int(time.time())
+
+    # Specific folder based on creator's profile, not generic
+    cld_folder = f"creator_forge/creators/{creator_slug}/campaigns"
+    cld_public_id = f"{creator_slug}_{clean_product}_post_{timestamp}"
+
+    tags = [
+        f"creator:{creator_slug}",
+        "campaign_announcement_graphic",
+        f"project:{project_id or 'general'}",
+        f"generator:{generated_by or 'admin'}"
+    ]
+    if niche:
+        tags.append(f"niche:{re.sub(r'[^a-zA-Z0-9_-]', '_', niche).lower()}")
+
+    context = {
+        "creator_name": creator_name or "Creator",
+        "creator_handle": creator_handle or "",
+        "creator_id": creator_id or "",
+        "product_name": product_name or "Launch Venture",
+        "project_id": project_id or "",
+        "generated_by": generated_by or "admin"
+    }
+
+    final_url = f"/static/generated/{filename}"
+    is_cloudinary = False
+    cld_public_id_saved = None
+    optimize_url = None
+    thumbnail_url = None
+
+    try:
+        from app.integrations.cloudinary_service import upload_media_to_cloudinary
+        cld_res = upload_media_to_cloudinary(
+            file_data=str(filepath),
+            public_id=cld_public_id,
+            folder=cld_folder,
+            resource_type="image",
+            tags=tags,
+            context=context
+        )
+        if cld_res.get("success") and cld_res.get("secure_url"):
+            final_url = cld_res.get("secure_url")
+            is_cloudinary = True
+            cld_public_id_saved = cld_res.get("public_id")
+            optimize_url = cld_res.get("optimize_url")
+            thumbnail_url = cld_res.get("thumbnail_url")
+            logger.info(f"☁️ Successfully uploaded campaign image to Cloudinary under creator folder '{cld_folder}': {final_url}")
+        else:
+            logger.warning(f"⚠️ Cloudinary upload returned error: {cld_res.get('error')}. Using local delivery.")
+    except Exception as cld_err:
+        logger.warning(f"⚠️ Cloudinary upload exception: {cld_err}. Using local delivery.")
 
     return {
-        "url": f"/static/generated/{filename}",
+        "url": final_url,
+        "secure_url": final_url,
+        "cloudinary_url": final_url if is_cloudinary else None,
+        "cloudinary_public_id": cld_public_id_saved,
+        "optimize_url": optimize_url or final_url,
+        "thumbnail_url": thumbnail_url or final_url,
+        "creator_folder": cld_folder,
+        "creator_slug": creator_slug,
+        "is_cloudinary": is_cloudinary,
         "filename": filename,
         "data_url": data_url,
         "prompt": prompt,
-        "model": model_used,
-        "provider": "openai"
+        "model": "announcement-graphic",
+        "provider": "ai"
     }
 
 
@@ -363,7 +437,7 @@ def generate_campaign_video(
             duration_sec=5,
             fps=24
         )
-        model_used = "sora-cinematic-teaser"
+        model_used = "launch-teaser"
 
     filename = f"campaign_video_{int(time.time())}_{os.urandom(4).hex()}.mp4"
     filepath = GENERATED_MEDIA_DIR / filename
@@ -371,12 +445,47 @@ def generate_campaign_video(
     with open(filepath, "wb") as f:
         f.write(video_bytes)
 
-    logger.info(f"✅ Generated campaign video saved to {filepath} using {model_used}")
+    logger.info(f"✅ Generated campaign video saved locally to {filepath}")
+
+    # Build creator-specific folder for video
+    clean_handle = (creator_handle or "").replace("@", "").strip()
+    creator_identifier = clean_handle or (creator_name or "").strip().replace(" ", "_") or "creator"
+    creator_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', creator_identifier).strip('_').lower() or "creator"
+    clean_product = re.sub(r'[^a-zA-Z0-9_-]', '_', (product_name or "launch")).strip('_').lower() or "launch"
+    cld_folder = f"creator_forge/creators/{creator_slug}/campaigns"
+    cld_video_id = f"{creator_slug}_{clean_product}_video_{int(time.time())}"
+
+    final_video_url = f"/static/generated/{filename}"
+    is_cloudinary = False
+    cld_public_id_saved = None
+
+    try:
+        from app.integrations.cloudinary_service import upload_media_to_cloudinary
+        cld_res = upload_media_to_cloudinary(
+            file_data=str(filepath),
+            public_id=cld_video_id,
+            folder=cld_folder,
+            resource_type="video",
+            tags=[f"creator:{creator_slug}", "campaign_teaser_video"]
+        )
+        if cld_res.get("success") and cld_res.get("secure_url"):
+            final_video_url = cld_res.get("secure_url")
+            is_cloudinary = True
+            cld_public_id_saved = cld_res.get("public_id")
+            logger.info(f"☁️ Successfully uploaded campaign video to Cloudinary under creator folder '{cld_folder}': {final_video_url}")
+    except Exception as cld_err:
+        logger.warning(f"⚠️ Cloudinary video upload skipped/failed: {cld_err}")
 
     return {
-        "url": f"/static/generated/{filename}",
+        "url": final_video_url,
+        "secure_url": final_video_url,
+        "cloudinary_url": final_video_url if is_cloudinary else None,
+        "cloudinary_public_id": cld_public_id_saved,
+        "creator_folder": cld_folder,
+        "creator_slug": creator_slug,
+        "is_cloudinary": is_cloudinary,
         "filename": filename,
         "prompt": prompt,
         "model": model_used,
-        "provider": "openai"
+        "provider": "ai"
     }

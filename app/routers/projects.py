@@ -877,6 +877,30 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
     if meta is not None:
         cur_meta.update(meta)
 
+    if "mockupImage" in body or "mockup_image" in body:
+        mockup_val = body.get("mockupImage") or body.get("mockup_image")
+        if mockup_val and isinstance(mockup_val, str):
+            if "data:image" in mockup_val or (mockup_val.startswith("http") and "cloudinary.com" not in mockup_val):
+                try:
+                    import re, time
+                    clean_handle = (proj.creator_handle or "").replace("@", "").strip()
+                    creator_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', clean_handle or proj.creator_name or proj.creator_id or "creator").strip('_').lower() or "creator"
+                    cld_folder = f"creator_forge/creators/{creator_slug}/mockups"
+                    cld_id = f"{creator_slug}_mockup_{int(time.time())}"
+                    from app.integrations.cloudinary_service import upload_media_to_cloudinary
+                    cld_res = upload_media_to_cloudinary(
+                        file_data=mockup_val,
+                        public_id=cld_id,
+                        folder=cld_folder,
+                        resource_type="image",
+                        tags=[f"creator:{creator_slug}", "product_mockup"]
+                    )
+                    if cld_res.get("success") and cld_res.get("secure_url"):
+                        mockup_val = cld_res.get("secure_url")
+                except Exception as m_err:
+                    logger.warning(f"Mockup Cloudinary upload fallback: {m_err}")
+            cur_meta["mockup_image"] = mockup_val
+
     if "projectFiles" in body or "project_files" in body:
         cur_meta["project_files"] = body.get("projectFiles") or body.get("project_files")
 
@@ -1141,6 +1165,7 @@ class GenerateCampaignMediaRequest(BaseModel):
     apiKey: Optional[str] = None
     openaiApiKey: Optional[str] = None
     postImageUrl: Optional[str] = None
+    caller: Optional[str] = "admin"  # 'creator' or 'admin'
 
 
 @router.post("/{project_id}/campaign/generate-image")
@@ -1149,9 +1174,10 @@ def generate_project_campaign_image(
     body: Optional[GenerateCampaignMediaRequest] = None,
     x_gemini_key: Optional[str] = Header(None),
     x_openai_key: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Generate social media post image using OpenAI image models."""
+    """Generate social media post image and store in Cloudinary under creator's profile folder."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -1173,8 +1199,21 @@ def generate_project_campaign_image(
 
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
     openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
+    caller = (body.caller if body and body.caller else None) or x_user_role or "admin"
+
     try:
-        media_result = generate_campaign_social_image(prompt, api_key=api_key, openai_api_key=openai_key)
+        media_result = generate_campaign_social_image(
+            prompt,
+            api_key=api_key,
+            openai_api_key=openai_key,
+            creator_name=proj.creator_name,
+            creator_handle=proj.creator_handle,
+            creator_id=proj.creator_id,
+            niche=proj.niche,
+            product_name=proj.product_name,
+            project_id=proj.id,
+            generated_by=caller
+        )
     except Exception as e:
         logger.error(f"Image generation error: {e}")
         raise HTTPException(500, detail=f"Image generation failed: {str(e)}")
@@ -1190,11 +1229,40 @@ def generate_project_campaign_image(
     kit["postImagePrompt"] = prompt
     kit["postImageModel"] = media_result.get("model")
     kit["postImageProvider"] = media_result.get("provider")
+    kit["cloudinaryPublicId"] = media_result.get("cloudinary_public_id")
+    kit["cloudinaryUrl"] = media_result.get("cloudinary_url")
+    kit["optimizeUrl"] = media_result.get("optimize_url")
+    kit["thumbnailUrl"] = media_result.get("thumbnail_url")
+    kit["creatorFolder"] = media_result.get("creator_folder")
+    kit["creatorSlug"] = media_result.get("creator_slug")
+    kit["isCloudinary"] = media_result.get("is_cloudinary", False)
+    kit["generatedBy"] = caller
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
 
     meta = dict(proj.metadata_info or {})
     meta["campaign_kit"] = kit
+
+    # Synchronize asset into project_files list partitioned by creator profile
+    cur_files = list(meta.get("project_files") or [])
+    file_id = f"cld-{media_result.get('cloudinary_public_id') or media_result.get('filename')}"
+    cur_files = [f for f in cur_files if f.get("name") != "Campaign Announcement Graphic" and f.get("id") != file_id]
+    cur_files.append({
+        "id": file_id,
+        "public_id": media_result.get("cloudinary_public_id"),
+        "name": "Campaign Announcement Graphic",
+        "url": media_result["url"],
+        "optimizeUrl": media_result.get("optimize_url") or media_result["url"],
+        "thumbnailUrl": media_result.get("thumbnail_url") or media_result["url"],
+        "size": "1024x1024",
+        "type": "png",
+        "category": "campaign_media",
+        "creatorSlug": media_result.get("creator_slug"),
+        "folder": media_result.get("creator_folder"),
+        "generatedBy": caller,
+        "updatedAt": "Cloudinary CDN" if media_result.get("cloudinary_url") else "Local Storage"
+    })
+    meta["project_files"] = cur_files
     proj.metadata_info = meta
     flag_modified(proj, "metadata_info")
 
@@ -1214,9 +1282,10 @@ def generate_project_campaign_video(
     body: Optional[GenerateCampaignMediaRequest] = None,
     x_gemini_key: Optional[str] = Header(None),
     x_openai_key: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Generate 60s campaign video teaser using OpenAI with resilient cinematic teaser compilation."""
+    """Generate 60s campaign video teaser and store in Cloudinary under creator's profile folder."""
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -1238,6 +1307,8 @@ def generate_project_campaign_video(
 
     api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
     openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
+    caller = (body.caller if body and body.caller else None) or x_user_role or "admin"
+
     try:
         media_result = generate_campaign_video(
             prompt,
@@ -1263,11 +1334,36 @@ def generate_project_campaign_video(
     kit["videoPrompt"] = prompt
     kit["videoModel"] = media_result.get("model")
     kit["videoProvider"] = media_result.get("provider")
+    kit["cloudinaryPublicId"] = media_result.get("cloudinary_public_id")
+    kit["cloudinaryUrl"] = media_result.get("cloudinary_url")
+    kit["creatorFolder"] = media_result.get("creator_folder")
+    kit["creatorSlug"] = media_result.get("creator_slug")
+    kit["isCloudinary"] = media_result.get("is_cloudinary", False)
+    kit["generatedBy"] = caller
     campaign.campaign_kit = kit
     flag_modified(campaign, "campaign_kit")
 
     meta = dict(proj.metadata_info or {})
     meta["campaign_kit"] = kit
+
+    # Synchronize video into project_files list partitioned by creator profile
+    cur_files = list(meta.get("project_files") or [])
+    file_id = f"cld-{media_result.get('cloudinary_public_id') or media_result.get('filename')}"
+    cur_files = [f for f in cur_files if f.get("name") != "Campaign Launch Teaser Video" and f.get("id") != file_id]
+    cur_files.append({
+        "id": file_id,
+        "public_id": media_result.get("cloudinary_public_id"),
+        "name": "Campaign Launch Teaser Video",
+        "url": media_result["url"],
+        "size": "MP4 1080p",
+        "type": "mp4",
+        "category": "campaign_media",
+        "creatorSlug": media_result.get("creator_slug"),
+        "folder": media_result.get("creator_folder"),
+        "generatedBy": caller,
+        "updatedAt": "Cloudinary CDN" if media_result.get("cloudinary_url") else "Local Storage"
+    })
+    meta["project_files"] = cur_files
     proj.metadata_info = meta
     flag_modified(proj, "metadata_info")
 
