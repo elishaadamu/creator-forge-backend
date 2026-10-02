@@ -234,10 +234,13 @@ def _create_cinematic_mp4_teaser(
     """
     import numpy as np
     from PIL import Image, ImageDraw
-    import imageio.v3 as iio
+    import imageio.v2 as iio
     import re
+    import gc
 
-    w, h = 640, 368  # 16:9 divisible by 16 for optimal H.264 encoding
+    w, h = 480, 272  # 16:9 divisible by 16, highly optimized for low-memory Render environments (sub-2MB RAM)
+    duration_sec = 12
+    fps = 10
     c_name = creator_name or "Official Creator"
     handle = f"@{creator_handle.lstrip('@')}" if creator_handle else ""
     p_name = product_name or "New Venture OS"
@@ -288,7 +291,7 @@ def _create_cinematic_mp4_teaser(
     if not base_img:
         base_img = Image.new("RGB", (w, h), color=(10, 16, 28))
         d_base = ImageDraw.Draw(base_img)
-        for r in range(160, 0, -10):
+        for r in range(120, 0, -10):
             d_base.ellipse(
                 [(w // 2 - r, h // 2 - r), (w // 2 + r, h // 2 + r)],
                 fill=(12 + r // 4, 18 + r // 3, 40 + r // 2)
@@ -297,7 +300,12 @@ def _create_cinematic_mp4_teaser(
     frames_per_stage = (fps * duration_sec) // len(stages)
     n_frames = frames_per_stage * len(stages)
 
-    frames = []
+    temp_filename = f"temp_teaser_{int(time.time())}_{os.urandom(4).hex()}.mp4"
+    temp_path = GENERATED_MEDIA_DIR / temp_filename
+
+    # Stream frame by frame to disk to avoid buffering all frames in RAM (prevents Render 512MB OOM)
+    writer = iio.get_writer(str(temp_path), fps=fps, codec='libx264', quality=5, pixelformat='yuv420p')
+
     for f in range(n_frames):
         s_idx = min(f // frames_per_stage, len(stages) - 1)
         st = stages[s_idx]
@@ -316,43 +324,44 @@ def _create_cinematic_mp4_teaser(
 
         # Stage Card Overlay
         accent = st["accent"]
-        d.rectangle([(28, 48), (w - 28, h - 52)], fill=(8, 12, 22, 225), outline=accent, width=1)
+        d.rectangle([(20, 42), (w - 20, h - 46)], fill=(8, 12, 22, 225), outline=accent, width=1)
 
         # Stage badge
-        d.text((44, 62), f"STAGE {st['num']} / 04 • {st['stage']}", fill=accent)
-        d.text((44, 82), st['title'], fill=(255, 255, 255))
-        d.line([(44, 104), (w - 44, 104)], fill=(accent[0], accent[1], accent[2], 120), width=1)
+        d.text((32, 54), f"STAGE {st['num']} / 04 • {st['stage']}", fill=accent)
+        d.text((32, 72), st['title'], fill=(255, 255, 255))
+        d.line([(32, 92), (w - 32, 92)], fill=(accent[0], accent[1], accent[2], 120), width=1)
 
         # Body lines
-        body_lines = _wrap_text_lines(st['text'], max_chars=40, max_lines=3)
-        y_text = 118
+        body_lines = _wrap_text_lines(st['text'], max_chars=36, max_lines=3)
+        y_text = 104
         for b_line in body_lines:
-            d.text((44, y_text), b_line, fill=(226, 232, 240))
-            y_text += 22
+            d.text((32, y_text), b_line, fill=(226, 232, 240))
+            y_text += 20
 
         # Top Header Bar & Live Scrubber
-        d.rectangle([(0, 0), (w, 34)], fill=(4, 7, 15, 240))
-        d.text((16, 9), f"OFFICIAL VIDEO TEASER • {p_name.upper()} • {n_tag}", fill=(245, 158, 11))
+        d.rectangle([(0, 0), (w, 30)], fill=(4, 7, 15, 240))
+        d.text((12, 8), f"OFFICIAL VIDEO TEASER • {p_name.upper()} • {n_tag}", fill=(245, 158, 11))
         prog_w = max(4, int(w * total_t))
-        d.rectangle([(0, 32), (prog_w, 34)], fill=accent)
+        d.rectangle([(0, 28), (prog_w, 30)], fill=accent)
 
         # Bottom Bar
-        d.rectangle([(0, h - 38), (w, h)], fill=(4, 7, 15, 245))
-        d.text((16, h - 26), f"{c_name} {handle} — Co-Launch Video Demo", fill=(203, 213, 225))
+        d.rectangle([(0, h - 34), (w, h)], fill=(4, 7, 15, 245))
+        d.text((12, h - 24), f"{c_name} {handle} — Co-Launch Video Demo", fill=(203, 213, 225))
         sim_sec = int(total_t * 60)
         time_str = f"0:{sim_sec:02d} / 1:00"
-        d.text((w - 92, h - 26), time_str, fill=accent)
+        d.text((w - 80, h - 24), time_str, fill=accent)
 
-        frames.append(np.array(frame))
+        writer.append_data(np.array(frame))
+        del frame
 
-    temp_filename = f"temp_teaser_{int(time.time())}_{os.urandom(4).hex()}.mp4"
-    temp_path = GENERATED_MEDIA_DIR / temp_filename
-    iio.imwrite(temp_path, frames, fps=fps)
+    writer.close()
     data = temp_path.read_bytes()
     try:
         temp_path.unlink(missing_ok=True)
     except Exception:
         pass
+
+    gc.collect()
     return data
 
 
@@ -487,6 +496,9 @@ def generate_campaign_social_image(
     except Exception as cld_err:
         logger.warning(f"⚠️ Cloudinary upload exception: {cld_err}. Using local delivery.")
 
+    import gc
+    gc.collect()
+
     return {
         "url": final_url,
         "secure_url": final_url,
@@ -542,10 +554,10 @@ def generate_campaign_video(
                 prompt=prompt,
             )
             poll_start = time.time()
-            max_poll = min(max_wait_seconds, 90)
+            max_poll = min(max_wait_seconds, 35)  # Render proxy timeout guard
             while not operation.done and (time.time() - poll_start) < max_poll:
                 logger.info("Waiting for Veo video generation to complete...")
-                time.sleep(10)
+                time.sleep(7)
                 operation = genai_client.operations.get(operation)
 
             if operation.done and getattr(operation, "response", None):
@@ -562,6 +574,8 @@ def generate_campaign_video(
                             dest_temp.unlink(missing_ok=True)
                         except Exception:
                             pass
+            elif not operation.done:
+                logger.info("⏳ Veo is still processing in background queue; falling back to ultra-low-memory cinematic teaser to prevent HTTP timeout...")
     except Exception as veo_err:
         logger.warning(f"⚠️ Google GenAI Veo attempt: {veo_err}. Falling back...")
 
@@ -668,6 +682,9 @@ def generate_campaign_video(
             logger.warning(f"⚠️ Cloudinary video upload returned error: {cld_res.get('error')}. Using local delivery.")
     except Exception as cld_err:
         logger.warning(f"⚠️ Cloudinary video upload skipped/failed: {cld_err}")
+
+    import gc
+    gc.collect()
 
     return {
         "url": final_video_url,
