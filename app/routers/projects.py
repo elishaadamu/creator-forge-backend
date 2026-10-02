@@ -1288,8 +1288,17 @@ def generate_project_campaign_image(
     for t in schedule:
         ch = (t.get("channel") or "").lower()
         ti = (t.get("title") or "").lower()
-        dk = t.get("draftKey") or ""
-        if dk == "announcementPost" or "announcement" in ti or "launch" in ti or ("video" not in ch and "story" not in ch and "email" not in ch and "newsletter" not in ch):
+        is_post_task = dk == "announcementPost" or (
+            dk != "videoScript"
+            and dk != "newsletterDraft"
+            and dk != "storySequence"
+            and (
+                "announcement" in ti
+                or "launch" in ti
+                or ("video" not in ch and "story" not in ch and "email" not in ch and "newsletter" not in ch)
+            )
+        )
+        if is_post_task:
             t["imageUrl"] = media_result["url"]
             t["postImageUrl"] = media_result["url"]
             t["imageGeneratedAt"] = datetime.utcnow().isoformat()
@@ -1410,10 +1419,26 @@ def generate_project_campaign_video(
         ch = (t.get("channel") or "").lower()
         ti = (t.get("title") or "").lower()
         dk = t.get("draftKey") or ""
-        if dk == "videoScript" or "video" in ch or "video" in ti or "reel" in ch or "short" in ch or "youtube" in ch:
+        is_video_task = dk == "videoScript" or (
+            dk != "announcementPost"
+            and dk != "newsletterDraft"
+            and dk != "storySequence"
+            and (
+                "video" in ch
+                or "video" in ti
+                or "reel" in ch
+                or "short" in ch
+                or ("youtube" in ch and "community" not in ch)
+            )
+        )
+        if is_video_task:
             t["videoUrl"] = media_result["url"]
             t["thumbnailUrl"] = media_result.get("thumbnail_url") or media_result["url"]
             t["videoGeneratedAt"] = datetime.utcnow().isoformat()
+        elif dk == "announcementPost" and "videoUrl" in t:
+            t.pop("videoUrl", None)
+            t.pop("thumbnailUrl", None)
+            t.pop("videoGeneratedAt", None)
     kit["postingSchedule"] = schedule
 
     campaign.campaign_kit = kit
