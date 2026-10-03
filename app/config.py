@@ -80,6 +80,7 @@ class Settings:
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "creatorforgeweb@12019303.brevosend.com")
     RECIPIENT_EMAIL: str = os.getenv("RECIPIENT_EMAIL", "adamsfair12@gmail.com")
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://creator-forge-frontend.vercel.app")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "https://creator-forge-backend-ls4s.onrender.com")
 
     # =========================================================================
     # STUDIO BRANDING & LOGO (Easily customizable for emails and public pages)

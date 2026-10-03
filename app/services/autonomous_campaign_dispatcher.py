@@ -60,7 +60,7 @@ def format_daily_post_kit_email_html(
     if image_url:
         full_img_url = image_url
         if not full_img_url.startswith("http"):
-            base_domain = getattr(settings, "BACKEND_URL", "https://creator-forge-backend.onrender.com")
+            base_domain = getattr(settings, "BACKEND_URL", "https://creator-forge-backend-ls4s.onrender.com")
             full_img_url = f"{base_domain.rstrip('/')}/{image_url.lstrip('/')}"
 
         asset_preview_html += f"""
@@ -78,7 +78,7 @@ def format_daily_post_kit_email_html(
     if video_url:
         full_vid_url = video_url
         if not full_vid_url.startswith("http"):
-            base_domain = getattr(settings, "BACKEND_URL", "https://creator-forge-backend.onrender.com")
+            base_domain = getattr(settings, "BACKEND_URL", "https://creator-forge-backend-ls4s.onrender.com")
             full_vid_url = f"{base_domain.rstrip('/')}/{video_url.lstrip('/')}"
 
         asset_buttons_html += f"""

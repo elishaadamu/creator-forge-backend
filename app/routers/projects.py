@@ -197,6 +197,10 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "aiActivity": (proj.metadata_info or {}).get("activity_logs", []),
         "reservations": (telemetry.reservations if telemetry else []) or [],
         "buildPlanApproved": bool((proj.metadata_info or {}).get("buildPlanApproved") or (proj.metadata_info or {}).get("build_plan_approved")),
+        "buildCompleted": bool((proj.metadata_info or {}).get("buildCompleted") or (proj.metadata_info or {}).get("build_completed") or (proj.metadata_info or {}).get("mvpBuildDone") or (proj.current_step in ["beta", "gate"]) or (proj.current_phase or 1) > 2),
+        "mvpBuildDone": bool((proj.metadata_info or {}).get("mvpBuildDone") or (proj.metadata_info or {}).get("mvp_build_done") or (proj.metadata_info or {}).get("buildCompleted") or (proj.current_step in ["beta", "gate"]) or (proj.current_phase or 1) > 2),
+        "betaTestingCompleted": bool((proj.metadata_info or {}).get("betaTestingCompleted") or (proj.metadata_info or {}).get("beta_testing_completed") or (proj.metadata_info or {}).get("betaApproved") or (proj.current_step in ["gate"]) or (proj.current_phase or 1) > 2),
+        "betaApproved": bool((proj.metadata_info or {}).get("betaApproved") or (proj.metadata_info or {}).get("beta_approved") or (proj.metadata_info or {}).get("betaTestingCompleted") or (proj.current_step in ["gate"]) or (proj.current_phase or 1) > 2),
         "p1Complete": bool((proj.metadata_info or {}).get("p1Complete") or (proj.current_phase or 1) > 1),
         "phase1Passed": bool((proj.metadata_info or {}).get("phase1Passed") or (proj.current_phase or 1) > 1),
         "p2Complete": bool((proj.metadata_info or {}).get("p2Complete") or (proj.current_phase or 1) > 2),
@@ -880,6 +884,14 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
     step = body.get("currentStep") or body.get("current_step")
     if step is not None:
         proj.current_step = str(step)
+        if str(step) in ["beta", "gate"]:
+            cur_meta["buildCompleted"] = True
+            cur_meta["mvpBuildDone"] = True
+            cur_meta["step2Done"] = True
+        if str(step) == "gate":
+            cur_meta["betaTestingCompleted"] = True
+            cur_meta["betaApproved"] = True
+            cur_meta["step3Done"] = True
 
     status = body.get("status")
     if status is not None:
@@ -1055,6 +1067,38 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         bpa = bool(body.get("buildPlanApproved") or body.get("build_plan_approved"))
         cur_meta["buildPlanApproved"] = bpa
         cur_meta["build_plan_approved"] = bpa
+
+    if "buildCompleted" in body or "build_completed" in body:
+        bc = bool(body.get("buildCompleted") or body.get("build_completed"))
+        cur_meta["buildCompleted"] = bc
+        cur_meta["build_completed"] = bc
+
+    if "mvpBuildDone" in body or "mvp_build_done" in body:
+        mbd = bool(body.get("mvpBuildDone") or body.get("mvp_build_done"))
+        cur_meta["mvpBuildDone"] = mbd
+        cur_meta["mvp_build_done"] = mbd
+
+    if "betaTestingCompleted" in body or "beta_testing_completed" in body:
+        btc = bool(body.get("betaTestingCompleted") or body.get("beta_testing_completed"))
+        cur_meta["betaTestingCompleted"] = btc
+        cur_meta["beta_testing_completed"] = btc
+
+    if "betaApproved" in body or "beta_approved" in body:
+        ba = bool(body.get("betaApproved") or body.get("beta_approved"))
+        cur_meta["betaApproved"] = ba
+        cur_meta["beta_approved"] = ba
+
+    if "step2Done" in body or "step2_done" in body:
+        s2d = bool(body.get("step2Done") or body.get("step2_done"))
+        cur_meta["step2Done"] = s2d
+        cur_meta["buildCompleted"] = s2d
+        cur_meta["mvpBuildDone"] = s2d
+
+    if "step3Done" in body or "step3_done" in body:
+        s3d = bool(body.get("step3Done") or body.get("step3_done"))
+        cur_meta["step3Done"] = s3d
+        cur_meta["betaTestingCompleted"] = s3d
+        cur_meta["betaApproved"] = s3d
 
     if "p1Complete" in body or "p1_complete" in body:
         cur_meta["p1Complete"] = bool(body.get("p1Complete") or body.get("p1_complete"))

@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, Response, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -21,6 +22,9 @@ app = FastAPI(
     version=settings.APP_VERSION,
     description="Internal Creator Forge ops pipeline — not for public use",
 )
+
+# ── Compress JSON and text responses to save up to 80% outbound bandwidth ──
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ── CORS (allow Vite dev server + Vercel frontend) ───────────────────────────
 app.add_middleware(
