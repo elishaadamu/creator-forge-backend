@@ -200,12 +200,44 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         sub = meta_dict.get("diySubscription")
         if isinstance(sub, dict):
             fee_candidate = sub.get("amount")
+
+    has_custom_fee = False
+    resolved_fee = None
     if fee_candidate is not None:
         try:
             resolved_fee = float(fee_candidate)
+            has_custom_fee = True
         except (ValueError, TypeError):
-            resolved_fee = 50.0
-    else:
+            resolved_fee = None
+
+    if resolved_fee is None:
+        # Check global workflow state for default pass fee
+        try:
+            from app.models.workflow_state import WorkflowState
+            from app.database import SessionLocal
+            with SessionLocal() as s:
+                ws = s.get(WorkflowState, "default")
+                if ws and ws.extra_state:
+                    wf_fee = ws.extra_state.get("default_pass_price") or ws.extra_state.get("cobuilder_pass_price")
+                    if wf_fee is not None:
+                        resolved_fee = float(wf_fee)
+        except Exception:
+            pass
+
+    if resolved_fee is None:
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("workflow_states")
+            if coll is not None:
+                doc = coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]})
+                if doc and doc.get("extra_state"):
+                    wf_fee = doc["extra_state"].get("default_pass_price") or doc["extra_state"].get("cobuilder_pass_price")
+                    if wf_fee is not None:
+                        resolved_fee = float(wf_fee)
+        except Exception:
+            pass
+
+    if resolved_fee is None:
         resolved_fee = 50.0
 
     return {
@@ -279,6 +311,7 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "diyOfferSentAt": meta_dict.get("diy_offer_sent_at") or meta_dict.get("diyOfferSentAt"),
         "diyFee": resolved_fee,
         "diyPassPrice": resolved_fee,
+        "hasCustomFee": has_custom_fee,
         "recentPosts": meta_dict.get("recent_posts") or meta_dict.get("recentPosts") or meta_dict.get("videos") or [],
         "videos": meta_dict.get("recent_posts") or meta_dict.get("recentPosts") or meta_dict.get("videos") or [],
         "channelUrl": meta_dict.get("channel_url") or meta_dict.get("channelUrl") or (f"https://www.youtube.com/@{proj.creator_handle.lstrip('@')}" if proj.creator_handle else None),
@@ -952,14 +985,28 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
                         doc_meta.update(meta_in)
                     for k, v in body.items():
                         doc[k] = v
-                    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body:
-                        f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice", 50.0)
-                        f_val = float(f_raw)
-                        doc["diyFee"] = f_val
-                        doc["diyPassPrice"] = f_val
-                        doc_meta["diy_fee"] = f_val
-                        doc_meta["diyFee"] = f_val
-                        doc_meta["diyPassPrice"] = f_val
+                    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault"):
+                        f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
+                        if body.get("resetToDefault") or f_raw is None or f_raw == "":
+                            doc_meta.pop("diy_fee", None)
+                            doc_meta.pop("diyFee", None)
+                            doc_meta.pop("diyPassPrice", None)
+                            doc_meta["hasCustomFee"] = False
+                            doc.pop("diyFee", None)
+                            doc.pop("diyPassPrice", None)
+                            doc["hasCustomFee"] = False
+                        else:
+                            try:
+                                f_val = float(f_raw)
+                                doc["diyFee"] = f_val
+                                doc["diyPassPrice"] = f_val
+                                doc_meta["diy_fee"] = f_val
+                                doc_meta["diyFee"] = f_val
+                                doc_meta["diyPassPrice"] = f_val
+                                doc_meta["hasCustomFee"] = True
+                                doc["hasCustomFee"] = True
+                            except (ValueError, TypeError):
+                                pass
                     doc["metadataInfo"] = doc_meta
                     doc["metadata_info"] = doc_meta
                     doc_id = doc.get("_id", project_id)
@@ -1165,15 +1212,22 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         cur_meta["diy_offer_sent_at"] = dosa
         cur_meta["diyOfferSentAt"] = dosa
 
-    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body:
+    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault"):
         fee_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
-        try:
-            fee_val = float(fee_raw)
-            cur_meta["diy_fee"] = fee_val
-            cur_meta["diyFee"] = fee_val
-            cur_meta["diyPassPrice"] = fee_val
-        except (ValueError, TypeError):
-            pass
+        if body.get("resetToDefault") or fee_raw is None or fee_raw == "":
+            cur_meta.pop("diy_fee", None)
+            cur_meta.pop("diyFee", None)
+            cur_meta.pop("diyPassPrice", None)
+            cur_meta["hasCustomFee"] = False
+        else:
+            try:
+                fee_val = float(fee_raw)
+                cur_meta["diy_fee"] = fee_val
+                cur_meta["diyFee"] = fee_val
+                cur_meta["diyPassPrice"] = fee_val
+                cur_meta["hasCustomFee"] = True
+            except (ValueError, TypeError):
+                pass
 
     if "buildPlanApproved" in body or "build_plan_approved" in body:
         bpa = bool(body.get("buildPlanApproved") or body.get("build_plan_approved"))

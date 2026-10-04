@@ -26,8 +26,23 @@ class WorkflowStateUpdate(BaseModel):
     replace: Optional[bool] = False
 
 
+def _sync_workflow_to_mongo(state_dict: dict):
+    """Mirror global workflow state directly into MongoDB workflow_states collection."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("workflow_states")
+        if coll is not None and state_dict and "id" in state_dict:
+            doc = dict(state_dict)
+            doc["_id"] = doc["id"]
+            coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    except Exception as e:
+        pass
+
+
 def _format_state(state: WorkflowState) -> dict:
-    return {
+    extra = dict(state.extra_state or {})
+    default_pass_price = extra.get("default_pass_price") or extra.get("cobuilder_pass_price")
+    res = {
         "id": state.id,
         "active_section": state.active_section or "section1",
         "active_step": state.active_step or 1,
@@ -38,25 +53,54 @@ def _format_state(state: WorkflowState) -> dict:
         "answer_sent_map": state.answer_sent_map or {},
         "persuasion_sent_map": state.persuasion_sent_map or {},
         "creator_stage_map": state.creator_stage_map or {},
-        "extra_state": state.extra_state or {},
+        "extra_state": extra,
+        "default_pass_price": default_pass_price,
+        "cobuilder_pass_price": default_pass_price,
         "updated_at": state.updated_at.isoformat() if state.updated_at else None,
     }
+    _sync_workflow_to_mongo(res)
+    return res
 
 
 def _get_or_create_state(db: Session) -> WorkflowState:
     state = db.get(WorkflowState, "default")
     if not state:
-        state = WorkflowState(
-            id="default",
-            active_section="section1",
-            active_step=1,
-            pitch_sent_map={},
-            ai_choice_map={},
-            answer_sent_map={},
-            persuasion_sent_map={},
-            creator_stage_map={},
-            extra_state={},
-        )
+        # Check MongoDB fallback
+        mongo_doc = None
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("workflow_states")
+            if coll is not None:
+                mongo_doc = coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]})
+        except Exception:
+            pass
+
+        if mongo_doc:
+            state = WorkflowState(
+                id="default",
+                active_section=mongo_doc.get("active_section") or "section1",
+                active_step=mongo_doc.get("active_step") or 1,
+                selected_creator_id=mongo_doc.get("selected_creator_id"),
+                active_project_id=mongo_doc.get("active_project_id"),
+                pitch_sent_map=mongo_doc.get("pitch_sent_map") or {},
+                ai_choice_map=mongo_doc.get("ai_choice_map") or {},
+                answer_sent_map=mongo_doc.get("answer_sent_map") or {},
+                persuasion_sent_map=mongo_doc.get("persuasion_sent_map") or {},
+                creator_stage_map=mongo_doc.get("creator_stage_map") or {},
+                extra_state=mongo_doc.get("extra_state") or {},
+            )
+        else:
+            state = WorkflowState(
+                id="default",
+                active_section="section1",
+                active_step=1,
+                pitch_sent_map={},
+                ai_choice_map={},
+                answer_sent_map={},
+                persuasion_sent_map={},
+                creator_stage_map={},
+                extra_state={},
+            )
         db.add(state)
         db.commit()
         db.refresh(state)
