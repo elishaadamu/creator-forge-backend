@@ -187,31 +187,34 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
     else:
         meta_dict = {}
 
-    fee_candidate = meta_dict.get("diy_fee")
-    if fee_candidate is None:
-        fee_candidate = meta_dict.get("diyFee")
-    if fee_candidate is None:
-        fee_candidate = meta_dict.get("diyPassPrice")
-    if fee_candidate is None and meta_dict.get("diy_subscription"):
-        sub = meta_dict.get("diy_subscription")
-        if isinstance(sub, dict):
-            fee_candidate = sub.get("amount")
-    if fee_candidate is None and meta_dict.get("diySubscription"):
-        sub = meta_dict.get("diySubscription")
-        if isinstance(sub, dict):
-            fee_candidate = sub.get("amount")
+    # Check whether this project has an explicit custom fee override
+    has_custom_fee = bool(meta_dict.get("hasCustomFee") is True or meta_dict.get("has_custom_fee") is True)
 
-    has_custom_fee = False
+    fee_candidate = None
+    if has_custom_fee:
+        fee_candidate = meta_dict.get("diy_fee")
+        if fee_candidate is None:
+            fee_candidate = meta_dict.get("diyFee")
+        if fee_candidate is None:
+            fee_candidate = meta_dict.get("diyPassPrice")
+        if fee_candidate is None and meta_dict.get("diy_subscription"):
+            sub = meta_dict.get("diy_subscription")
+            if isinstance(sub, dict):
+                fee_candidate = sub.get("amount")
+        if fee_candidate is None and meta_dict.get("diySubscription"):
+            sub = meta_dict.get("diySubscription")
+            if isinstance(sub, dict):
+                fee_candidate = sub.get("amount")
+
     resolved_fee = None
-    if fee_candidate is not None:
+    if has_custom_fee and fee_candidate is not None:
         try:
             resolved_fee = float(fee_candidate)
-            has_custom_fee = True
         except (ValueError, TypeError):
             resolved_fee = None
 
     if resolved_fee is None:
-        # Check global workflow state for default pass fee
+        # Check global workflow state for default pass fee (source of truth)
         try:
             from app.models.workflow_state import WorkflowState
             from app.database import SessionLocal
@@ -221,6 +224,8 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
                     wf_fee = ws.extra_state.get("default_pass_price") or ws.extra_state.get("cobuilder_pass_price")
                     if wf_fee is not None:
                         resolved_fee = float(wf_fee)
+                if resolved_fee is None and ws and getattr(ws, "default_pass_price", None) is not None:
+                    resolved_fee = float(ws.default_pass_price)
         except Exception:
             pass
 
@@ -230,15 +235,23 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
             coll = get_collection("workflow_states")
             if coll is not None:
                 doc = coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]})
-                if doc and doc.get("extra_state"):
-                    wf_fee = doc["extra_state"].get("default_pass_price") or doc["extra_state"].get("cobuilder_pass_price")
+                if doc:
+                    wf_fee = doc.get("default_pass_price") or doc.get("cobuilder_pass_price")
+                    if wf_fee is None and doc.get("extra_state"):
+                        wf_fee = doc["extra_state"].get("default_pass_price") or doc["extra_state"].get("cobuilder_pass_price")
                     if wf_fee is not None:
                         resolved_fee = float(wf_fee)
         except Exception:
             pass
 
     if resolved_fee is None:
-        resolved_fee = 50.0
+        resolved_fee = 199.0
+        has_custom_fee = False
+
+    meta_dict["diy_fee"] = resolved_fee
+    meta_dict["diyFee"] = resolved_fee
+    meta_dict["diyPassPrice"] = resolved_fee
+    meta_dict["hasCustomFee"] = has_custom_fee
 
     return {
         "id": proj.id,
@@ -946,6 +959,19 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
                 doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}, {"creator_id": project_id}, {"creator_handle": clean_target}]})
                 if doc:
                     doc.pop("_id", None)
+                    if not doc.get("hasCustomFee"):
+                        ws_coll = get_collection("workflow_states")
+                        ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+                        def_fee = 199.0
+                        if ws_doc:
+                            def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
+                        doc["diyFee"] = def_fee
+                        doc["diyPassPrice"] = def_fee
+                        if isinstance(doc.get("metadataInfo"), dict):
+                            doc["metadataInfo"]["diy_fee"] = def_fee
+                            doc["metadataInfo"]["diyFee"] = def_fee
+                            doc["metadataInfo"]["diyPassPrice"] = def_fee
+                            doc["metadataInfo"]["hasCustomFee"] = False
                     return doc
         except Exception as e:
             logger.debug(f"[MongoDB] get_project fallback notice: {e}")
@@ -2439,6 +2465,35 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
     
     if projects:
         return _format_project_response(projects[0])
+
+    # Check MongoDB fallback if SQLite has no matches
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None:
+            doc = coll.find_one({"$or": [
+                {"id": slug},
+                {"creator_handle": clean_slug},
+                {"creator_handle": f"@{clean_slug}"},
+                {"creator_handle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
+                {"product_name": {"$regex": clean_slug, "$options": "i"}}
+            ]})
+            if not doc:
+                doc = coll.find_one()
+            if doc:
+                doc.pop("_id", None)
+                if not doc.get("hasCustomFee"):
+                    ws_coll = get_collection("workflow_states")
+                    ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+                    def_fee = 199.0
+                    if ws_doc:
+                        def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
+                    doc["diyFee"] = def_fee
+                    doc["diyPassPrice"] = def_fee
+                return doc
+    except Exception as e:
+        logger.debug(f"[MongoDB] get_project_by_slug fallback notice: {e}")
+
     raise HTTPException(404, f"No project found matching slug '{slug}'")
 
 

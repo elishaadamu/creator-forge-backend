@@ -431,32 +431,37 @@ def list_creators(
 
     capped_limit = min(1000, max(1, limit)) if limit > 0 else 50
     creators = q.offset(skip).limit(capped_limit).all()
-    if not creators and not status and not platform:
-        try:
-            from app.mongodb import get_collection
-            coll = get_collection("creators")
-            if coll is not None:
-                mongo_docs = list(coll.find({}))
-                if mongo_docs:
-                    import json
-                    from datetime import datetime
-                    creator_cols = {c.name for c in Creator.__table__.columns}
-                    for doc in mongo_docs:
-                        r = dict(doc)
-                        r.pop("_id", None)
-                        if isinstance(r.get("niche"), str):
-                            try: r["niche"] = json.loads(r["niche"])
-                            except Exception: r["niche"] = [r["niche"]]
-                        for dt_field in ["created_at", "updated_at"]:
-                            if r.get(dt_field) and isinstance(r[dt_field], str):
-                                try: r[dt_field] = datetime.fromisoformat(r[dt_field])
-                                except Exception: r[dt_field] = datetime.utcnow()
-                        filtered = {k: v for k, v in r.items() if k in creator_cols}
-                        db.add(Creator(**filtered))
-                    db.commit()
-                    creators = q.offset(skip).limit(capped_limit).all()
-        except Exception as m_err:
-            logger.debug(f"[ListCreators] MongoDB sync notice: {m_err}")
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("creators")
+        if coll is not None:
+            existing_handles = {c.handle.lower().lstrip('@') for c in db.query(Creator.handle).all() if c.handle}
+            mongo_docs = list(coll.find({}))
+            new_added = False
+            import json
+            from datetime import datetime
+            creator_cols = {c.name for c in Creator.__table__.columns}
+            for doc in mongo_docs:
+                h = (doc.get("handle") or "").lower().lstrip('@')
+                if h and h not in existing_handles:
+                    r = dict(doc)
+                    r.pop("_id", None)
+                    if isinstance(r.get("niche"), str):
+                        try: r["niche"] = json.loads(r["niche"])
+                        except Exception: r["niche"] = [r["niche"]]
+                    for dt_field in ["created_at", "updated_at"]:
+                        if r.get(dt_field) and isinstance(r[dt_field], str):
+                            try: r[dt_field] = datetime.fromisoformat(r[dt_field])
+                            except Exception: r[dt_field] = datetime.utcnow()
+                    filtered = {k: v for k, v in r.items() if k in creator_cols}
+                    db.add(Creator(**filtered))
+                    existing_handles.add(h)
+                    new_added = True
+            if new_added:
+                db.commit()
+                creators = q.offset(skip).limit(capped_limit).all()
+    except Exception as m_err:
+        logger.debug(f"[ListCreators] MongoDB sync notice: {m_err}")
     project_map = _build_project_map(db)
     return [_creator_dict(c, project_map=project_map) for c in creators]
 
