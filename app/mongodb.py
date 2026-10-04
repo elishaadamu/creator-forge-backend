@@ -26,32 +26,42 @@ def get_mongo_uri() -> str:
 
 _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
+_last_error: Optional[str] = None
 
 def get_mongo_client() -> Optional[MongoClient]:
-    global _client
+    global _client, _last_error
     if _client is not None:
         return _client
 
     uri = get_mongo_uri()
     if not uri:
         logger.warning("[MongoDB] MONGODB_URI not configured in .env.")
+        _last_error = "MONGODB_URI not configured"
         return None
 
     try:
-        _client = MongoClient(
-            uri,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=30000,
-            maxPoolSize=50,
-            minPoolSize=5,
-            retryWrites=True
-        )
+        kwargs: Dict[str, Any] = {
+            "serverSelectionTimeoutMS": 10000,
+            "connectTimeoutMS": 15000,
+            "socketTimeoutMS": 30000,
+            "maxPoolSize": 50,
+            "minPoolSize": 1,
+            "retryWrites": True
+        }
+        try:
+            import certifi
+            kwargs["tlsCAFile"] = certifi.where()
+        except Exception:
+            pass
+
+        _client = MongoClient(uri, **kwargs)
         # Test connection with ping
         _client.admin.command('ping')
+        _last_error = None
         logger.info("[MongoDB] Connected successfully to MongoDB cluster!")
         return _client
     except Exception as e:
+        _last_error = str(e)
         logger.error(f"[MongoDB] Failed to connect to MongoDB ({e}).")
         _client = None
         return None
@@ -79,6 +89,7 @@ def get_collection(name: str) -> Optional[Collection]:
 
 
 def check_mongo_connection() -> Dict[str, Any]:
+    global _last_error
     uri = get_mongo_uri()
     if not uri:
         return {
@@ -96,8 +107,9 @@ def check_mongo_connection() -> Dict[str, Any]:
                 "database": os.getenv("MONGODB_DB_NAME", "creator_forge"),
                 "collections": collections
             }
-        return {"status": "disconnected", "message": "Could not connect to MongoDB."}
+        return {"status": "disconnected", "message": f"Could not connect to MongoDB: {_last_error}"}
     except Exception as e:
+        _last_error = str(e)
         return {"status": "error", "message": str(e)}
 
 
