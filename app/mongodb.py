@@ -19,6 +19,8 @@ def get_mongo_uri() -> str:
             uri = getattr(settings, "MONGODB_URI", "").strip()
         except Exception:
             pass
+    if not uri:
+        uri = "mongodb+srv://creatorforgeweb_db_user:radLPHdUYy7g3tGB@cluster0.nnewamw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
     return uri
 
 

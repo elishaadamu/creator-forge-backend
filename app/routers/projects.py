@@ -479,10 +479,18 @@ def list_projects(db: Session = Depends(get_db)):
             from app.mongodb import get_collection
             coll = get_collection("co_launch_projects")
             if coll is not None:
-                docs = list(coll.find({}).sort("created_at", -1))
+                docs = list(coll.find({}))
                 if docs:
+                    ws_coll = get_collection("workflow_states")
+                    ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+                    def_fee = 199.0
+                    if ws_doc:
+                        def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
                     for d in docs:
                         d.pop("_id", None)
+                        if not d.get("hasCustomFee"):
+                            d["diyFee"] = def_fee
+                            d["diyPassPrice"] = def_fee
                     return docs
         except Exception as e:
             logger.debug(f"[MongoDB] list_projects fallback notice: {e}")
@@ -956,7 +964,18 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
             from app.mongodb import get_collection
             coll = get_collection("co_launch_projects")
             if coll is not None:
-                doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}, {"creator_id": project_id}, {"creator_handle": clean_target}]})
+                doc = coll.find_one({"$or": [
+                    {"_id": project_id},
+                    {"id": project_id},
+                    {"creator_id": project_id},
+                    {"creatorId": project_id},
+                    {"creator_handle": clean_target},
+                    {"creatorHandle": clean_target},
+                    {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                    {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                    {"creator_handle": project_id},
+                    {"creatorHandle": project_id},
+                ]})
                 if doc:
                     doc.pop("_id", None)
                     if not doc.get("hasCustomFee"):

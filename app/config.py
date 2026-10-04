@@ -38,8 +38,9 @@ class Settings:
     DATABASE_URL: str = _db_url
 
     # MongoDB (Primary Cloud Document Database)
-    MONGODB_URI: str = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", "")).strip()
-    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "creator_forge").strip()
+    DEFAULT_MONGO_URI: str = "mongodb+srv://creatorforgeweb_db_user:radLPHdUYy7g3tGB@cluster0.nnewamw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+    MONGODB_URI: str = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", DEFAULT_MONGO_URI)).strip() or DEFAULT_MONGO_URI
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "creator_forge").strip() or "creator_forge"
 
 
 
