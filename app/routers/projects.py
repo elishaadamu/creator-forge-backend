@@ -176,6 +176,38 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         for g in (proj.gate_decisions or [])
     ]
 
+    raw_meta = proj.metadata_info
+    if isinstance(raw_meta, str):
+        try:
+            meta_dict = json.loads(raw_meta)
+        except Exception:
+            meta_dict = {}
+    elif isinstance(raw_meta, dict):
+        meta_dict = dict(raw_meta)
+    else:
+        meta_dict = {}
+
+    fee_candidate = meta_dict.get("diy_fee")
+    if fee_candidate is None:
+        fee_candidate = meta_dict.get("diyFee")
+    if fee_candidate is None:
+        fee_candidate = meta_dict.get("diyPassPrice")
+    if fee_candidate is None and meta_dict.get("diy_subscription"):
+        sub = meta_dict.get("diy_subscription")
+        if isinstance(sub, dict):
+            fee_candidate = sub.get("amount")
+    if fee_candidate is None and meta_dict.get("diySubscription"):
+        sub = meta_dict.get("diySubscription")
+        if isinstance(sub, dict):
+            fee_candidate = sub.get("amount")
+    if fee_candidate is not None:
+        try:
+            resolved_fee = float(fee_candidate)
+        except (ValueError, TypeError):
+            resolved_fee = 50.0
+    else:
+        resolved_fee = 50.0
+
     return {
         "id": proj.id,
         "creatorId": proj.creator_id,
@@ -202,55 +234,55 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         "portalLinkSentTo": proj.portal_link_sent_to,
         "portalLinkSentAt": proj.portal_link_sent_at.isoformat() if proj.portal_link_sent_at else None,
         "selectedConcept": proj.selected_concept,
-        "metadataInfo": proj.metadata_info or {},
-        "projectFiles": (proj.metadata_info or {}).get("project_files", []),
-        "messages": (proj.metadata_info or {}).get("messages", []),
-        "activityLogs": (proj.metadata_info or {}).get("activity_logs", []),
-        "adminActivity": (proj.metadata_info or {}).get("activity_logs", []),
-        "aiActivity": (proj.metadata_info or {}).get("activity_logs", []),
+        "metadataInfo": meta_dict,
+        "projectFiles": meta_dict.get("project_files", []),
+        "messages": meta_dict.get("messages", []),
+        "activityLogs": meta_dict.get("activity_logs", []),
+        "adminActivity": meta_dict.get("activity_logs", []),
+        "aiActivity": meta_dict.get("activity_logs", []),
         "reservations": (telemetry.reservations if telemetry else []) or [],
-        "buildPlanApproved": bool((proj.metadata_info or {}).get("buildPlanApproved") or (proj.metadata_info or {}).get("build_plan_approved")),
-        "buildCompleted": bool((proj.metadata_info or {}).get("buildCompleted") or (proj.metadata_info or {}).get("build_completed") or (proj.metadata_info or {}).get("mvpBuildDone") or (proj.current_step in ["beta", "gate"]) or (proj.current_phase or 1) > 2),
-        "mvpBuildDone": bool((proj.metadata_info or {}).get("mvpBuildDone") or (proj.metadata_info or {}).get("mvp_build_done") or (proj.metadata_info or {}).get("buildCompleted") or (proj.current_step in ["beta", "gate"]) or (proj.current_phase or 1) > 2),
-        "betaTestingCompleted": bool((proj.metadata_info or {}).get("betaTestingCompleted") or (proj.metadata_info or {}).get("beta_testing_completed") or (proj.metadata_info or {}).get("betaApproved") or (proj.current_step in ["gate"]) or (proj.current_phase or 1) > 2),
-        "betaApproved": bool((proj.metadata_info or {}).get("betaApproved") or (proj.metadata_info or {}).get("beta_approved") or (proj.metadata_info or {}).get("betaTestingCompleted") or (proj.current_step in ["gate"]) or (proj.current_phase or 1) > 2),
-        "p1Complete": bool((proj.metadata_info or {}).get("p1Complete") or (proj.current_phase or 1) > 1),
-        "phase1Passed": bool((proj.metadata_info or {}).get("phase1Passed") or (proj.current_phase or 1) > 1),
-        "p2Complete": bool((proj.metadata_info or {}).get("p2Complete") or (proj.current_phase or 1) > 2),
-        "phase2Passed": bool((proj.metadata_info or {}).get("phase2Passed") or (proj.current_phase or 1) > 2),
-        "mvpBuildPlan": (proj.metadata_info or {}).get("mvp_build_plan") or (proj.metadata_info or {}).get("mvpBuildPlan"),
-        "engineeringTasks": (proj.metadata_info or {}).get("engineering_tasks") or (proj.metadata_info or {}).get("engineeringTasks", []),
-        "qaResults": (proj.metadata_info or {}).get("qa_results") or (proj.metadata_info or {}).get("qaResults"),
-        "betaFeedback": (proj.metadata_info or {}).get("beta_feedback") or (proj.metadata_info or {}).get("betaFeedback", []),
-        "feedbackClusters": (proj.metadata_info or {}).get("feedback_clusters") or (proj.metadata_info or {}).get("feedbackClusters") or (telemetry.feedback_clusters if telemetry else []) or [],
+        "buildPlanApproved": bool(meta_dict.get("buildPlanApproved") or meta_dict.get("build_plan_approved")),
+        "buildCompleted": bool(meta_dict.get("buildCompleted") or meta_dict.get("build_completed") or meta_dict.get("mvpBuildDone") or (proj.current_step in ["beta", "gate"]) or (proj.current_phase or 1) > 2),
+        "mvpBuildDone": bool(meta_dict.get("mvpBuildDone") or meta_dict.get("mvp_build_done") or meta_dict.get("buildCompleted") or (proj.current_step in ["beta", "gate"]) or (proj.current_phase or 1) > 2),
+        "betaTestingCompleted": bool(meta_dict.get("betaTestingCompleted") or meta_dict.get("beta_testing_completed") or meta_dict.get("betaApproved") or (proj.current_step in ["gate"]) or (proj.current_phase or 1) > 2),
+        "betaApproved": bool(meta_dict.get("betaApproved") or meta_dict.get("beta_approved") or meta_dict.get("betaTestingCompleted") or (proj.current_step in ["gate"]) or (proj.current_phase or 1) > 2),
+        "p1Complete": bool(meta_dict.get("p1Complete") or (proj.current_phase or 1) > 1),
+        "phase1Passed": bool(meta_dict.get("phase1Passed") or (proj.current_phase or 1) > 1),
+        "p2Complete": bool(meta_dict.get("p2Complete") or (proj.current_phase or 1) > 2),
+        "phase2Passed": bool(meta_dict.get("phase2Passed") or (proj.current_phase or 1) > 2),
+        "mvpBuildPlan": meta_dict.get("mvp_build_plan") or meta_dict.get("mvpBuildPlan"),
+        "engineeringTasks": meta_dict.get("engineering_tasks") or meta_dict.get("engineeringTasks", []),
+        "qaResults": meta_dict.get("qa_results") or meta_dict.get("qaResults"),
+        "betaFeedback": meta_dict.get("beta_feedback") or meta_dict.get("betaFeedback", []),
+        "feedbackClusters": meta_dict.get("feedback_clusters") or meta_dict.get("feedbackClusters") or (telemetry.feedback_clusters if telemetry else []) or [],
         "experimentsData": (
-            (proj.metadata_info or {}).get("experimentsData") or
-            (proj.metadata_info or {}).get("experiments_data") or
-            (proj.metadata_info or {}).get("experiments") or
-            ({"experiments": telemetry.experiments, "performanceAudit": (proj.metadata_info or {}).get("performanceAudit")} if (telemetry and telemetry.experiments) else None)
+            meta_dict.get("experimentsData") or
+            meta_dict.get("experiments_data") or
+            meta_dict.get("experiments") or
+            ({"experiments": telemetry.experiments, "performanceAudit": meta_dict.get("performanceAudit")} if (telemetry and telemetry.experiments) else None)
         ),
-        "readinessReport": (proj.metadata_info or {}).get("readiness_report") or (proj.metadata_info or {}).get("readinessReport"),
-        "appliedPatches": (proj.metadata_info or {}).get("applied_patches") or (proj.metadata_info or {}).get("appliedPatches", []),
-        "mvpVersion": (proj.metadata_info or {}).get("mvp_version") or (proj.metadata_info or {}).get("mvpVersion", "v1.0.0-MVP"),
-        "launchStrategy": (proj.metadata_info or {}).get("launch_strategy") or (proj.metadata_info or {}).get("launchStrategy"),
-        "creatorAssets": (proj.metadata_info or {}).get("creator_assets") or (proj.metadata_info or {}).get("creatorAssets"),
-        "launchTelemetry": (proj.metadata_info or {}).get("launch_telemetry") or (proj.metadata_info or {}).get("launchTelemetry"),
-        "channelStats": (proj.metadata_info or {}).get("channel_stats") or (proj.metadata_info or {}).get("channelStats", []),
-        "launchManagerData": (proj.metadata_info or {}).get("launch_manager_data") or (proj.metadata_info or {}).get("launchManagerData"),
-        "dispatchedActions": (proj.metadata_info or {}).get("dispatched_actions") or (proj.metadata_info or {}).get("dispatchedActions", []),
-        "launchReport": (proj.metadata_info or {}).get("launch_report") or (proj.metadata_info or {}).get("launchReport"),
-        "launchStatus": (proj.metadata_info or {}).get("launch_status") or (proj.metadata_info or {}).get("launchStatus", "PREP"),
-        "productInfrastructure": (proj.metadata_info or {}).get("product_infrastructure") or (proj.metadata_info or {}).get("productInfrastructure"),
-        "diySubscription": (proj.metadata_info or {}).get("diy_subscription") or (proj.metadata_info or {}).get("diySubscription"),
-        "isDIY": bool((proj.metadata_info or {}).get("is_diy") or (proj.metadata_info or {}).get("isDIY") or ((proj.metadata_info or {}).get("diy_subscription") or {}).get("active") or ((proj.metadata_info or {}).get("diySubscription") or {}).get("active")),
-        "diyOfferStatus": (proj.metadata_info or {}).get("diy_offer_status") or (proj.metadata_info or {}).get("diyOfferStatus") or "offer_sent",
-        "diyOfferSentAt": (proj.metadata_info or {}).get("diy_offer_sent_at") or (proj.metadata_info or {}).get("diyOfferSentAt"),
-        "diyFee": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or (proj.metadata_info or {}).get("diyPassPrice") or 50.0),
-        "diyPassPrice": float((proj.metadata_info or {}).get("diy_fee") or (proj.metadata_info or {}).get("diyFee") or (proj.metadata_info or {}).get("diyPassPrice") or 50.0),
-        "recentPosts": (proj.metadata_info or {}).get("recent_posts") or (proj.metadata_info or {}).get("recentPosts") or (proj.metadata_info or {}).get("videos") or [],
-        "videos": (proj.metadata_info or {}).get("recent_posts") or (proj.metadata_info or {}).get("recentPosts") or (proj.metadata_info or {}).get("videos") or [],
-        "channelUrl": (proj.metadata_info or {}).get("channel_url") or (proj.metadata_info or {}).get("channelUrl") or (f"https://www.youtube.com/@{proj.creator_handle.lstrip('@')}" if proj.creator_handle else None),
-        "channelDescription": (proj.metadata_info or {}).get("channel_description") or (proj.metadata_info or {}).get("channelDescription") or "",
+        "readinessReport": meta_dict.get("readiness_report") or meta_dict.get("readinessReport"),
+        "appliedPatches": meta_dict.get("applied_patches") or meta_dict.get("appliedPatches", []),
+        "mvpVersion": meta_dict.get("mvp_version") or meta_dict.get("mvpVersion", "v1.0.0-MVP"),
+        "launchStrategy": meta_dict.get("launch_strategy") or meta_dict.get("launchStrategy"),
+        "creatorAssets": meta_dict.get("creator_assets") or meta_dict.get("creatorAssets"),
+        "launchTelemetry": meta_dict.get("launch_telemetry") or meta_dict.get("launchTelemetry"),
+        "channelStats": meta_dict.get("channel_stats") or meta_dict.get("channelStats", []),
+        "launchManagerData": meta_dict.get("launch_manager_data") or meta_dict.get("launchManagerData"),
+        "dispatchedActions": meta_dict.get("dispatched_actions") or meta_dict.get("dispatchedActions", []),
+        "launchReport": meta_dict.get("launch_report") or meta_dict.get("launchReport"),
+        "launchStatus": meta_dict.get("launch_status") or meta_dict.get("launchStatus", "PREP"),
+        "productInfrastructure": meta_dict.get("product_infrastructure") or meta_dict.get("productInfrastructure"),
+        "diySubscription": meta_dict.get("diy_subscription") or meta_dict.get("diySubscription"),
+        "isDIY": bool(meta_dict.get("is_diy") or meta_dict.get("isDIY") or ((meta_dict.get("diy_subscription") or {}).get("active") if isinstance(meta_dict.get("diy_subscription"), dict) else False) or ((meta_dict.get("diySubscription") or {}).get("active") if isinstance(meta_dict.get("diySubscription"), dict) else False)),
+        "diyOfferStatus": meta_dict.get("diy_offer_status") or meta_dict.get("diyOfferStatus") or "offer_sent",
+        "diyOfferSentAt": meta_dict.get("diy_offer_sent_at") or meta_dict.get("diyOfferSentAt"),
+        "diyFee": resolved_fee,
+        "diyPassPrice": resolved_fee,
+        "recentPosts": meta_dict.get("recent_posts") or meta_dict.get("recentPosts") or meta_dict.get("videos") or [],
+        "videos": meta_dict.get("recent_posts") or meta_dict.get("recentPosts") or meta_dict.get("videos") or [],
+        "channelUrl": meta_dict.get("channel_url") or meta_dict.get("channelUrl") or (f"https://www.youtube.com/@{proj.creator_handle.lstrip('@')}" if proj.creator_handle else None),
+        "channelDescription": meta_dict.get("channel_description") or meta_dict.get("channelDescription") or "",
         "currentPresales": float(proj.current_presales or 0.0),
         "visitors": int(proj.visitors or 0),
         "conversionRate": float(proj.conversion_rate or 0.0),
@@ -396,6 +428,18 @@ class LogActivityRequest(BaseModel):
 def list_projects(db: Session = Depends(get_db)):
     """List all co-launch projects."""
     projects = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).all()
+    if not projects:
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("co_launch_projects")
+            if coll is not None:
+                docs = list(coll.find({}).sort("created_at", -1))
+                if docs:
+                    for d in docs:
+                        d.pop("_id", None)
+                    return docs
+        except Exception as e:
+            logger.debug(f"[MongoDB] list_projects fallback notice: {e}")
     return [_format_project_response(p) for p in projects]
 
 
@@ -850,17 +894,28 @@ def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
 @router.get("/{project_id}")
 def get_project(project_id: str, db: Session = Depends(get_db)):
     """Fetch complete co-launch project with all 5 validation steps."""
+    clean_target = project_id.replace("@", "").lower().strip()
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
-        # Also resolve by creator_id, creator_handle, or clean slug (e.g. 'codanics')
-        clean_target = project_id.replace("@", "").lower().strip()
         proj = db.query(CoLaunchProject).filter(
             (CoLaunchProject.creator_id == project_id) |
             (CoLaunchProject.creator_handle.ilike(f"%{clean_target}%")) |
             (CoLaunchProject.creator_name.ilike(f"%{clean_target}%")) |
             (CoLaunchProject.creator_email.ilike(f"%{clean_target}%"))
         ).first()
+
     if not proj:
+        # Check MongoDB fallback
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("co_launch_projects")
+            if coll is not None:
+                doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}, {"creator_id": project_id}, {"creator_handle": clean_target}]})
+                if doc:
+                    doc.pop("_id", None)
+                    return doc
+        except Exception as e:
+            logger.debug(f"[MongoDB] get_project fallback notice: {e}")
         raise HTTPException(404, f"Project '{project_id}' not found")
 
     return _format_project_response(proj)
@@ -870,9 +925,9 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
 @router.put("/{project_id}")
 def update_project_general(project_id: str, body: Dict[str, Any], db: Session = Depends(get_db)):
     """Update co-launch project phase, step, status, or metadata attributes."""
+    clean_target = project_id.replace("@", "").lower().strip()
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
-        clean_target = project_id.replace("@", "").lower().strip()
         proj = db.query(CoLaunchProject).filter(
             (CoLaunchProject.creator_id == project_id) |
             (CoLaunchProject.creator_handle.ilike(f"%{clean_target}%")) |
@@ -881,10 +936,52 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         ).first()
 
     if not proj:
+        # Fallback to direct MongoDB update
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("co_launch_projects")
+            if coll is not None:
+                doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}, {"creator_id": project_id}, {"creator_handle": clean_target}]})
+                if doc:
+                    doc_meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
+                    if isinstance(doc_meta, str):
+                        try: doc_meta = json.loads(doc_meta)
+                        except Exception: doc_meta = {}
+                    meta_in = body.get("metadataInfo") or body.get("metadata_info")
+                    if isinstance(meta_in, dict):
+                        doc_meta.update(meta_in)
+                    for k, v in body.items():
+                        doc[k] = v
+                    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body:
+                        f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice", 50.0)
+                        f_val = float(f_raw)
+                        doc["diyFee"] = f_val
+                        doc["diyPassPrice"] = f_val
+                        doc_meta["diy_fee"] = f_val
+                        doc_meta["diyFee"] = f_val
+                        doc_meta["diyPassPrice"] = f_val
+                    doc["metadataInfo"] = doc_meta
+                    doc["metadata_info"] = doc_meta
+                    doc_id = doc.get("_id", project_id)
+                    coll.replace_one({"_id": doc_id}, doc, upsert=True)
+                    doc.pop("_id", None)
+                    return doc
+        except Exception as e:
+            logger.debug(f"[MongoDB] update fallback notice: {e}")
         raise HTTPException(404, f"Project '{project_id}' not found")
 
     meta = body.get("metadataInfo") or body.get("metadata_info")
-    cur_meta = dict(proj.metadata_info or {})
+    raw_meta = proj.metadata_info
+    if isinstance(raw_meta, str):
+        try:
+            cur_meta = json.loads(raw_meta)
+        except Exception:
+            cur_meta = {}
+    elif isinstance(raw_meta, dict):
+        cur_meta = dict(raw_meta)
+    else:
+        cur_meta = {}
+
     if meta is not None and isinstance(meta, dict):
         cur_meta.update(meta)
 
