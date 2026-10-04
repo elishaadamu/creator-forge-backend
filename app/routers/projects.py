@@ -129,6 +129,19 @@ class ToggleAutonomousDeliveryRequest(BaseModel):
     country: Optional[str] = None
 
 
+def _sync_proj_to_mongo(proj_data: Dict[str, Any]):
+    """Mirror project data directly into MongoDB co_launch_projects collection."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None and proj_data and "id" in proj_data:
+            doc = dict(proj_data)
+            doc["_id"] = doc["id"]
+            coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    except Exception as e:
+        logger.debug(f"[MongoDB] Project sync notice: {e}")
+
+
 def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
     plan = proj.validation_plan
     campaign = proj.validation_campaign
@@ -339,6 +352,8 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
         # Step 5
         "gateDecisions": gate_decisions,
     }
+    _sync_proj_to_mongo(res)
+    return res
 
 
 class RecordPreorderRequest(BaseModel):
