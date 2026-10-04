@@ -28,10 +28,16 @@ _client: Optional[MongoClient] = None
 _db: Optional[Database] = None
 _last_error: Optional[str] = None
 
+_last_failure_time: float = 0.0
+
 def get_mongo_client() -> Optional[MongoClient]:
-    global _client, _last_error
+    global _client, _last_error, _last_failure_time
     if _client is not None:
         return _client
+
+    import time
+    if time.time() - _last_failure_time < 30.0:
+        return None
 
     uri = get_mongo_uri()
     if not uri:
@@ -41,10 +47,10 @@ def get_mongo_client() -> Optional[MongoClient]:
 
     try:
         kwargs: Dict[str, Any] = {
-            "serverSelectionTimeoutMS": 10000,
-            "connectTimeoutMS": 15000,
-            "socketTimeoutMS": 30000,
-            "maxPoolSize": 50,
+            "serverSelectionTimeoutMS": 2000,
+            "connectTimeoutMS": 2000,
+            "socketTimeoutMS": 5000,
+            "maxPoolSize": 20,
             "minPoolSize": 1,
             "retryWrites": True
         }
@@ -54,13 +60,16 @@ def get_mongo_client() -> Optional[MongoClient]:
         except Exception:
             pass
 
-        _client = MongoClient(uri, **kwargs)
+        client_candidate = MongoClient(uri, **kwargs)
         # Test connection with ping
-        _client.admin.command('ping')
+        client_candidate.admin.command('ping')
+        _client = client_candidate
         _last_error = None
         logger.info("[MongoDB] Connected successfully to MongoDB cluster!")
         return _client
     except Exception as e:
+        import time
+        _last_failure_time = time.time()
         _last_error = str(e)
         logger.error(f"[MongoDB] Failed to connect to MongoDB ({e}).")
         _client = None
