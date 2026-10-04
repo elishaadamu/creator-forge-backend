@@ -334,12 +334,46 @@ def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal
     }
 
 
+def _sync_creator_to_mongo(creator: Creator):
+    """Mirror creator document directly into MongoDB Atlas creators collection."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("creators")
+        if coll is not None and creator and creator.id:
+            doc = {
+                "_id": creator.id,
+                "id": creator.id,
+                "handle": creator.handle,
+                "platform": creator.platform,
+                "display_name": creator.display_name,
+                "bio": creator.bio,
+                "profile_url": creator.profile_url,
+                "avatar_url": creator.avatar_url,
+                "follower_count": creator.follower_count,
+                "niche": creator.niche,
+                "location": creator.location,
+                "website": creator.website,
+                "email_public": creator.email_public,
+                "status": creator.status,
+                "discovery_source": creator.discovery_source,
+                "discovery_notes": creator.discovery_notes,
+                "engagement_score": creator.engagement_score,
+                "created_at": creator.created_at.isoformat() if creator.created_at else None,
+                "updated_at": creator.updated_at.isoformat() if creator.updated_at else None,
+            }
+            coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    except Exception as e:
+        logger.debug(f"[MongoDB] creator sync notice: {e}")
+
+
 @router.post("")
 def create_creator(body: CreatorCreate, actor: str = "internal", db: Session = Depends(get_db)):
     try:
         creator, created = discovery.create_or_get_creator(
             db=db, actor=actor, **body.model_dump()
         )
+        if creator:
+            _sync_creator_to_mongo(creator)
         return {"created": created, "creator": _creator_dict(creator)}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -397,6 +431,32 @@ def list_creators(
 
     capped_limit = min(1000, max(1, limit)) if limit > 0 else 50
     creators = q.offset(skip).limit(capped_limit).all()
+    if not creators and not status and not platform:
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("creators")
+            if coll is not None:
+                mongo_docs = list(coll.find({}))
+                if mongo_docs:
+                    import json
+                    from datetime import datetime
+                    creator_cols = {c.name for c in Creator.__table__.columns}
+                    for doc in mongo_docs:
+                        r = dict(doc)
+                        r.pop("_id", None)
+                        if isinstance(r.get("niche"), str):
+                            try: r["niche"] = json.loads(r["niche"])
+                            except Exception: r["niche"] = [r["niche"]]
+                        for dt_field in ["created_at", "updated_at"]:
+                            if r.get(dt_field) and isinstance(r[dt_field], str):
+                                try: r[dt_field] = datetime.fromisoformat(r[dt_field])
+                                except Exception: r[dt_field] = datetime.utcnow()
+                        filtered = {k: v for k, v in r.items() if k in creator_cols}
+                        db.add(Creator(**filtered))
+                    db.commit()
+                    creators = q.offset(skip).limit(capped_limit).all()
+        except Exception as m_err:
+            logger.debug(f"[ListCreators] MongoDB sync notice: {m_err}")
     project_map = _build_project_map(db)
     return [_creator_dict(c, project_map=project_map) for c in creators]
 
@@ -856,6 +916,22 @@ def delete_all_creators(db: Session = Depends(get_db)):
             except Exception as ws_err:
                 logger.warning(f"Failed to reset workflow state during delete_all: {ws_err}")
 
+            # Also purge MongoDB Atlas collections
+            try:
+                from app.mongodb import get_collection
+                for col_name in [
+                    "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks",
+                    "validation_campaigns", "validation_plans", "co_launch_projects",
+                    "replies", "follow_ups", "threads", "outreach_messages", "suppression_list",
+                    "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
+                    "partnerships", "post_suggestions", "product_recommendations", "creators"
+                ]:
+                    c = get_collection(col_name)
+                    if c is not None:
+                        c.delete_many({})
+            except Exception as m_err:
+                logger.warning(f"[DeleteAllCreators] MongoDB purge notice: {m_err}")
+
             db.commit()
             return {"success": True, "deleted_count": 0, "message": "Successfully wiped all creators, projects, and workflow states"}
         else:
@@ -907,6 +983,22 @@ def delete_all_creators(db: Session = Depends(get_db)):
                     state.updated_at = datetime.utcnow()
             except Exception as ws_err:
                 logger.warning(f"Failed to reset workflow state during delete_all: {ws_err}")
+
+            # Also purge MongoDB Atlas collections
+            try:
+                from app.mongodb import get_collection
+                for col_name in [
+                    "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks",
+                    "validation_campaigns", "validation_plans", "co_launch_projects",
+                    "replies", "follow_ups", "threads", "outreach_messages", "suppression_list",
+                    "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
+                    "partnerships", "post_suggestions", "product_recommendations", "creators"
+                ]:
+                    c = get_collection(col_name)
+                    if c is not None:
+                        c.delete_many({})
+            except Exception as m_err:
+                logger.warning(f"[DeleteAllCreators] MongoDB purge notice: {m_err}")
 
             db.commit()
             return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and reset workflow states"}
@@ -967,8 +1059,8 @@ def delete_creator(
         return delete_all_creators(db=db)
 
     creator = db.get(Creator, creator_id)
+    clean_handle = creator_id.lstrip("@").strip().lower()
     if not creator:
-        clean_handle = creator_id.lstrip("@").strip().lower()
         creator = db.query(Creator).filter(
             (Creator.handle.ilike(clean_handle)) |
             (Creator.handle.ilike(f"@{clean_handle}")) |
@@ -977,6 +1069,23 @@ def delete_creator(
         ).first()
 
     if not creator:
+        # Check MongoDB directly
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("creators")
+            if coll is not None:
+                doc = coll.find_one({"$or": [{"_id": creator_id}, {"id": creator_id}, {"handle": clean_handle}, {"handle": f"@{clean_handle}"}]})
+                if doc:
+                    doc_id = doc.get("id") or doc.get("_id")
+                    coll.delete_many({"$or": [{"_id": doc_id}, {"id": doc_id}, {"handle": clean_handle}, {"handle": f"@{clean_handle}"}]})
+                    for col_name in ["contacts", "analyses", "content_samples", "decks", "metrics_snapshots", "partnerships", "post_suggestions", "product_recommendations", "outreach_messages", "threads", "replies", "follow_ups", "suppression_list", "co_launch_projects"]:
+                        c = get_collection(col_name)
+                        if c is not None:
+                            c.delete_many({"$or": [{"creator_id": doc_id}, {"creatorId": doc_id}]})
+                    return {"deleted": True, "creator_id": doc_id}
+        except Exception as m_err:
+            logger.warning(f"[DeleteCreator] MongoDB fallback notice: {m_err}")
+
         # Fallback: check if there is an orphan CoLaunchProject matching this ID, handle, or name!
         from app.models.project import CoLaunchProject
         orphan_projs = db.query(CoLaunchProject).filter(
@@ -1077,6 +1186,20 @@ def delete_creator(
         except Exception as ws_err:
             logger.warning(f"Failed to purge creator from workflow state: {ws_err}")
 
+        # Cascade delete from MongoDB Atlas
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("creators")
+            if coll is not None:
+                clean_h = (creator.handle or creator_id).lstrip("@").strip().lower()
+                coll.delete_many({"$or": [{"_id": real_id}, {"id": real_id}, {"handle": clean_h}, {"handle": f"@{clean_h}"}]})
+            for col_name in ["contacts", "analyses", "content_samples", "decks", "metrics_snapshots", "partnerships", "post_suggestions", "product_recommendations", "outreach_messages", "threads", "replies", "follow_ups", "suppression_list", "co_launch_projects"]:
+                c = get_collection(col_name)
+                if c is not None:
+                    c.delete_many({"$or": [{"creator_id": real_id}, {"creatorId": real_id}]})
+        except Exception as mongo_err:
+            logger.warning(f"[DeleteCreator] MongoDB cascade delete notice: {mongo_err}")
+
         db.commit()
         return {"deleted": True, "creator_id": real_id}
     except Exception as e:
@@ -1140,6 +1263,7 @@ def update_creator(
     creator.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(creator)
+    _sync_creator_to_mongo(creator)
     return _creator_dict(creator)
 
 

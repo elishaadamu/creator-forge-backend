@@ -172,35 +172,38 @@ def init_db():
             db.commit()
             print("[DB INIT] Seeding default target niches completed.")
 
-        # Restore creators from data_backup.json if empty
+        # Sync creators from MongoDB Atlas into memory if present
         if db.query(Creator).count() == 0:
-            import json
-            from datetime import datetime
-            backup_file = BASE_DIR / "data_backup.json"
-            if backup_file.exists():
-                try:
-                    with open(backup_file, "r", encoding="utf-8") as f:
-                        b_data = json.load(f)
-                    creators_data = b_data.get("creators", [])
-                    for row in creators_data:
-                        r = dict(row)
-                        if isinstance(r.get("niche"), str):
-                            try:
-                                r["niche"] = json.loads(r["niche"])
-                            except Exception:
-                                r["niche"] = [r["niche"]]
-                        for dt_field in ["created_at", "updated_at"]:
-                            if r.get(dt_field) and isinstance(r[dt_field], str):
+            try:
+                from app.mongodb import get_collection
+                coll = get_collection("creators")
+                if coll is not None:
+                    mongo_creators = list(coll.find({}))
+                    if mongo_creators:
+                        import json
+                        from datetime import datetime
+                        creator_cols = {c.name for c in Creator.__table__.columns}
+                        for doc in mongo_creators:
+                            r = dict(doc)
+                            r.pop("_id", None)
+                            if isinstance(r.get("niche"), str):
                                 try:
-                                    r[dt_field] = datetime.fromisoformat(r[dt_field])
+                                    r["niche"] = json.loads(r["niche"])
                                 except Exception:
-                                    r[dt_field] = datetime.utcnow()
-                        db.add(Creator(**r))
-                    db.commit()
-                    print(f"[DB INIT] Restored {len(creators_data)} creators from backup into memory.")
-                except Exception as b_err:
-                    print(f"[DB INIT] Creator backup restore notice: {b_err}")
-                    db.rollback()
+                                    r["niche"] = [r["niche"]]
+                            for dt_field in ["created_at", "updated_at"]:
+                                if r.get(dt_field) and isinstance(r[dt_field], str):
+                                    try:
+                                        r[dt_field] = datetime.fromisoformat(r[dt_field])
+                                    except Exception:
+                                        r[dt_field] = datetime.utcnow()
+                            filtered = {k: v for k, v in r.items() if k in creator_cols}
+                            db.add(Creator(**filtered))
+                        db.commit()
+                        print(f"[DB INIT] Synced {len(mongo_creators)} creators from MongoDB into memory.")
+            except Exception as m_err:
+                print(f"[DB INIT] MongoDB creator sync notice: {m_err}")
+                db.rollback()
     except Exception as e:
         print(f"[DB INIT] Warning: Failed to seed defaults: {e}")
         db.rollback()

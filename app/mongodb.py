@@ -22,6 +22,9 @@ def get_mongo_uri() -> str:
     return uri
 
 
+_client: Optional[MongoClient] = None
+_db: Optional[Database] = None
+
 def get_mongo_client() -> Optional[MongoClient]:
     global _client
     if _client is not None:
