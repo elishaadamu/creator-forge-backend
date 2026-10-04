@@ -1030,9 +1030,10 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
                         doc_meta.update(meta_in)
                     for k, v in body.items():
                         doc[k] = v
-                    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault"):
+                    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
+                        is_reset = bool(body.get("resetToDefault") or body.get("hasCustomFee") is False or body.get("has_custom_fee") is False)
                         f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
-                        if body.get("resetToDefault") or f_raw is None or f_raw == "":
+                        if is_reset or f_raw is None or f_raw == "":
                             doc_meta.pop("diy_fee", None)
                             doc_meta.pop("diyFee", None)
                             doc_meta.pop("diyPassPrice", None)
@@ -1048,8 +1049,9 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
                                 doc_meta["diy_fee"] = f_val
                                 doc_meta["diyFee"] = f_val
                                 doc_meta["diyPassPrice"] = f_val
-                                doc_meta["hasCustomFee"] = True
-                                doc["hasCustomFee"] = True
+                                is_custom = bool(body.get("hasCustomFee") is True or body.get("has_custom_fee") is True or (body.get("hasCustomFee") is None and body.get("has_custom_fee") is None))
+                                doc_meta["hasCustomFee"] = is_custom
+                                doc["hasCustomFee"] = is_custom
                             except (ValueError, TypeError):
                                 pass
                     doc["metadataInfo"] = doc_meta
@@ -1257,9 +1259,10 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         cur_meta["diy_offer_sent_at"] = dosa
         cur_meta["diyOfferSentAt"] = dosa
 
-    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault"):
+    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
+        is_reset = bool(body.get("resetToDefault") or body.get("hasCustomFee") is False or body.get("has_custom_fee") is False)
         fee_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
-        if body.get("resetToDefault") or fee_raw is None or fee_raw == "":
+        if is_reset or fee_raw is None or fee_raw == "":
             cur_meta.pop("diy_fee", None)
             cur_meta.pop("diyFee", None)
             cur_meta.pop("diyPassPrice", None)
@@ -1270,7 +1273,8 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
                 cur_meta["diy_fee"] = fee_val
                 cur_meta["diyFee"] = fee_val
                 cur_meta["diyPassPrice"] = fee_val
-                cur_meta["hasCustomFee"] = True
+                is_custom = bool(body.get("hasCustomFee") is True or body.get("has_custom_fee") is True or (body.get("hasCustomFee") is None and body.get("has_custom_fee") is None))
+                cur_meta["hasCustomFee"] = is_custom
             except (ValueError, TypeError):
                 pass
 
