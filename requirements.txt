@@ -17,3 +17,6 @@ google-genai>=1.47.0
 pillow>=10.0.0
 imageio>=2.30.0
 imageio-ffmpeg>=0.5.0
+pymongo>=4.11.0
+motor>=3.7.0
+dnspython>=2.7.0

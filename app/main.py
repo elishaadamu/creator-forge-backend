@@ -67,6 +67,18 @@ async def startup():
     else:
         logger.info("[Autonomous Scheduler] Background batch loops disabled (Human Mode active).")
 
+    # Initialize MongoDB connection and verify collections
+    try:
+        from app.mongodb import check_mongo_connection, seed_from_backup_if_empty
+        mongo_info = check_mongo_connection()
+        if mongo_info.get("status") == "connected":
+            logger.info(f"[MongoDB] Cluster connected: {mongo_info.get('database')}. Syncing collections...")
+            await asyncio.to_thread(seed_from_backup_if_empty)
+        else:
+            logger.info(f"[MongoDB] Status: {mongo_info.get('status')}")
+    except Exception as _mongo_err:
+        logger.warning(f"[MongoDB] Startup check notice: {_mongo_err}")
+
 @app.on_event("shutdown")
 def shutdown():
     stop_poller_loop()
@@ -105,6 +117,29 @@ app.include_router(workflow.router)
 app.include_router(upload.router)
 app.include_router(niches.router)
 
+
+
+# ── MongoDB API endpoints ───────────────────────────────────────────────────
+@app.get("/api/mongodb/status")
+def mongodb_status_endpoint():
+    """Returns MongoDB connectivity status, database name, and collection list."""
+    from app.mongodb import check_mongo_connection
+    return check_mongo_connection()
+
+
+@app.post("/api/mongodb/sync")
+def mongodb_sync_endpoint():
+    """Syncs collections from backend/data_backup.json into MongoDB."""
+    from app.mongodb import check_mongo_connection, seed_from_backup_if_empty
+    status = check_mongo_connection()
+    if status.get("status") != "connected":
+        return {
+            "status": "error",
+            "message": "MongoDB is not connected. Configure MONGODB_URI in backend/.env to sync.",
+            "details": status
+        }
+    seed_from_backup_if_empty()
+    return {"status": "success", "message": "MongoDB collections synchronized with data_backup.json"}
 
 
 # ── Analytics alias (/api/analytics/summary used by ops CampaignStats) ──────

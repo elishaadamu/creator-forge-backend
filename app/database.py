@@ -1,9 +1,10 @@
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.config import settings, BASE_DIR
 
-fallback_sqlite_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
+fallback_sqlite_url = "sqlite:///:memory:"
 
 def create_configured_engine(url: str):
     if "postgresql" in url or "postgres" in url:
@@ -23,6 +24,13 @@ def create_configured_engine(url: str):
             },
             echo=False,
         )
+    if ":memory:" in url:
+        return create_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False,
+        )
     return create_engine(
         url,
         connect_args={"check_same_thread": False},
@@ -40,7 +48,7 @@ def get_working_engine():
                 conn.execute(text("SELECT 1"))
             return eng
         except Exception as _e:
-            print(f"[DB INIT] PostgreSQL connection failed ({_e}). Falling back to local SQLite database.")
+            print(f"[DB INIT] PostgreSQL connection failed ({_e}). Falling back to in-memory database.")
             return create_configured_engine(fallback_sqlite_url)
     return create_configured_engine(db_url or fallback_sqlite_url)
 
@@ -91,7 +99,7 @@ def init_db():
             print(f"[DB INIT] Column migration notice: {_mig_err}")
     except Exception as e:
         print(f"[DB INIT] Database connection failed: {e}.")
-        print("[DB INIT] Gracefully falling back to local SQLite database to keep service online.")
+        print("[DB INIT] Gracefully falling back to in-memory database to keep service online.")
         engine = create_configured_engine(fallback_sqlite_url)
         SessionLocal.configure(bind=engine)
         Base.metadata.create_all(bind=engine)
@@ -108,6 +116,7 @@ def init_db():
     # Auto-seed the 'default' campaign if missing
     from app.models.campaign import Campaign
     from app.models.niche import TargetNiche
+    from app.models.creator import Creator
     db = SessionLocal()
     try:
         default_campaign = db.query(Campaign).filter(Campaign.id == "default").first()
@@ -162,6 +171,36 @@ def init_db():
                 ))
             db.commit()
             print("[DB INIT] Seeding default target niches completed.")
+
+        # Restore creators from data_backup.json if empty
+        if db.query(Creator).count() == 0:
+            import json
+            from datetime import datetime
+            backup_file = BASE_DIR / "data_backup.json"
+            if backup_file.exists():
+                try:
+                    with open(backup_file, "r", encoding="utf-8") as f:
+                        b_data = json.load(f)
+                    creators_data = b_data.get("creators", [])
+                    for row in creators_data:
+                        r = dict(row)
+                        if isinstance(r.get("niche"), str):
+                            try:
+                                r["niche"] = json.loads(r["niche"])
+                            except Exception:
+                                r["niche"] = [r["niche"]]
+                        for dt_field in ["created_at", "updated_at"]:
+                            if r.get(dt_field) and isinstance(r[dt_field], str):
+                                try:
+                                    r[dt_field] = datetime.fromisoformat(r[dt_field])
+                                except Exception:
+                                    r[dt_field] = datetime.utcnow()
+                        db.add(Creator(**r))
+                    db.commit()
+                    print(f"[DB INIT] Restored {len(creators_data)} creators from backup into memory.")
+                except Exception as b_err:
+                    print(f"[DB INIT] Creator backup restore notice: {b_err}")
+                    db.rollback()
     except Exception as e:
         print(f"[DB INIT] Warning: Failed to seed defaults: {e}")
         db.rollback()

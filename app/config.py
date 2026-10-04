@@ -21,8 +21,8 @@ class Settings:
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
 
-    # Database
-    _db_url = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/creator_forge.db")
+    # Database (In-memory SQL cache with zero files on disk if PostgreSQL not configured)
+    _db_url = os.getenv("DATABASE_URL", "sqlite:///:memory:")
     if _db_url.startswith("postgres://"):
         _db_url = _db_url.replace("postgres://", "postgresql://", 1)
     if _db_url.startswith("postgresql://") and not _db_url.startswith("postgresql+"):
@@ -33,9 +33,13 @@ class Settings:
                 import pg8000  # noqa: F401
                 _db_url = _db_url.replace("postgresql://", "postgresql+pg8000://", 1)
             except ImportError:
-                print("[CONFIG] Neither psycopg2 nor pg8000 installed. Falling back to local SQLite.")
-                _db_url = f"sqlite:///{BASE_DIR}/creator_forge.db"
+                print("[CONFIG] Neither psycopg2 nor pg8000 installed. Using in-memory store.")
+                _db_url = "sqlite:///:memory:"
     DATABASE_URL: str = _db_url
+
+    # MongoDB (Primary Cloud Document Database)
+    MONGODB_URI: str = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", "")).strip()
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "creator_forge").strip()
 
 
 
