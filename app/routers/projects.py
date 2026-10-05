@@ -1502,9 +1502,9 @@ def generate_project_campaign_image(
         user_prompt=body.prompt if body else None
     )
 
-    api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
-    openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
-    caller = (body.caller if body and body.caller else None) or x_user_role or "admin"
+    api_key = (body.apiKey if body and body.apiKey else None) or (x_gemini_key if isinstance(x_gemini_key, str) and x_gemini_key.strip() else None)
+    openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or (x_openai_key if isinstance(x_openai_key, str) and x_openai_key.strip() else None)
+    caller = (body.caller if body and body.caller else None) or (x_user_role if isinstance(x_user_role, str) and x_user_role.strip() else None) or "admin"
 
     try:
         media_result = generate_campaign_social_image(
@@ -1547,6 +1547,7 @@ def generate_project_campaign_image(
     for t in schedule:
         ch = (t.get("channel") or "").lower()
         ti = (t.get("title") or "").lower()
+        dk = t.get("draftKey") or ""
         is_post_task = dk == "announcementPost" or (
             dk != "videoScript"
             and dk != "newsletterDraft"
@@ -1631,9 +1632,9 @@ def generate_project_campaign_video(
         user_prompt=body.prompt if body else None
     )
 
-    api_key = (body.apiKey if body and body.apiKey else None) or x_gemini_key
-    openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or x_openai_key
-    caller = (body.caller if body and body.caller else None) or x_user_role or "admin"
+    api_key = (body.apiKey if body and body.apiKey else None) or (x_gemini_key if isinstance(x_gemini_key, str) and x_gemini_key.strip() else None)
+    openai_key = (body.openaiApiKey if body and body.openaiApiKey else None) or (x_openai_key if isinstance(x_openai_key, str) and x_openai_key.strip() else None)
+    caller = (body.caller if body and body.caller else None) or (x_user_role if isinstance(x_user_role, str) and x_user_role.strip() else None) or "admin"
 
     try:
         media_result = generate_campaign_video(

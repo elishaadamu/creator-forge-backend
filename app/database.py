@@ -267,8 +267,6 @@ def init_db():
                         id="default",
                         active_section="section1",
                         active_step=6,
-                        default_pass_price=199.0,
-                        cobuilder_pass_price=199.0,
                         extra_state={"default_pass_price": 199.0, "cobuilder_pass_price": 199.0}
                     )
                     db.add(ws_row)
@@ -279,8 +277,6 @@ def init_db():
                     cur_extra["default_pass_price"] = 199.0
                     cur_extra["cobuilder_pass_price"] = 199.0
                     ws_row.extra_state = cur_extra
-                    ws_row.default_pass_price = 199.0
-                    ws_row.cobuilder_pass_price = 199.0
                     db.commit()
             except Exception as b_err:
                 print(f"[DB INIT] Fail-safe backup seed notice: {b_err}")
