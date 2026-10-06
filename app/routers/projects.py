@@ -700,6 +700,11 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
     founding_p = parsed_pricing["founding_price"]
     deposit_p = parsed_pricing["deposit_price"]
 
+    d["pricingConfig"] = p_cfg
+    d["pricing_config"] = p_cfg
+    d["pricingTiers"] = p_tiers
+    d["pricing_tiers"] = p_tiers
+
     if "validationCampaign" in d and isinstance(d["validationCampaign"], dict):
         va = d["validationCampaign"].get("productAssets") or d["validationCampaign"].get("product_assets")
         if not isinstance(va, dict):
