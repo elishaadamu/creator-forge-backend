@@ -864,6 +864,38 @@ STRICT REQUIREMENTS:
                     logger.warning(f"Error persisting creator @{handle}: {e}")
                     cand_info["db_id"] = f"auto_{handle}"
             db.commit()
+
+            # Direct write-through to MongoDB Atlas creators collection
+            try:
+                from datetime import datetime
+                from app.mongodb import get_collection
+                c_coll = get_collection("creators")
+                if c_coll is not None:
+                    for cand_info in enriched_list:
+                        h_clean = str(cand_info["handle"]).lstrip("@").strip()
+                        c_id = cand_info.get("db_id") or f"c_{h_clean.lower()}"
+                        c_doc = {
+                            "_id": c_id,
+                            "id": c_id,
+                            "handle": h_clean,
+                            "platform": cand_info.get("platform", "youtube").lower(),
+                            "display_name": cand_info.get("display_name") or h_clean,
+                            "follower_count": cand_info.get("follower_count", 0),
+                            "niche": cand_info.get("niche", []),
+                            "bio": cand_info.get("bio", ""),
+                            "profile_url": cand_info.get("profile_url", ""),
+                            "website": cand_info.get("website") or cand_info.get("website_url") or "",
+                            "email_public": cand_info.get("email_public") or "",
+                            "avatar_url": cand_info.get("avatar_url", ""),
+                            "status": "discovered",
+                            "engagement_score": round(cand_info.get("engagement", 3.5), 1),
+                            "creatorScore": cand_info.get("score", 85),
+                            "updated_at": datetime.utcnow().isoformat(),
+                            "created_at": datetime.utcnow().isoformat(),
+                        }
+                        c_coll.replace_one({"$or": [{"_id": c_id}, {"handle": h_clean}]}, c_doc, upsert=True)
+            except Exception as m_c_err:
+                logger.debug(f"[MongoDB] Creators sync notice: {m_c_err}")
     except Exception as db_err:
         logger.warning(f"Database batch session error: {db_err}")
 

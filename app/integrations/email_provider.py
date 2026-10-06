@@ -105,25 +105,37 @@ class EmailProvider:
                     body_html = (body_text or "").replace("\n", "<br>")
 
         display_name = from_name or settings.FROM_NAME or "Creator Forge"
-        sender_email = (
+        candidate_sender = (
             from_email
             or settings.FROM_EMAIL
             or settings.ADMIN_EMAIL
             or settings.GOOGLE_EMAIL
-            or "creatorforgeweb@12019303.brevosend.com"
+            or "creatorforgeweb@gmail.com"
+        ).strip()
+
+        # Sanitize away unroutable brevosend relay domain to genuine Gmail address
+        if "brevosend.com" in candidate_sender.lower():
+            sender_email = (settings.GOOGLE_EMAIL or "creatorforgeweb@gmail.com").strip()
+        else:
+            sender_email = candidate_sender
+
+        # Ensure Reply-To always points to a real, routable Gmail inbox so replies never bounce
+        reply_email = (
+            settings.GOOGLE_EMAIL
+            or (sender_email if "brevosend.com" not in sender_email.lower() else None)
+            or "creatorforgeweb@gmail.com"
         ).strip()
 
         errors = []
 
         # ── 0. Brevo HTTPS API Direct (Port 443 — Verified sending domain) ─────
-        # If sender_email matches Brevo verified domain or BREVO_API_KEY is configured,
-        # prioritize Brevo HTTPS API with matching replyTo.
-        if settings.BREVO_API_KEY and ("brevosend.com" in sender_email or not (settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD)):
+        # If BREVO_API_KEY is configured, prioritize Brevo HTTPS API with matching replyTo.
+        if settings.BREVO_API_KEY:
             try:
                 brevo_payload = {
                     "sender": {"name": display_name, "email": sender_email},
                     "to": [{"email": to_email}],
-                    "replyTo": {"email": sender_email, "name": display_name},
+                    "replyTo": {"email": reply_email, "name": display_name},
                     "subject": subject,
                     "htmlContent": body_html,
                     "textContent": body_text,
@@ -153,7 +165,7 @@ class EmailProvider:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
             msg["From"] = f"{display_name} <{smtp_user}>"
-            msg["Reply-To"] = sender_email
+            msg["Reply-To"] = reply_email
             msg["To"] = to_email
             msg.attach(MIMEText(body_text, "plain"))
             msg.attach(MIMEText(body_html, "html"))
@@ -253,6 +265,7 @@ class EmailProvider:
                 brevo_payload = {
                     "sender": {"name": display_name, "email": sender_email},
                     "to": [{"email": to_email}],
+                    "replyTo": {"email": reply_email, "name": display_name},
                     "subject": subject,
                     "htmlContent": body_html,
                     "textContent": body_text,

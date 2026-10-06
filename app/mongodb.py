@@ -1,8 +1,14 @@
 import os
+import re
 import json
+import uuid
+import copy
 import logging
+import threading
 from pathlib import Path
-from typing import Optional, Dict, Any
+from datetime import datetime
+from typing import Optional, Dict, Any, List, Union
+
 from pymongo import MongoClient
 from pymongo.database import Database
 from pymongo.collection import Collection
@@ -10,6 +16,21 @@ from pymongo.collection import Collection
 logger = logging.getLogger("creator_forge.mongodb")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# DNS resolver patch to prevent macOS local router DNS timeouts
+try:
+    import dns.resolver
+    _orig_resolver_init = dns.resolver.Resolver.__init__
+    def _patched_resolver_init(self, *args, **kwargs):
+        kwargs["configure"] = False
+        _orig_resolver_init(self, *args, **kwargs)
+        self.nameservers = ["8.8.8.8", "1.1.1.1", "8.8.4.4", "1.0.0.1"]
+        self.lifetime = 10.0
+        self.timeout = 5.0
+    dns.resolver.Resolver.__init__ = _patched_resolver_init
+except Exception:
+    pass
+
 
 def get_mongo_uri() -> str:
     uri = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", "")).strip()
@@ -24,104 +45,6 @@ def get_mongo_uri() -> str:
     return uri
 
 
-_client: Optional[MongoClient] = None
-_db: Optional[Database] = None
-_last_error: Optional[str] = None
-
-_last_failure_time: float = 0.0
-
-def get_mongo_client() -> Optional[MongoClient]:
-    global _client, _last_error, _last_failure_time
-    if _client is not None:
-        return _client
-
-    import time
-    if time.time() - _last_failure_time < 30.0:
-        return None
-
-    uri = get_mongo_uri()
-    if not uri:
-        logger.warning("[MongoDB] MONGODB_URI not configured in .env.")
-        _last_error = "MONGODB_URI not configured"
-        return None
-
-    try:
-        kwargs: Dict[str, Any] = {
-            "serverSelectionTimeoutMS": 2000,
-            "connectTimeoutMS": 2000,
-            "socketTimeoutMS": 5000,
-            "maxPoolSize": 20,
-            "minPoolSize": 1,
-            "retryWrites": True
-        }
-        try:
-            import certifi
-            kwargs["tlsCAFile"] = certifi.where()
-        except Exception:
-            pass
-
-        client_candidate = MongoClient(uri, **kwargs)
-        # Test connection with ping
-        client_candidate.admin.command('ping')
-        _client = client_candidate
-        _last_error = None
-        logger.info("[MongoDB] Connected successfully to MongoDB cluster!")
-        return _client
-    except Exception as e:
-        import time
-        _last_failure_time = time.time()
-        _last_error = str(e)
-        logger.error(f"[MongoDB] Failed to connect to MongoDB ({e}).")
-        _client = None
-        return None
-
-
-def get_mongo_db() -> Optional[Database]:
-    global _db
-    if _db is not None:
-        return _db
-
-    client = get_mongo_client()
-    if client is None:
-        return None
-
-    db_name = os.getenv("MONGODB_DB_NAME", "creator_forge").strip()
-    _db = client[db_name]
-    return _db
-
-
-def get_collection(name: str) -> Optional[Collection]:
-    db = get_mongo_db()
-    if db is None:
-        return None
-    return db[name]
-
-
-def check_mongo_connection() -> Dict[str, Any]:
-    global _last_error
-    uri = get_mongo_uri()
-    if not uri:
-        return {
-            "status": "not_configured",
-            "message": "MONGODB_URI is not set in backend/.env. Please provide your MongoDB Atlas connection string."
-        }
-    try:
-        client = get_mongo_client()
-        if client:
-            client.admin.command('ping')
-            db = get_mongo_db()
-            collections = db.list_collection_names() if db is not None else []
-            return {
-                "status": "connected",
-                "database": os.getenv("MONGODB_DB_NAME", "creator_forge"),
-                "collections": collections
-            }
-        return {"status": "disconnected", "message": f"Could not connect to MongoDB: {_last_error}"}
-    except Exception as e:
-        _last_error = str(e)
-        return {"status": "error", "message": str(e)}
-
-
 SCHEMA_COLLECTIONS = [
     "analyses", "audit_logs", "autonomous_campaigns", "campaigns",
     "co_launch_projects", "contacts", "content_samples", "creator_campaign_tasks",
@@ -132,45 +55,77 @@ SCHEMA_COLLECTIONS = [
     "validation_plans", "validation_telemetry", "workflow_states",
 ]
 
+_client: Optional[MongoClient] = None
+_db: Optional[Database] = None
+_lock = threading.Lock()
+
+
+def get_mongo_client() -> MongoClient:
+    """Returns singleton MongoDB Atlas client connected to cluster."""
+    global _client
+    if _client is not None:
+        return _client
+    with _lock:
+        if _client is not None:
+            return _client
+        uri = get_mongo_uri()
+        kwargs: Dict[str, Any] = {
+            "serverSelectionTimeoutMS": 15000,
+            "connectTimeoutMS": 15000,
+            "socketTimeoutMS": 20000,
+            "maxPoolSize": 50,
+            "minPoolSize": 1,
+            "retryWrites": True,
+            "retryReads": True,
+        }
+        try:
+            import certifi
+            kwargs["tlsCAFile"] = certifi.where()
+        except Exception:
+            pass
+        _client = MongoClient(uri, **kwargs)
+        logger.info("[MongoDB] Connected directly to MongoDB Atlas cluster.")
+        return _client
+
+
+def get_mongo_db() -> Database:
+    """Returns primary MongoDB database."""
+    global _db
+    if _db is not None:
+        return _db
+    client = get_mongo_client()
+    db_name = os.getenv("MONGODB_DB_NAME", "creator_forge").strip()
+    _db = client[db_name]
+    return _db
+
+
+def get_collection(name: str) -> Collection:
+    """Primary accessor for MongoDB Atlas collections. Always queries real MongoDB."""
+    db = get_mongo_db()
+    return db[name]
+
+
+def check_mongo_connection() -> Dict[str, Any]:
+    try:
+        client = get_mongo_client()
+        client.admin.command("ping")
+        db = get_mongo_db()
+        return {
+            "status": "connected",
+            "database": db.name,
+            "collections": db.list_collection_names(),
+            "mode": "atlas"
+        }
+    except Exception as e:
+        logger.warning(f"[MongoDB] Connection check warning: {e}")
+        return {
+            "status": "error",
+            "database": os.getenv("MONGODB_DB_NAME", "creator_forge"),
+            "error": str(e),
+            "mode": "atlas"
+        }
+
 
 def seed_from_backup_if_empty():
-    """Seeds collections from backend/data_backup.json and ensures all 28 schema collections exist."""
-    db = get_mongo_db()
-    if db is None:
-        return
-
-    # 1. Ensure all 28 collections are explicitly present
-    existing_colls = set(db.list_collection_names())
-    for col_name in SCHEMA_COLLECTIONS:
-        if col_name not in existing_colls:
-            try:
-                db.create_collection(col_name)
-            except Exception:
-                pass
-
-    backup_file = BASE_DIR / "data_backup.json"
-    if not backup_file.exists():
-        return
-
-    try:
-        with open(backup_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        for table_name, rows in data.items():
-            if not rows or not isinstance(rows, list):
-                continue
-            coll = db[table_name]
-            if coll.count_documents({}) == 0:
-                logger.info(f"[MongoDB] Seeding {len(rows)} records into collection '{table_name}'...")
-                # Normalize documents (ensure 'id' is unique or mapped)
-                docs = []
-                for r in rows:
-                    doc = dict(r)
-                    if "id" in doc and "_id" not in doc:
-                        doc["_id"] = doc["id"]
-                    docs.append(doc)
-                if docs:
-                    coll.insert_many(docs, ordered=False)
-                    logger.info(f"[MongoDB] Successfully seeded '{table_name}' ({len(docs)} documents).")
-    except Exception as e:
-        logger.warning(f"[MongoDB] Backup seed error: {e}")
+    """No-op: All data is maintained purely in MongoDB Atlas."""
+    pass

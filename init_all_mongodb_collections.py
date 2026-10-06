@@ -90,31 +90,8 @@ for col_name in SCHEMA_COLLECTIONS:
     else:
         print(f"  ✓ Collection exists: '{col_name}'")
 
-# 2. Push data from data_backup.json if present
-backup_file = BASE_DIR / "data_backup.json"
-if backup_file.exists():
-    with open(backup_file, "r", encoding="utf-8") as f:
-        backup_data = json.load(f)
-
-    for table_name, records in backup_data.items():
-        if not records or not isinstance(records, list):
-            continue
-        coll = db[table_name]
-        ops = []
-        for r in records:
-            doc = dict(r)
-            if "id" in doc and "_id" not in doc:
-                doc["_id"] = doc["id"]
-            for key in ["niche", "tags", "metadata", "extra_data", "details"]:
-                if key in doc and isinstance(doc[key], str):
-                    try:
-                        doc[key] = json.loads(doc[key])
-                    except Exception:
-                        pass
-            if "_id" in doc:
-                ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
-        if ops:
-            coll.bulk_write(ops, ordered=False)
+# 2. Collections ready in MongoDB Atlas
+print("  ✓ All collections verified in MongoDB Atlas.")
 
 # 3. Seed default target niches if empty
 target_niches_coll = db["target_niches"]

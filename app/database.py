@@ -24,18 +24,14 @@ def create_configured_engine(url: str):
             },
             echo=False,
         )
-    if ":memory:" in url:
-        return create_engine(
-            url,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-            echo=False,
-        )
+    # In-memory volatile scratchpad only (primary database is MongoDB Atlas)
     return create_engine(
-        url,
+        fallback_sqlite_url,
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         echo=False,
     )
+
 
 
 def get_working_engine():
@@ -117,7 +113,7 @@ def init_db():
     from app.models.campaign import Campaign
     from app.models.niche import TargetNiche
     from app.models.creator import Creator
-    from app.models.project import CoLaunchProject
+    from app.models.project import CoLaunchProject, ValidationCampaign
     from app.models.workflow_state import WorkflowState
     db = SessionLocal()
     try:
@@ -174,116 +170,11 @@ def init_db():
             db.commit()
             print("[DB INIT] Seeding default target niches completed.")
 
-        # Sync creators from MongoDB Atlas into memory if present
-        if db.query(Creator).count() == 0:
-            try:
-                from app.mongodb import get_collection
-                coll = get_collection("creators")
-                if coll is not None:
-                    mongo_creators = list(coll.find({}))
-                    if mongo_creators:
-                        import json
-                        from datetime import datetime
-                        creator_cols = {c.name for c in Creator.__table__.columns}
-                        for doc in mongo_creators:
-                            r = dict(doc)
-                            r.pop("_id", None)
-                            if isinstance(r.get("niche"), str):
-                                try:
-                                    r["niche"] = json.loads(r["niche"])
-                                except Exception:
-                                    r["niche"] = [r["niche"]]
-                            for dt_field in ["created_at", "updated_at"]:
-                                if r.get(dt_field) and isinstance(r[dt_field], str):
-                                    try:
-                                        r[dt_field] = datetime.fromisoformat(r[dt_field])
-                                    except Exception:
-                                        r[dt_field] = datetime.utcnow()
-                            filtered = {k: v for k, v in r.items() if k in creator_cols}
-                            db.add(Creator(**filtered))
-                        db.commit()
-                        print(f"[DB INIT] Synced {len(mongo_creators)} creators from MongoDB into memory.")
-            except Exception as m_err:
-                print(f"[DB INIT] MongoDB creator sync notice: {m_err}")
-                db.rollback()
-
-        # Seed from data_backup.json as fail-safe fallback
-        backup_file = BASE_DIR / "data_backup.json"
-        if backup_file.exists():
-            try:
-                import json
-                from datetime import datetime
-                with open(backup_file, "r", encoding="utf-8") as bf:
-                    bdata = json.load(bf)
-
-                # 1. Creators
-                if db.query(Creator).count() == 0:
-                    b_creators = bdata.get("creators", [])
-                    creator_cols = {c.name for c in Creator.__table__.columns}
-                    for doc in b_creators:
-                        r = dict(doc)
-                        r.pop("_id", None)
-                        if isinstance(r.get("niche"), str):
-                            try: r["niche"] = json.loads(r["niche"])
-                            except Exception: r["niche"] = [r["niche"]]
-                        for dt_field in ["created_at", "updated_at"]:
-                            if r.get(dt_field) and isinstance(r[dt_field], str):
-                                try: r[dt_field] = datetime.fromisoformat(r[dt_field])
-                                except Exception: r[dt_field] = datetime.utcnow()
-                        filtered = {k: v for k, v in r.items() if k in creator_cols}
-                        db.add(Creator(**filtered))
-                    db.commit()
-                    print(f"[DB INIT] Seeded {len(b_creators)} creators from data_backup.json.")
-
-                # 2. Projects
-                if db.query(CoLaunchProject).count() == 0:
-                    b_projects = bdata.get("co_launch_projects", [])
-                    proj_cols = {c.name for c in CoLaunchProject.__table__.columns}
-                    for pdoc in b_projects:
-                        pr = dict(pdoc)
-                        pr.pop("_id", None)
-                        if "creatorHandle" in pr and "creator_handle" not in pr: pr["creator_handle"] = pr["creatorHandle"]
-                        if "creatorName" in pr and "creator_name" not in pr: pr["creator_name"] = pr["creatorName"]
-                        if "creatorEmail" in pr and "creator_email" not in pr: pr["creator_email"] = pr["creatorEmail"]
-                        if "creatorId" in pr and "creator_id" not in pr: pr["creator_id"] = pr["creatorId"]
-                        if "productName" in pr and "product_name" not in pr: pr["product_name"] = pr["productName"]
-                        if "productTagline" in pr and "product_tagline" not in pr: pr["product_tagline"] = pr["productTagline"]
-                        if "selectedConcept" in pr and "selected_concept" not in pr: pr["selected_concept"] = pr["selectedConcept"]
-                        if "metadataInfo" in pr and "metadata_info" not in pr: pr["metadata_info"] = pr["metadataInfo"]
-                        if "presaleTarget" in pr and "presale_target" not in pr: pr["presale_target"] = pr["presaleTarget"]
-                        for dt_field in ["created_at", "updated_at", "portal_link_sent_at"]:
-                            if pr.get(dt_field) and isinstance(pr[dt_field], str):
-                                try: pr[dt_field] = datetime.fromisoformat(pr[dt_field])
-                                except Exception: pr[dt_field] = datetime.utcnow()
-                        filtered_p = {k: v for k, v in pr.items() if k in proj_cols}
-                        db.add(CoLaunchProject(**filtered_p))
-                    db.commit()
-                    print(f"[DB INIT] Seeded {len(b_projects)} projects from data_backup.json.")
-
-                # 3. Workflow State
-                ws_row = db.query(WorkflowState).filter(WorkflowState.id == "default").first()
-                if not ws_row:
-                    ws_row = WorkflowState(
-                        id="default",
-                        active_section="section1",
-                        active_step=6,
-                        extra_state={"default_pass_price": 199.0, "cobuilder_pass_price": 199.0}
-                    )
-                    db.add(ws_row)
-                    db.commit()
-                    print("[DB INIT] Seeded default workflow state with 199.0 pass fee.")
-                else:
-                    cur_extra = dict(ws_row.extra_state or {})
-                    cur_extra["default_pass_price"] = 199.0
-                    cur_extra["cobuilder_pass_price"] = 199.0
-                    ws_row.extra_state = cur_extra
-                    db.commit()
-            except Exception as b_err:
-                print(f"[DB INIT] Fail-safe backup seed notice: {b_err}")
-                db.rollback()
+        db.commit()
     except Exception as e:
         print(f"[DB INIT] Warning: Failed to seed defaults: {e}")
         db.rollback()
     finally:
         db.close()
+
 

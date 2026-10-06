@@ -65,9 +65,16 @@ def get_contact_reply_email() -> str:
         from app.config import settings
         env_from = os.getenv("FROM_EMAIL") or getattr(settings, "FROM_EMAIL", None)
         env_admin = os.getenv("ADMIN_EMAIL") or getattr(settings, "ADMIN_EMAIL", None)
-        return (env_from or env_admin or "creatorforgeweb@12019303.brevosend.com").strip()
+        google_mail = os.getenv("GOOGLE_EMAIL") or getattr(settings, "GOOGLE_EMAIL", None)
+        candidate = (env_from or env_admin or google_mail or "creatorforgeweb@gmail.com").strip()
+        if "brevosend.com" in candidate.lower():
+            return (google_mail or "creatorforgeweb@gmail.com").strip()
+        return candidate
     except Exception:
-        return os.getenv("FROM_EMAIL", "creatorforgeweb@12019303.brevosend.com").strip()
+        fallback = os.getenv("FROM_EMAIL", "creatorforgeweb@gmail.com").strip()
+        if "brevosend.com" in fallback.lower():
+            return "creatorforgeweb@gmail.com"
+        return fallback
 
 
 def _render_executive_signature_html(creator_name: str = "", tracking_token: str = "") -> str:

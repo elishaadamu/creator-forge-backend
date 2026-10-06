@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -32,6 +33,12 @@ class CreateProjectRequest(BaseModel):
     followers: Optional[Any] = None
     productName: Optional[str] = "New Co-Launch Venture"
     productTagline: Optional[str] = None
+    product_tagline: Optional[str] = None
+    diyFee: Optional[float] = None
+    diy_fee: Optional[float] = None
+    diyPassPrice: Optional[float] = None
+    hasCustomFee: Optional[bool] = None
+    has_custom_fee: Optional[bool] = None
     targetAudience: Optional[str] = None
     customer: Optional[str] = None
     problem: Optional[str] = None
@@ -127,6 +134,13 @@ class ToggleAutonomousDeliveryRequest(BaseModel):
     preferredHour: Optional[int] = 0
     timezone: Optional[str] = None
     country: Optional[str] = None
+
+
+class StartCampaignSimulationRequest(BaseModel):
+    recipientEmail: Optional[str] = None
+    intervalSeconds: Optional[int] = 42
+    totalPosts: Optional[int] = None
+
 
 
 def _sync_proj_to_mongo(proj_data: Dict[str, Any]):
@@ -470,473 +484,657 @@ class LogActivityRequest(BaseModel):
     phase: Optional[int] = 1
 
 
-@router.get("")
-def list_projects(db: Session = Depends(get_db)):
-    """List all co-launch projects."""
-    projects = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).all()
-    if not projects:
+def parse_concept_pricing_details(pricing_str: str) -> Dict[str, Any]:
+    """
+    Intelligently extracts founding price, deposit price, starter price, and tiers
+    from concept pricing strings like:
+      - '$59/mo Membership • $199 One-time Annual Access'
+      - '$19/mo Starter • $49/mo Pro'
+      - '$29/mo Membership • $299 Lifetime Access'
+      - '$49/mo Membership • $149/mo VIP Mastermind'
+      - '$89'
+    """
+    if not pricing_str:
+        return {
+            "founding_price": 99,
+            "deposit_price": 19,
+            "starter_price": 29,
+            "pro_price": 79,
+            "pricing_tiers": [
+                {"name": "Founding Member Pass", "price": 99, "period": "lifetime"},
+                {"name": "Starter Plan", "price": 29, "period": "month"},
+                {"name": "Pro Builder", "price": 79, "period": "month"}
+            ],
+            "pricing_config": {"foundingPrice": 99, "depositPrice": 19}
+        }
+
+    import re
+    raw = str(pricing_str).replace(",", "").strip()
+    segments = [s.strip() for s in re.split(r"[•|;]", raw) if s.strip()]
+    extracted = []
+    for s in segments:
+        m = re.search(r"\$(\d+)", s)
+        if m:
+            price = int(m.group(1))
+            is_monthly = bool(re.search(r"/mo|per month|monthly", s, re.IGNORECASE))
+            is_annual = bool(re.search(r"annual|one-time|lifetime|access|pass|year|/yr", s, re.IGNORECASE))
+            is_vip = bool(re.search(r"vip|mastermind|founding", s, re.IGNORECASE))
+            name = re.sub(r"\$(\d+)", "", s).replace("/", " ").strip()
+            name = re.sub(r"^\s*(?:mo|per month)\s*", "", name, flags=re.IGNORECASE).strip()
+            name = re.sub(r"\s+", " ", name)
+            if not name or name.lower() in ["plan", "tier"]:
+                name = "Monthly Membership" if is_monthly else ("Founding Annual Pass" if is_annual else "Standard Plan")
+            elif is_monthly and not any(w in name.lower() for w in ["monthly", "month", "/mo"]):
+                name = f"{name} (Monthly)"
+            extracted.append({
+                "raw": s,
+                "price": price,
+                "name": name,
+                "is_monthly": is_monthly,
+                "is_annual": is_annual,
+                "is_vip": is_vip,
+                "period": "month" if is_monthly else ("annual" if is_annual else "one-time")
+            })
+
+    if not extracted:
+        all_prices = [int(p) for p in re.findall(r"\$(\d+)", raw)]
+        for idx, p in enumerate(all_prices):
+            extracted.append({
+                "raw": f"${p}",
+                "price": p,
+                "name": "Starter Plan" if idx == 0 else "Founding Tier",
+                "is_monthly": False,
+                "is_annual": idx > 0,
+                "is_vip": False,
+                "period": "one-time"
+            })
+
+    if not extracted:
+        digits = re.search(r"(\d+)", raw)
+        base = int(digits.group(1)) if digits else 99
+        dep = max(9, int(round(base * 0.2)))
+        return {
+            "founding_price": base,
+            "deposit_price": dep,
+            "starter_price": max(9, int(round(base * 0.3))),
+            "pro_price": max(base, int(round(base * 0.7))),
+            "pricing_tiers": [{"name": "Founding Member Pass", "price": base, "period": "lifetime"}],
+            "pricing_config": {"foundingPrice": base, "depositPrice": dep}
+        }
+
+    annual_or_one_time = next((t for t in extracted if t["is_annual"] or t["is_vip"]), None)
+    monthly = next((t for t in extracted if t["is_monthly"]), None)
+
+    if len(extracted) == 1:
+        founding_price = extracted[0]["price"]
+        starter_price = extracted[0]["price"] if extracted[0]["is_monthly"] else max(9, int(round(founding_price * 0.3)))
+        pro_price = max(starter_price * 2, int(round(founding_price * 0.7)))
+    elif annual_or_one_time and monthly:
+        founding_price = annual_or_one_time["price"]
+        starter_price = monthly["price"]
+        pro_price = founding_price
+    else:
+        sorted_tiers = sorted(extracted, key=lambda x: x["price"])
+        lowest = sorted_tiers[0]
+        highest = sorted_tiers[-1]
+        starter_price = lowest["price"]
+        if highest["price"] >= 80:
+            founding_price = highest["price"]
+        else:
+            founding_price = max(highest["price"] * 2, 89)
+        pro_price = highest["price"]
+
+    deposit_price = max(9, int(round(founding_price * 0.2)))
+
+    pricing_tiers = []
+    for t in extracted:
+        t_name = t["name"]
+        if t["price"] == founding_price and not any(k in t_name.lower() for k in ["founding", "annual", "lifetime", "pass"]):
+            t_name = f"Founding Pass ({t_name})"
+        pricing_tiers.append({
+            "name": t_name,
+            "price": t["price"],
+            "period": t["period"]
+        })
+
+    return {
+        "founding_price": founding_price,
+        "deposit_price": deposit_price,
+        "starter_price": starter_price,
+        "pro_price": pro_price,
+        "pricing_tiers": pricing_tiers,
+        "pricing_config": {"foundingPrice": founding_price, "depositPrice": deposit_price}
+    }
+
+
+def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) -> Dict[str, Any]:
+    if not d:
+        return d
+    d.pop("_id", None)
+
+    # 1. Normalize pricing / DIY pass price
+    cur_fee = d.get("diyFee") if d.get("diyFee") is not None else d.get("diyPassPrice")
+    if cur_fee is None and isinstance(d.get("metadataInfo"), dict):
+        cur_fee = d["metadataInfo"].get("diy_fee") if d["metadataInfo"].get("diy_fee") is not None else d["metadataInfo"].get("diyFee")
+        if cur_fee is None:
+            cur_fee = d["metadataInfo"].get("diyPassPrice")
+    fee_to_use = cur_fee if cur_fee is not None else default_fee
+    d["diyFee"] = fee_to_use
+    d["diyPassPrice"] = fee_to_use
+    if isinstance(d.get("metadataInfo"), dict):
+        d["metadataInfo"]["diy_fee"] = fee_to_use
+        d["metadataInfo"]["diyFee"] = fee_to_use
+        d["metadataInfo"]["diyPassPrice"] = fee_to_use
+
+    # 2. Extract & link campaign kit if missing or incomplete
+    meta = d.get("metadata_info") or d.get("metadataInfo") or {}
+    kit = d.get("campaignKit") or d.get("campaign_kit") or meta.get("campaign_kit") or meta.get("campaignKit")
+
+    if not kit or not isinstance(kit, dict) or not kit.get("postingSchedule"):
         try:
             from app.mongodb import get_collection
-            coll = get_collection("co_launch_projects")
-            if coll is not None:
-                docs = list(coll.find({}))
-                if docs:
-                    ws_coll = get_collection("workflow_states")
-                    ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
-                    def_fee = 199.0
-                    if ws_doc:
-                        def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
-                    for d in docs:
-                        d.pop("_id", None)
-                        if not d.get("hasCustomFee"):
-                            d["diyFee"] = def_fee
-                            d["diyPassPrice"] = def_fee
-                    return docs
-        except Exception as e:
-            logger.debug(f"[MongoDB] list_projects fallback notice: {e}")
-    return [_format_project_response(p) for p in projects]
+            vc_coll = get_collection("validation_campaigns")
+            p_id = d.get("id")
+            if p_id:
+                vc = vc_coll.find_one({"$or": [{"project_id": p_id}, {"id": f"vc_{p_id}"}, {"id": p_id}]})
+                if vc:
+                    kit = vc.get("campaign_kit") or vc.get("campaignKit") or kit
+        except Exception:
+            pass
+
+    if kit and isinstance(kit, dict):
+        schedule = kit.get("postingSchedule")
+        if isinstance(schedule, list):
+            for idx, t in enumerate(schedule):
+                t["day"] = idx + 1
+                t["dayNumber"] = idx + 1
+                t["day_number"] = idx + 1
+                t["milestoneNumber"] = idx + 1
+                t["spacingNotice"] = f"Day {idx + 1} of {len(schedule)}"
+        d["campaignKit"] = kit
+        d["campaign_kit"] = kit
+        if "validationCampaign" in d and isinstance(d["validationCampaign"], dict):
+            d["validationCampaign"]["campaignKit"] = kit
+            d["validationCampaign"]["campaign_kit"] = kit
+        if not d.get("creatorTasks") and schedule:
+            d["creatorTasks"] = schedule
+
+    # 3. Synchronize naming aliases
+    p_name = d.get("productName") or d.get("title") or d.get("product_name")
+    if p_name:
+        d["productName"] = p_name
+        d["title"] = p_name
+        d["product_name"] = p_name
+
+    # 4. Synchronize & format pricing string
+    sel_c = d.get("selectedConcept") or d.get("selected_concept")
+    raw_p = str(d.get("pricing") or "").strip()
+    if isinstance(sel_c, dict):
+        c_pricing = str(sel_c.get("pricing") or "").strip()
+        if c_pricing and (not raw_p or raw_p == "$29/mo Starter • $79/mo Pro"):
+            raw_p = c_pricing
+        elif not c_pricing and raw_p:
+            sel_c["pricing"] = raw_p
+        d["selectedConcept"] = sel_c
+        d["selected_concept"] = sel_c
+
+    if not raw_p:
+        raw_p = "$29/mo Starter • $79/mo Pro"
+    elif raw_p.startswith("/mo"):
+        raw_p = f"$29{raw_p}"
+    elif "$" not in raw_p and ("/mo" in raw_p or "Access" in raw_p or "Pro" in raw_p or "Starter" in raw_p):
+        raw_p = f"${raw_p}"
+    d["pricing"] = raw_p
+
+    # Synchronize validationPlan.pricing
+    if isinstance(d.get("validationPlan"), dict):
+        d["validationPlan"]["pricing"] = raw_p
+        threshold = str(d["validationPlan"].get("threshold") or "").strip()
+        if threshold.startswith(",500") or threshold == ",500 in presales within 14 days":
+            d["validationPlan"]["threshold"] = "$12,500 in presales within 14 days"
+
+    # 5. Synchronize dynamic pricingConfig and pricingTiers
+    parsed_pricing = parse_concept_pricing_details(raw_p)
+    p_cfg = parsed_pricing["pricing_config"]
+    p_tiers = parsed_pricing["pricing_tiers"]
+    founding_p = parsed_pricing["founding_price"]
+    deposit_p = parsed_pricing["deposit_price"]
+
+    if "validationCampaign" in d and isinstance(d["validationCampaign"], dict):
+        va = d["validationCampaign"].get("productAssets") or d["validationCampaign"].get("product_assets")
+        if not isinstance(va, dict):
+            va = {}
+        existing_cfg = va.get("pricingConfig")
+        if not existing_cfg or existing_cfg.get("foundingPrice") in (89, 29, 9919, 177) or existing_cfg.get("foundingPrice") != founding_p:
+            va["pricingConfig"] = p_cfg
+            va["pricingTiers"] = p_tiers
+        d["validationCampaign"]["productAssets"] = va
+        d["validationCampaign"]["product_assets"] = va
+
+    if kit and isinstance(kit, dict):
+        existing_k_cfg = kit.get("pricingConfig")
+        if not existing_k_cfg or existing_k_cfg.get("foundingPrice") in (89, 29, 9919, 177) or existing_k_cfg.get("foundingPrice") != founding_p:
+            kit["pricingConfig"] = p_cfg
+        if "landingPageCopy" in kit and isinstance(kit["landingPageCopy"], dict):
+            kit["landingPageCopy"]["ctaText"] = f"Claim Founding Access (${founding_p})"
+            kit["landingPageCopy"]["reservationText"] = f"Reserve with ${deposit_p} Deposit"
+            if not kit["landingPageCopy"].get("bulletPoints") or any("$89" in str(b) for b in kit["landingPageCopy"].get("bulletPoints", [])):
+                kit["landingPageCopy"]["bulletPoints"] = [
+                    "Automate repetitive workflows with tailored software",
+                    "Direct private Slack & alpha advisory council access",
+                    f"50% lifetime discount locked in forever (${founding_p}/yr)"
+                ]
+        schedule = kit.get("postingSchedule")
+        if isinstance(schedule, list):
+            for t in schedule:
+                if isinstance(t, dict):
+                    cta_val = str(t.get("cta") or "")
+                    if "($89)" in cta_val:
+                        t["cta"] = cta_val.replace("($89)", f"(${founding_p})")
+                    elif "($177)" in cta_val:
+                        t["cta"] = cta_val.replace("($177)", f"(${founding_p})")
+
+    return d
+
+
+def _find_mongo_project(project_id: str) -> Optional[Dict[str, Any]]:
+    """Helper to locate project in MongoDB Atlas by any identifier."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is None or not project_id:
+            return None
+        clean_target = str(project_id).replace("@", "").lower().strip()
+        doc = coll.find_one({"$or": [
+            {"_id": project_id},
+            {"id": project_id},
+            {"creator_id": project_id},
+            {"creatorId": project_id},
+            {"creator_handle": clean_target},
+            {"creatorHandle": clean_target},
+            {"creator_handle": f"@{clean_target}"},
+            {"creatorHandle": f"@{clean_target}"},
+            {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+            {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+            {"creator_handle": project_id},
+            {"creatorHandle": project_id},
+        ]})
+        return doc
+    except Exception as e:
+        logger.error(f"[MongoDB] _find_mongo_project error: {e}")
+        return None
+
+
+def _save_mongo_project(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Helper to upsert project into MongoDB Atlas co_launch_projects."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is None or not doc:
+            return doc
+        p_id = doc.get("id") or doc.get("_id")
+        if not p_id:
+            p_id = f"proj_{int(datetime.utcnow().timestamp()*1000)}"
+            doc["id"] = p_id
+        doc["_id"] = p_id
+        now_str = datetime.utcnow().isoformat()
+        doc["updated_at"] = now_str
+        doc["updatedAt"] = now_str
+        coll.replace_one({"_id": p_id}, doc, upsert=True)
+        return doc
+    except Exception as e:
+        logger.error(f"[MongoDB] _save_mongo_project error: {e}")
+        return doc
+
+
+@router.get("")
+def list_projects(db: Session = Depends(get_db)):
+    """List all co-launch projects directly and exclusively from MongoDB Atlas."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is None:
+            return []
+        docs = list(coll.find({}))
+        ws_coll = get_collection("workflow_states")
+        ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+        def_fee = None
+        if ws_doc:
+            def_fee = ws_doc.get("default_pass_price")
+            if def_fee is None:
+                def_fee = (ws_doc.get("extra_state") or {}).get("default_pass_price")
+        if def_fee is None:
+            def_fee = 50.0
+        return [_normalize_mongo_project_dict(d, float(def_fee)) for d in docs]
+    except Exception as e:
+        logger.error(f"[MongoDB] list_projects error: {e}")
+        return []
 
 
 def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) -> dict:
     """
-    Core implementation to initialize a new Co-Launch Project from concept.
-    Initializes the 5-step validation architecture and sends dual notifications to Creator and Admin.
-    Can be called directly by background autonomous pipeline without HTTP context.
+    Initialize a new Co-Launch Project from concept directly and exclusively in MongoDB Atlas.
+    Initializes the 5-step validation architecture and sends notifications safely.
     """
-    # ── Strict Deduplication Guard: Check if project already exists for this creator ──
-    existing_creator_proj = None
-    if body.creatorId:
-        existing_creator_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_id == body.creatorId).first()
-    if not existing_creator_proj and body.creatorEmail:
-        existing_creator_proj = db.query(CoLaunchProject).filter(CoLaunchProject.creator_email == body.creatorEmail).first()
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    creators_coll = get_collection("creators")
+    ws_coll = get_collection("workflow_states")
+
     clean_handle = (body.creatorHandle or "").lstrip("@").strip().lower()
-    if not existing_creator_proj and clean_handle:
-        existing_creator_proj = db.query(CoLaunchProject).filter(
-            CoLaunchProject.creator_handle.ilike(f"%{clean_handle}%")
-        ).first()
-    if not existing_creator_proj and body.creatorName:
-        clean_name = body.creatorName.strip().lower()
-        if clean_name and len(clean_name) >= 3:
-            existing_creator_proj = db.query(CoLaunchProject).filter(
-                CoLaunchProject.creator_name.ilike(f"%{clean_name}%")
-            ).first()
 
-    if existing_creator_proj:
-        updated = False
-        concept_data = body.selectedConcept or {}
-        new_name = body.productName or concept_data.get("name")
-        new_tagline = body.productTagline or concept_data.get("tagline")
-        new_pricing = body.pricing or concept_data.get("pricing")
+    # 1. Check if project already exists for this creator in MongoDB Atlas
+    existing_doc = None
+    if coll is not None:
+        query_parts = []
+        if body.id:
+            query_parts.extend([{"_id": body.id}, {"id": body.id}])
+        if body.creatorId:
+            query_parts.extend([{"creator_id": body.creatorId}, {"creatorId": body.creatorId}])
+        if body.creatorEmail:
+            query_parts.extend([{"creator_email": body.creatorEmail}, {"creatorEmail": body.creatorEmail}])
+        if clean_handle:
+            query_parts.extend([
+                {"creator_handle": clean_handle}, {"creatorHandle": clean_handle},
+                {"creator_handle": f"@{clean_handle}"}, {"creatorHandle": f"@{clean_handle}"},
+                {"creator_handle": {"$regex": f"^{clean_handle}$", "$options": "i"}},
+                {"creatorHandle": {"$regex": f"^{clean_handle}$", "$options": "i"}}
+            ])
+        if query_parts:
+            existing_doc = coll.find_one({"$or": query_parts})
 
-        if new_name and new_name != existing_creator_proj.product_name:
-            existing_creator_proj.product_name = new_name
-            updated = True
-        if new_tagline and new_tagline != existing_creator_proj.product_tagline:
-            existing_creator_proj.product_tagline = new_tagline
-            updated = True
-        if new_pricing and new_pricing != existing_creator_proj.pricing:
-            existing_creator_proj.pricing = new_pricing
-            updated = True
-        if concept_data and concept_data != existing_creator_proj.selected_concept:
-            existing_creator_proj.selected_concept = concept_data
-            if concept_data.get("customer") or concept_data.get("demographicAlignment"):
-                existing_creator_proj.target_audience = concept_data.get("customer") or concept_data.get("demographicAlignment")
-            if existing_creator_proj.validation_plan:
-                if concept_data.get("customer") or concept_data.get("demographicAlignment"):
-                    existing_creator_proj.validation_plan.customer = concept_data.get("customer") or concept_data.get("demographicAlignment")
-                if concept_data.get("problem") or concept_data.get("description"):
-                    existing_creator_proj.validation_plan.problem = concept_data.get("problem") or concept_data.get("description")
-                existing_creator_proj.validation_plan.offer = f"{existing_creator_proj.product_name} Founding Co-Launch Access: {existing_creator_proj.product_tagline}"
-                if new_pricing:
-                    existing_creator_proj.validation_plan.pricing = new_pricing
-            if existing_creator_proj.validation_campaign:
-                pa = existing_creator_proj.validation_campaign.product_assets or {}
-                pa["productName"] = existing_creator_proj.product_name
-                pa["productTagline"] = existing_creator_proj.product_tagline
-                if concept_data.get("problem"):
-                    pa["problem"] = concept_data.get("problem")
-                if concept_data.get("keyFeatures"):
-                    pa["keyFeatures"] = concept_data.get("keyFeatures")
-                if concept_data.get("mockup"):
-                    pa["mockup"] = concept_data.get("mockup")
-                if concept_data.get("mockupType"):
-                    pa["mockupType"] = concept_data.get("mockupType")
-                pa["selectedConcept"] = concept_data
-                existing_creator_proj.validation_campaign.product_assets = pa
-                flag_modified(existing_creator_proj.validation_campaign, "product_assets")
-            updated = True
+    # Fetch default pass fee from workflow states (source of truth)
+    def_fee = 50.0
+    if ws_coll is not None:
+        ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]})
+        if ws_doc:
+            fee_cand = ws_doc.get("default_pass_price") or ws_doc.get("cobuilder_pass_price")
+            if fee_cand is None and ws_doc.get("extra_state"):
+                fee_cand = ws_doc["extra_state"].get("default_pass_price") or ws_doc["extra_state"].get("cobuilder_pass_price")
+            if fee_cand is not None:
+                try: def_fee = float(fee_cand)
+                except Exception: pass
 
-        # Ensure Creator table row is marked as launched
-        c_matched = None
-        if existing_creator_proj.creator_id:
-            c_matched = db.get(Creator, existing_creator_proj.creator_id)
-        if not c_matched and existing_creator_proj.creator_handle:
-            clean_h = existing_creator_proj.creator_handle.lstrip("@").strip()
-            c_matched = db.query(Creator).filter(
-                (Creator.handle.ilike(clean_h)) | (Creator.handle.ilike(f"@{clean_h}"))
-            ).first()
-        if c_matched and c_matched.status != "launched":
-            c_matched.status = "launched"
-            c_matched.updated_at = datetime.utcnow()
-            updated = True
-
-        if updated:
-            db.commit()
-            db.refresh(existing_creator_proj)
-
-        logger.info(f"[execute_create_co_launch_project] Project {existing_creator_proj.id} matched for creator. Returning project.")
-        return _format_project_response(existing_creator_proj)
-
-    proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
-
-    # Clean existing if exact ID exists
-    existing = db.get(CoLaunchProject, proj_id)
-    if existing:
-        db.delete(existing)
-        db.commit()
-
+    now_iso = datetime.utcnow().isoformat()
     concept_data = body.selectedConcept or {}
-    product_name = body.productName or concept_data.get("name") or "New Co-Launch Venture"
-    product_tagline = body.productTagline or concept_data.get("tagline") or ""
+    product_name = body.productName or concept_data.get("name") or concept_data.get("title") or "New Co-Launch Venture"
+    product_tagline = body.productTagline or concept_data.get("tagline") or concept_data.get("productTagline") or concept_data.get("description") or body.product_tagline or f"Exclusive software platform and operating system."
     pricing_str = body.pricing or concept_data.get("pricing") or "$29/mo Starter • $79/mo Pro"
+    if not pricing_str or not pricing_str.strip():
+        pricing_str = "$29/mo Starter • $79/mo Pro"
+    elif pricing_str.strip().startswith("/mo"):
+        pricing_str = f"$29{pricing_str.strip()}"
+    elif "$" not in pricing_str:
+        pricing_str = f"${pricing_str.strip()}"
     presale_target_val = float(body.presaleTarget or concept_data.get("presaleTarget") or 12500.0)
 
-    niche_str = ", ".join(str(x) for x in body.niche) if isinstance(body.niche, list) else (str(body.niche) if body.niche else None)
-    followers_str = str(body.followers) if body.followers is not None else None
-
-    valid_creator_id = None
-    creator_row_to_launch = None
-    if body.creatorId:
-        c_row = db.get(Creator, body.creatorId)
-        if c_row:
-            valid_creator_id = c_row.id
-            creator_row_to_launch = c_row
-        else:
-            c_by_handle = db.query(Creator).filter(
-                (Creator.handle.ilike(body.creatorId.lstrip("@"))) |
-                (Creator.handle.ilike(f"@{body.creatorId.lstrip('@')}"))
-            ).first()
-            if c_by_handle:
-                valid_creator_id = c_by_handle.id
-                creator_row_to_launch = c_by_handle
-
-    if not creator_row_to_launch and clean_handle:
-        creator_row_to_launch = db.query(Creator).filter(
-            (Creator.handle.ilike(clean_handle)) |
-            (Creator.handle.ilike(f"@{clean_handle}"))
-        ).first()
-        if creator_row_to_launch and not valid_creator_id:
-            valid_creator_id = creator_row_to_launch.id
-
-    if not creator_row_to_launch and body.creatorEmail:
-        creator_row_to_launch = db.query(Creator).filter(
-            Creator.email_public.ilike(body.creatorEmail.strip())
-        ).first()
-        if creator_row_to_launch and not valid_creator_id:
-            valid_creator_id = creator_row_to_launch.id
-
-    proj = CoLaunchProject(
-        id=proj_id,
-        creator_id=valid_creator_id,
-        creator_handle=body.creatorHandle,
-        creator_name=body.creatorName or body.creatorHandle,
-        creator_avatar=body.creatorAvatar,
-        creator_email=body.creatorEmail,
-        niche=niche_str,
-        followers=followers_str,
-        product_name=product_name,
-        product_tagline=product_tagline,
-        target_audience=body.customer or body.targetAudience or concept_data.get("customer") or "",
-        pricing=pricing_str,
-        revenue_model=body.revenueModel or concept_data.get("revenueModel") or "SaaS Subscription",
-        current_phase=1,
-        current_step="plan",
-        status="validating",
-        presale_target=presale_target_val,
-        current_presales=0.0,
-        visitors=0,
-        conversion_rate=0.0,
-        portal_token="cf_sec_live",
-        selected_concept=concept_data,
-        metadata_info={
-            "recent_posts": body.recentPosts or body.recent_posts or body.videos or [],
-            "recentPosts": body.recentPosts or body.recent_posts or body.videos or [],
-            "videos": body.recentPosts or body.recent_posts or body.videos or [],
-            "channel_url": body.channelUrl or (f"https://www.youtube.com/@{body.creatorHandle.lstrip('@')}" if body.creatorHandle else ""),
-            "channel_description": body.channelDescription or body.creatorBio or "",
-        },
-        created_at=datetime.utcnow()
-    )
-    db.add(proj)
-    if creator_row_to_launch:
-        creator_row_to_launch.status = "launched"
-        creator_row_to_launch.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(proj)
-
-    # Dynamic pricing extraction from concept / payload
-    import re
-    raw_pricing = pricing_str or "$29/mo Starter • $79/mo Pro"
-    price_matches = [int(p) for p in re.findall(r'\$(\d+)', raw_pricing)]
-    if len(price_matches) >= 2:
-        starter_price = price_matches[0]
-        pro_price = price_matches[1]
-        founding_price = price_matches[2] if len(price_matches) > 2 else max(starter_price * 3, 89)
-    elif len(price_matches) == 1:
-        founding_price = price_matches[0]
-        starter_price = max(9, int(round(founding_price * 0.3)))
-        pro_price = max(starter_price * 2, int(round(founding_price * 0.7)))
+    # Honor custom pass fee if passed explicitly in body
+    cand_fee = body.diyFee if body.diyFee is not None else body.diyPassPrice if body.diyPassPrice is not None else body.diy_fee
+    if cand_fee is not None:
+        try:
+            def_fee = float(cand_fee)
+            has_custom_fee_init = True
+        except Exception:
+            has_custom_fee_init = False
     else:
-        starter_price = 29
-        pro_price = 79
-        founding_price = 99
-    
-    deposit_price = max(9, int(round(founding_price * 0.2)))
+        has_custom_fee_init = bool(body.hasCustomFee or body.has_custom_fee)
 
-    # 1. Step 1: Create Validation Plan
-    customer_desc = body.customer or body.targetAudience or concept_data.get("customer") or concept_data.get("demographicAlignment") or f"{body.niche or 'Creator'} audience and builders"
-    problem_desc = body.problem or concept_data.get("problem") or concept_data.get("description") or f"Manual workflows and lack of specialized tooling in {body.niche or 'this space'}"
-    offer_desc = f"{product_name} Founding Co-Launch Access: {product_tagline or ''}"
-    plan = ValidationPlan(
-        project_id=proj.id,
-        customer=customer_desc,
-        problem=problem_desc,
-        offer=offer_desc,
-        pricing=raw_pricing,
-        test_method="1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
-        period="14 days",
-        threshold=f"${int(body.presaleTarget or 5000):,} in presales within 14 days",
-        target_revenue=body.presaleTarget or 5000.0,
-        status="ready"
-    )
-    db.add(plan)
+    if existing_doc:
+        if product_name:
+            existing_doc["productName"] = product_name
+            existing_doc["product_name"] = product_name
+            existing_doc["title"] = product_name
+        if product_tagline:
+            existing_doc["productTagline"] = product_tagline
+            existing_doc["product_tagline"] = product_tagline
+        if pricing_str:
+            existing_doc["pricing"] = pricing_str
+            parsed_pricing = parse_concept_pricing_details(pricing_str)
+            if "validationPlan" in existing_doc and isinstance(existing_doc["validationPlan"], dict):
+                existing_doc["validationPlan"]["pricing"] = pricing_str
+            if "validationCampaign" in existing_doc and isinstance(existing_doc["validationCampaign"], dict):
+                va = existing_doc["validationCampaign"].get("productAssets") or existing_doc["validationCampaign"].get("product_assets") or {}
+                va["pricingConfig"] = parsed_pricing["pricing_config"]
+                va["pricingTiers"] = parsed_pricing["pricing_tiers"]
+                existing_doc["validationCampaign"]["productAssets"] = va
+                existing_doc["validationCampaign"]["product_assets"] = va
+            if "campaignKit" in existing_doc and isinstance(existing_doc["campaignKit"], dict):
+                existing_doc["campaignKit"]["pricingConfig"] = parsed_pricing["pricing_config"]
+        if concept_data:
+            existing_doc["selectedConcept"] = concept_data
+            existing_doc["selected_concept"] = concept_data
+        if cand_fee is not None:
+            existing_doc["diyFee"] = def_fee
+            existing_doc["diyPassPrice"] = def_fee
+            existing_doc["hasCustomFee"] = has_custom_fee_init
+            if isinstance(existing_doc.get("metadataInfo"), dict):
+                existing_doc["metadataInfo"]["diy_fee"] = def_fee
+                existing_doc["metadataInfo"]["diyFee"] = def_fee
+                existing_doc["metadataInfo"]["diyPassPrice"] = def_fee
+                existing_doc["metadataInfo"]["hasCustomFee"] = has_custom_fee_init
+        _save_mongo_project(existing_doc)
 
-    # 2. Step 2: Build Validation Campaign
+        c_id = existing_doc.get("creatorId") or existing_doc.get("creator_id")
+        if creators_coll is not None and c_id:
+            creators_coll.update_one(
+                {"$or": [{"_id": c_id}, {"id": c_id}]},
+                {"$set": {"status": "partnered", "has_project": True, "hasProject": True, "project_id": existing_doc["id"], "projectId": existing_doc["id"]}}
+            )
+        if ws_coll is not None:
+            ws_coll.update_one(
+                {"$or": [{"_id": "default"}, {"id": "default"}]},
+                {"$set": {"active_project_id": existing_doc["id"], "selected_creator_id": c_id}}
+            )
+        return _normalize_mongo_project_dict(existing_doc, def_fee)
+
+    # 2. Lookup creator in MongoDB
+    creator_doc = None
+    if creators_coll is not None:
+        c_query = []
+        if body.creatorId:
+            c_query.extend([{"_id": body.creatorId}, {"id": body.creatorId}])
+        if clean_handle:
+            c_query.extend([
+                {"handle": clean_handle}, {"handle": f"@{clean_handle}"},
+                {"handle": {"$regex": f"^{clean_handle}$", "$options": "i"}}
+            ])
+        if body.creatorEmail:
+            c_query.extend([{"email_public": body.creatorEmail}, {"email": body.creatorEmail}])
+        if c_query:
+            creator_doc = creators_coll.find_one({"$or": c_query})
+
+    c_id = (creator_doc.get("id") or creator_doc.get("_id")) if creator_doc else (body.creatorId or f"c_{uuid.uuid4().hex[:8]}")
+    c_handle = creator_doc.get("handle") if creator_doc else (body.creatorHandle or "creator")
+    c_name = (creator_doc.get("display_name") or creator_doc.get("name")) if creator_doc else (body.creatorName or c_handle)
+    c_avatar = creator_doc.get("avatar_url") or creator_doc.get("avatar") if creator_doc else body.creatorAvatar
+    c_email = creator_doc.get("email_public") or creator_doc.get("email") if creator_doc else body.creatorEmail
+    niche_val = creator_doc.get("niche") if creator_doc else body.niche
+    niche_str = ", ".join(str(x) for x in niche_val) if isinstance(niche_val, list) else (str(niche_val) if niche_val else "General")
+    followers_str = str(creator_doc.get("follower_count") or creator_doc.get("followers") or body.followers or "100,000")
+
+    proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
     slug = product_name.lower().replace(" ", "-").replace("'", "")
-    campaign = ValidationCampaign(
-        project_id=proj.id,
-        product_assets={
-            "productName": product_name,
-            "productTagline": product_tagline or "",
-            "positioning": f"The #1 automated platform built exclusively for {customer_desc}",
-            "headline": f"Finally, an operating system tailored for {customer_desc}",
-            "problem": problem_desc,
-            "keyFeatures": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
-            "customer": customer_desc,
-            "demographic": customer_desc,
-            "mockup": body.mockup or concept_data.get("mockup") or {},
-            "mockupType": concept_data.get("mockupType") or "saas_os",
-            "selectedConcept": concept_data,
-            "pricingConfig": {
-                "foundingPrice": founding_price,
-                "depositPrice": deposit_price,
-                "perks": f"50% Lifetime Price Lock & VIP Alpha Perks for {proj.creator_name or 'Founding'} Backers"
-            },
-            "pricingTiers": [
-                {"name": "Founding Member", "price": founding_price, "period": "lifetime", "perks": "Lifetime core access, private Discord, roadmap voting"},
-                {"name": "Starter Plan", "price": starter_price, "period": "month", "perks": "Full template library, monthly updates, standard support"},
-                {"name": "Pro Builder", "price": pro_price, "period": "month", "perks": "Unlimited syncs, 1-on-1 onboarding, priority feature access"},
-            ]
-        },
-        infrastructure={
-            "landingPageUrl": f"/p/{slug}",
-            "checkoutUrl": f"/p/{slug}/checkout",
-            "waitlistCount": 240,
-            "attributionTracking": True,
-            "utmSource": "creator_launch"
-        },
-        research_survey={
-            "summary": f"Initial audience feedback survey identifying key pain points in {body.niche or 'niche'}.",
-            "questions": [
-                {"id": "q1", "question": f"What is your biggest daily roadblock when executing {body.niche or 'work'}?", "type": "text"},
-                {"id": "q2", "question": f"Would you pay ${starter_price}–${pro_price}/month for a tool that automates this completely?", "type": "multiple_choice", "options": ["Definitely yes", "Maybe", "No"]},
-                {"id": "q3", "question": "What software do you currently stitch together to solve this?", "type": "text"},
-            ],
-            "responses": []
-        },
-        review_status="draft"
-    )
-    db.add(campaign)
+    customer_desc = body.customer or body.targetAudience or concept_data.get("customer") or concept_data.get("demographicAlignment") or f"{niche_str} audience"
+    problem_desc = body.problem or concept_data.get("problem") or concept_data.get("description") or f"Manual workflows and lack of specialized tools in {niche_str}"
 
-    # 3. Step 3: Creator Campaign (14-day schedule)
+    parsed_pricing = parse_concept_pricing_details(pricing_str)
+    founding_price = parsed_pricing["founding_price"]
+    deposit_price = parsed_pricing["deposit_price"]
+    starter_price = parsed_pricing["starter_price"]
+    pro_price = parsed_pricing["pro_price"]
+    pricing_tiers = parsed_pricing["pricing_tiers"]
+
     sample_tasks = [
-        (1, "instagram", "Post Instagram Story #1: The Problem Teaser", f"Hey everyone! I've been noticing how frustrating {problem_desc.lower()} has been lately. Who else deals with this daily?", "Vote on poll + DM me", f"https://launch.app/p/{slug}?utm=ig_story1"),
-        (2, "instagram", "Post Instagram Story #2: Behind-The-Scenes Co-Founding", f"Yesterday so many of you replied about this. That's why I'm co-founding {body.productName} to fix it once and for all! Link below to see the first preview.", "Tap link to view preview", f"https://launch.app/p/{slug}?utm=ig_story2"),
-        (3, "youtube", "YouTube Video Integration Script (60s Mid-Roll)", f"Before we continue, a quick heads-up: my team and I are launching {body.productName}. If you're tired of {problem_desc.lower()}, we're opening 50 founding spots today at 50% off.", "Check link in top pinned comment", f"https://launch.app/p/{slug}?utm=yt_desc"),
-        (5, "newsletter", "Newsletter Broadcast: Founding Cohort Announcement", f"Subject: Building something new with you.\n\nOver the past 6 months, the #1 request I received was a dedicated solution for {body.niche or 'creators'}. Today we're opening presales for {body.productName}.", f"Reserve Founding Access (${founding_price})", f"https://launch.app/p/{slug}?utm=newsletter"),
-        (7, "twitter", "X / Twitter Breakdown Thread", f"1/5 Why existing tools fail for {customer_desc}.\n\n2/5 How we designed {body.productName} from scratch to cut setup time by 90%.\n\n3/5 Pre-order cohort open now (first 50 members get lifetime updates).", "Read thread & grab pass", f"https://launch.app/p/{slug}?utm=twitter"),
-        (10, "instagram", "Post Instagram Story #3: Live Backer Progress", f"Update: We just crossed $3,000 in pre-orders in 48 hours! Only 18 founding member passes remain before prices increase.", "Claim remaining pass", f"https://launch.app/p/{slug}?utm=ig_story3"),
-        (14, "youtube", "Community Post & Final Call", f"Closing the founding presale window for {body.productName} tonight at midnight. Huge thank you to the 40+ founding builders who joined!", "Final 6 hours to join", f"https://launch.app/p/{slug}?utm=yt_comm"),
+        {"id": f"t_{proj_id}_1", "dayNumber": 1, "day": 1, "channel": "instagram", "task_title": "Post Instagram Story #1: Problem Teaser", "title": "Post Instagram Story #1: Problem Teaser", "content": f"Hey everyone! Notice how annoying {problem_desc.lower()} is? Co-founding a solution.", "cta": "Vote on poll + DM me", "trackingLink": f"/p/{slug}?utm=ig1", "status": "today"},
+        {"id": f"t_{proj_id}_2", "dayNumber": 2, "day": 2, "channel": "instagram", "task_title": "Post Instagram Story #2: Behind The Scenes", "title": "Post Instagram Story #2: Behind The Scenes", "content": f"Revealing {product_name} first build preview today!", "cta": "Tap link to view preview", "trackingLink": f"/p/{slug}?utm=ig2", "status": "pending"},
+        {"id": f"t_{proj_id}_3", "dayNumber": 3, "day": 3, "channel": "youtube", "task_title": "YouTube Video Integration (60s Mid-Roll)", "title": "YouTube Video Integration (60s Mid-Roll)", "content": f"Opening 50 founding spots for {product_name} at 50% off (${founding_price}).", "cta": "Check pinned comment", "trackingLink": f"/p/{slug}?utm=yt", "status": "pending"},
+        {"id": f"t_{proj_id}_4", "dayNumber": 5, "day": 5, "channel": "newsletter", "task_title": "Newsletter Broadcast: Founding Cohort Announcement", "title": "Newsletter Broadcast: Founding Cohort Announcement", "content": f"Subject: Building something new with you.\n\nToday we open founding presales for {product_name} ($50% off - ${founding_price}).", "cta": f"Reserve Founding Access (${founding_price})", "trackingLink": f"/p/{slug}?utm=newsletter", "status": "pending"},
+        {"id": f"t_{proj_id}_5", "dayNumber": 7, "day": 7, "channel": "twitter", "task_title": "X/Twitter Breakdown Thread", "title": "X/Twitter Breakdown Thread", "content": f"1/5 Why existing tools fail for {customer_desc}.\n2/5 How we built {product_name}.\n3/5 Pre-orders open now.", "cta": f"Claim founding pass (${founding_price})", "trackingLink": f"/p/{slug}?utm=twitter", "status": "pending"},
     ]
-    for day, chan, title, draft, cta, trk in sample_tasks:
-        db.add(CreatorCampaignTask(
-            project_id=proj.id,
-            day_number=day,
-            channel=chan,
-            task_title=title,
-            content_draft=draft,
-            cta_text=cta,
-            tracking_link=trk,
-            status="today" if day == 1 else "pending"
-        ))
 
-    # 4. Step 4: Validation Telemetry
-    telemetry = ValidationTelemetry(
-        project_id=proj.id,
-        visitors=0,
-        views=0,
-        ctr=0.0,
-        signups=0,
-        presales_count=0,
-        presales_revenue=0.0,
-        conversion_rate=0.0,
-        reservations=[],
-        channel_attribution={"instagram": 0, "youtube": 0, "newsletter": 0, "twitter": 0, "direct": 0},
-        experiments=[
-            {
-                "id": "exp_msg_1",
-                "category": "messaging",
-                "title": "Pain-Point vs Outcome Headline",
-                "hypothesis": "Focusing on hours saved will increase landing page conversion from 4% to 7%",
-                "variant": f"Stop wasting 15+ hours a week on manual setups. {body.productName} automates your entire workflow in one click.",
-                "status": "ready"
+    new_project_doc = {
+        "_id": proj_id,
+        "id": proj_id,
+        "creatorId": c_id,
+        "creator_id": c_id,
+        "creatorHandle": c_handle,
+        "creator_handle": c_handle,
+        "creatorName": c_name,
+        "creator_name": c_name,
+        "creatorAvatar": c_avatar,
+        "creator_avatar": c_avatar,
+        "creatorEmail": c_email,
+        "creator_email": c_email,
+        "niche": niche_str,
+        "followers": followers_str,
+        "productName": product_name,
+        "product_name": product_name,
+        "title": product_name,
+        "productTagline": product_tagline,
+        "product_tagline": product_tagline,
+        "targetAudience": customer_desc,
+        "target_audience": customer_desc,
+        "customer": customer_desc,
+        "problem": problem_desc,
+        "keyFeatures": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
+        "pricing": pricing_str,
+        "revenueModel": body.revenueModel or concept_data.get("revenueModel") or "SaaS Subscription",
+        "revenue_model": body.revenueModel or concept_data.get("revenueModel") or "SaaS Subscription",
+        "currentPhase": 1,
+        "current_phase": 1,
+        "currentStep": "plan",
+        "current_step": "plan",
+        "status": "validating",
+        "presaleTarget": presale_target_val,
+        "presale_target": presale_target_val,
+        "currentPresales": 0.0,
+        "current_presales": 0.0,
+        "visitors": 0,
+        "conversionRate": 0.0,
+        "conversion_rate": 0.0,
+        "portalToken": "cf_sec_live",
+        "portal_token": "cf_sec_live",
+        "portalLinkSent": True,
+        "portal_link_sent": True,
+        "portalLinkSentTo": c_email,
+        "portal_link_sent_to": c_email,
+        "portalLinkSentAt": now_iso,
+        "portal_link_sent_at": now_iso,
+        "isDIY": False,
+        "is_diy": False,
+        "diyOfferStatus": "offer_sent",
+        "diy_offer_status": "offer_sent",
+        "diyFee": def_fee,
+        "diy_fee": def_fee,
+        "diyPassPrice": def_fee,
+        "hasCustomFee": has_custom_fee_init,
+        "selectedConcept": concept_data,
+        "selected_concept": concept_data,
+        "validationPlan": {
+            "id": f"plan_{proj_id}",
+            "customer": customer_desc,
+            "problem": problem_desc,
+            "offer": f"{product_name} Founding Co-Launch Access: {product_tagline}",
+            "pricing": pricing_str,
+            "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
+            "period": "14 days",
+            "threshold": f"${int(presale_target_val):,} in presales within 14 days",
+            "targetRevenue": presale_target_val,
+            "status": "ready"
+        },
+        "validationCampaign": {
+            "id": f"camp_{proj_id}",
+            "productAssets": {
+                "productName": product_name,
+                "productTagline": product_tagline,
+                "positioning": f"The #1 automated platform built exclusively for {customer_desc}",
+                "headline": f"Finally, an operating system tailored for {customer_desc}",
+                "problem": problem_desc,
+                "keyFeatures": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
+                "mockup": body.mockup or concept_data.get("mockup") or {},
+                "mockupType": concept_data.get("mockupType") or "saas_os",
+                "selectedConcept": concept_data,
+                "pricingConfig": {"foundingPrice": founding_price, "depositPrice": deposit_price},
+                "pricingTiers": pricing_tiers
             },
-            {
-                "id": "exp_price_1",
-                "category": "pricing",
-                "title": "Lifetime Founding Pass vs Monthly",
-                "hypothesis": f"Offering a ${founding_price} lifetime founding pass accelerates initial presale velocity towards the ${int(body.presaleTarget or 5000):,} threshold",
-                "variant": f"${founding_price} Lifetime Founding Access (Limited to first 50 builders)",
-                "status": "ready"
-            }
-        ],
-        feedback_clusters=[]
-    )
-    db.add(telemetry)
-    db.commit()
-    db.refresh(proj)
+            "infrastructure": {
+                "landingPageUrl": f"/p/{slug}",
+                "checkoutUrl": f"/p/{slug}/checkout",
+                "waitlistCount": 240,
+                "attributionTracking": True,
+                "utmSource": "creator_launch"
+            },
+            "researchSurvey": {"summary": f"Initial audience survey for {product_name}.", "questions": [], "responses": []},
+            "reviewStatus": "draft"
+        },
+        "campaignKit": {
+            "pricingConfig": {"foundingPrice": founding_price, "depositPrice": deposit_price},
+            "announcementPost": f"Today I'm officially announcing: I'm co-founding {product_name}. Founding cohort is open now at 50% off (${founding_price}/yr).",
+            "storySequence": [f"Story 1: Why existing tools fail for {customer_desc}", f"Story 2: Introducing {product_name}", f"Story 3: Link to founding cohort (${founding_price})"],
+            "videoScript": f"Hey everyone, quick heads up: we're launching {product_name}. Check the pinned comment to join for ${founding_price}.",
+            "newsletterDraft": f"Subject: Announcing {product_name}.\n\nWe're opening founding presales today (${founding_price}/yr or ${deposit_price} refundable deposit).",
+            "landingPageCopy": {
+                "headline": f"The {product_name} Operating System",
+                "subheadline": product_tagline,
+                "ctaText": f"Claim Founding Access (${founding_price})",
+                "reservationText": f"Reserve with ${deposit_price} Deposit",
+                "bulletPoints": [
+                    "Automate repetitive workflows with tailored software",
+                    "Direct private Slack & alpha advisory council access",
+                    f"50% lifetime discount locked in forever (${founding_price}/yr)"
+                ]
+            },
+            "postingSchedule": sample_tasks
+        },
+        "creatorTasks": sample_tasks,
+        "telemetry": {
+            "id": f"telem_{proj_id}",
+            "visitors": 0, "views": 0, "ctr": 0.0, "signups": 0, "presalesCount": 0, "presalesRevenue": 0.0, "conversionRate": 0.0,
+            "reservations": [], "channelAttribution": {"instagram": 0, "youtube": 0, "twitter": 0, "direct": 0}, "experiments": [], "feedbackClusters": []
+        },
+        "gateDecisions": [],
+        "metadataInfo": {
+            "recent_posts": body.recentPosts or body.recent_posts or body.videos or [],
+            "channel_url": body.channelUrl or (f"https://www.youtube.com/@{c_handle.lstrip('@')}" if c_handle else ""),
+            "channel_description": body.channelDescription or body.creatorBio or "",
+            "diy_fee": def_fee, "diyFee": def_fee, "diyPassPrice": def_fee, "hasCustomFee": has_custom_fee_init,
+            "activity_logs": [{"timestamp": now_iso, "action": "project_created", "actor": "Co-Founder Operator", "details": f"Created {product_name}"}]
+        },
+        "createdAt": now_iso, "created_at": now_iso, "updatedAt": now_iso, "updated_at": now_iso
+    }
 
-    # ── Automated Dual Email Dispatch to Creator and Admin ────────────────────
+    _save_mongo_project(new_project_doc)
+
+    if creators_coll is not None and c_id:
+        creators_coll.update_one(
+            {"$or": [{"_id": c_id}, {"id": c_id}]},
+            {"$set": {"status": "partnered", "has_project": True, "hasProject": True, "project_id": proj_id, "projectId": proj_id}}
+        )
+    if ws_coll is not None:
+        ws_coll.update_one(
+            {"$or": [{"_id": "default"}, {"id": "default"}]},
+            {"$set": {"active_project_id": proj_id, "selected_creator_id": c_id, "active_section": "section2", "active_step": 1}}
+        )
+
     try:
         from app.integrations.email_provider import email_provider
         from app.config import settings
-
-        creator_email = (body.creatorEmail or "").strip()
+        creator_email = (c_email or "").strip()
         admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
         base_frontend = (settings.FRONTEND_URL or "https://creator-forge-frontend.vercel.app").rstrip("/")
-        portal_slug = (proj.creator_handle or proj.creator_name or "creator").replace("@", "").replace(" ", "").strip().lower()
-        admin_project_link = f"{base_frontend}/launch?section=section2&project={proj.id}"
-        portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token={proj.portal_token}&project={proj.id}"
-
-        email_subject = f"[PROJECT INITIALIZED] {proj.product_name} with {proj.creator_name or proj.creator_handle} (Section 2 Live)"
-        admin_email_body = f"""Hello Admin,
-
-A new Co-Launch Software Venture has been initialized into Section 2:
-
-- Product Name: {proj.product_name}
-- Tagline: {proj.product_tagline}
-- Creator Partner: {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})
-- Creator Email: {creator_email or 'Pending'}
-- Target Presale Milestone: ${int(proj.presale_target):,}
-
-- Admin Project OS Dashboard: {admin_project_link}
-- Creator Portal Magic Link: {portal_magic_link}
-
-Phase 1 (Validate) is now active and ready for execution.
-
-Best regards,
-Creator Forge Studio Operations"""
-
-        admin_email_html = f"""
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0c0e14; color: #f1f5f9; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
-            <h2 style="color: #a855f7; margin-top: 0;">Co-Launch Venture Initialized (Section 2 Live)</h2>
-            <p style="color: #94a3b8; font-size: 14px;">A new Co-Launch Software Venture has moved into Section 2:</p>
-            <ul style="line-height: 1.8; font-size: 14px; color: #cbd5e1;">
-                <li><strong>Product:</strong> {proj.product_name}</li>
-                <li><strong>Tagline:</strong> {proj.product_tagline}</li>
-                <li><strong>Partner:</strong> {proj.creator_name or proj.creator_handle} ({proj.niche or 'General'})</li>
-                <li><strong>Creator Email:</strong> {creator_email or 'Pending'}</li>
-                <li><strong>Presale Milestone:</strong> ${int(proj.presale_target):,}</li>
-            </ul>
-            <div style="margin: 24px 0; padding: 16px; background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); border-radius: 12px;">
-                <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: bold; color: #c084fc;">[ADMIN DASHBOARD - PROJECT OS]:</p>
-                <a href="{admin_project_link}" style="display: inline-block; padding: 10px 20px; background: #a855f7; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 13px; border-radius: 8px;">Open Co-Launch Project OS -&gt;</a>
-                <p style="margin: 8px 0 0 0; font-size: 11px; color: #94a3b8; word-break: break-all;">{admin_project_link}</p>
-            </div>
-            <div style="margin: 16px 0; padding: 14px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px;">
-                <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: bold; color: #34d399;">[CREATOR PORTAL MAGIC LINK]:</p>
-                <a href="{portal_magic_link}" style="color: #6ee7b7; font-size: 12px; word-break: break-all;">{portal_magic_link}</a>
-            </div>
-            <p style="color: #64748b; font-size: 12px; margin-top: 24px;">Phase 1 (Validate) is active and ready for execution.</p>
-        </div>
-        """
-
-        # 1. Dispatch Briefing to Admin (elishadamu97@gmail.com)
+        portal_slug = (c_handle or "creator").replace("@", "").replace(" ", "").strip().lower()
+        admin_project_link = f"{base_frontend}/launch?section=section2&project={proj_id}"
+        portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token=cf_sec_live&project={proj_id}"
         if admin_email and "@" in admin_email:
-            try:
-                email_provider.send(
-                    to_email=admin_email,
-                    subject=f"[ADMIN BRIEFING] {email_subject}",
-                    body_html=admin_email_html,
-                    body_text=admin_email_body
-                )
-                logger.info(f"Dispatched Section 2 Admin Briefing to {admin_email}")
-            except Exception as e:
-                logger.warning(f"Failed to dispatch admin launch briefing: {e}")
-
-        # 2. Dispatch Magic Portal Link to Creator (Skip if already dispatched by client or outreach)
-        if creator_email and "@" in creator_email:
-            should_send_to_creator = not bool(body.portalLinkSent or body.skipCreatorEmail)
-
-            # Also verify if a kick-off message containing the portal link was already dispatched in outreach
-            if should_send_to_creator and proj.creator_id:
-                try:
-                    from app.models.outreach import OutreachMessage
-                    recent_msg = db.query(OutreachMessage).filter(
-                        OutreachMessage.creator_id == proj.creator_id,
-                        OutreachMessage.status == "sent"
-                    ).order_by(OutreachMessage.created_at.desc()).first()
-                    if recent_msg and ("portal" in (recent_msg.body or "").lower() or "co-founder portal" in (recent_msg.subject or "").lower()):
-                        should_send_to_creator = False
-                        logger.info(f"Skipping duplicate portal email to {creator_email}: kickoff email already dispatched in outreach")
-                except Exception as check_err:
-                    logger.warning(f"Error checking recent outreach messages: {check_err}")
-
-            if should_send_to_creator:
-                try:
-                    creator_email_body = f"""Hi {proj.creator_name or 'there'},
-
-Welcome to your software co-launch portal!
-
-We have officially initialized {proj.product_name} into Phase 1 (Validation). You can access your dedicated Creator Portal and track live progress here:
-
-Access Portal: {portal_magic_link}
-
-Best,
-Creator Forge Studio Team"""
-                    email_provider.send(
-                        to_email=creator_email,
-                        subject=f"Access Your Co-Founder Portal: {proj.product_name}",
-                        body_html=creator_email_body.replace("\n", "<br>"),
-                        body_text=creator_email_body
-                    )
-                    proj.portal_link_sent = True
-                    proj.portal_link_sent_to = creator_email
-                    proj.portal_link_sent_at = datetime.utcnow()
-                    db.commit()
-                    logger.info(f"Dispatched Portal Magic Link to Creator {creator_email}")
-                except Exception as e:
-                    logger.warning(f"Failed to dispatch creator portal link: {e}")
-            else:
-                proj.portal_link_sent = True
-                proj.portal_link_sent_to = creator_email
-                proj.portal_link_sent_at = datetime.utcnow()
-                db.commit()
-                logger.info(f"Portal magic link already dispatched to creator {creator_email}, duplicate email suppressed.")
+            email_provider.send(
+                to_email=admin_email,
+                subject=f"[PROJECT INITIALIZED] {product_name} with {c_name} (Section 2 Live)",
+                body_text=f"New project initialized: {product_name} with {c_name}.\nAdmin: {admin_project_link}\nCreator Portal: {portal_magic_link}"
+            )
     except Exception as dispatch_err:
-        logger.warning(f"Project dispatch notification exception: {dispatch_err}")
+        logger.debug(f"[Project Dispatch] Notification notice: {dispatch_err}")
 
-    return _format_project_response(proj)
+    return _normalize_mongo_project_dict(new_project_doc, def_fee)
 
 
 @router.post("", status_code=201)
@@ -947,122 +1145,100 @@ def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
 
 @router.get("/{project_id}")
 def get_project(project_id: str, db: Session = Depends(get_db)):
-    """Fetch complete co-launch project with all 5 validation steps."""
+    """Fetch complete co-launch project with all 5 validation steps directly and exclusively from MongoDB."""
     clean_target = project_id.replace("@", "").lower().strip()
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
-        proj = db.query(CoLaunchProject).filter(
-            (CoLaunchProject.creator_id == project_id) |
-            (CoLaunchProject.creator_handle.ilike(f"%{clean_target}%")) |
-            (CoLaunchProject.creator_name.ilike(f"%{clean_target}%")) |
-            (CoLaunchProject.creator_email.ilike(f"%{clean_target}%"))
-        ).first()
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None:
+            doc = coll.find_one({"$or": [
+                {"_id": project_id},
+                {"id": project_id},
+                {"creator_id": project_id},
+                {"creatorId": project_id},
+                {"creator_handle": clean_target},
+                {"creatorHandle": clean_target},
+                {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"creator_handle": project_id},
+                {"creatorHandle": project_id},
+            ]})
+            if doc:
+                ws_coll = get_collection("workflow_states")
+                ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+                def_fee = None
+                if ws_doc:
+                    def_fee = ws_doc.get("default_pass_price")
+                    if def_fee is None:
+                        def_fee = (ws_doc.get("extra_state") or {}).get("default_pass_price")
+                if def_fee is None:
+                    def_fee = 50.0
+                return _normalize_mongo_project_dict(doc, float(def_fee))
+    except Exception as e:
+        logger.error(f"[MongoDB] get_project error: {e}")
 
-    if not proj:
-        # Check MongoDB fallback
-        try:
-            from app.mongodb import get_collection
-            coll = get_collection("co_launch_projects")
-            if coll is not None:
-                doc = coll.find_one({"$or": [
-                    {"_id": project_id},
-                    {"id": project_id},
-                    {"creator_id": project_id},
-                    {"creatorId": project_id},
-                    {"creator_handle": clean_target},
-                    {"creatorHandle": clean_target},
-                    {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
-                    {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
-                    {"creator_handle": project_id},
-                    {"creatorHandle": project_id},
-                ]})
-                if doc:
-                    doc.pop("_id", None)
-                    if not doc.get("hasCustomFee"):
-                        ws_coll = get_collection("workflow_states")
-                        ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
-                        def_fee = 199.0
-                        if ws_doc:
-                            def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
-                        doc["diyFee"] = def_fee
-                        doc["diyPassPrice"] = def_fee
-                        if isinstance(doc.get("metadataInfo"), dict):
-                            doc["metadataInfo"]["diy_fee"] = def_fee
-                            doc["metadataInfo"]["diyFee"] = def_fee
-                            doc["metadataInfo"]["diyPassPrice"] = def_fee
-                            doc["metadataInfo"]["hasCustomFee"] = False
-                    return doc
-        except Exception as e:
-            logger.debug(f"[MongoDB] get_project fallback notice: {e}")
-        raise HTTPException(404, f"Project '{project_id}' not found")
-
-    return _format_project_response(proj)
+    raise HTTPException(404, f"Project '{project_id}' not found")
 
 
 @router.patch("/{project_id}")
 @router.put("/{project_id}")
 def update_project_general(project_id: str, body: Dict[str, Any], db: Session = Depends(get_db)):
-    """Update co-launch project phase, step, status, or metadata attributes."""
+    """Update co-launch project phase, step, status, or metadata attributes directly in MongoDB Atlas."""
     clean_target = project_id.replace("@", "").lower().strip()
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
-        proj = db.query(CoLaunchProject).filter(
-            (CoLaunchProject.creator_id == project_id) |
-            (CoLaunchProject.creator_handle.ilike(f"%{clean_target}%")) |
-            (CoLaunchProject.creator_name.ilike(f"%{clean_target}%")) |
-            (CoLaunchProject.creator_email.ilike(f"%{clean_target}%"))
-        ).first()
-
-    if not proj:
-        # Fallback to direct MongoDB update
-        try:
-            from app.mongodb import get_collection
-            coll = get_collection("co_launch_projects")
-            if coll is not None:
-                doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}, {"creator_id": project_id}, {"creator_handle": clean_target}]})
-                if doc:
-                    doc_meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
-                    if isinstance(doc_meta, str):
-                        try: doc_meta = json.loads(doc_meta)
-                        except Exception: doc_meta = {}
-                    meta_in = body.get("metadataInfo") or body.get("metadata_info")
-                    if isinstance(meta_in, dict):
-                        doc_meta.update(meta_in)
-                    for k, v in body.items():
-                        doc[k] = v
-                    if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
-                        is_reset = bool(body.get("resetToDefault") or body.get("hasCustomFee") is False or body.get("has_custom_fee") is False)
-                        f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
-                        if is_reset or f_raw is None or f_raw == "":
-                            doc_meta.pop("diy_fee", None)
-                            doc_meta.pop("diyFee", None)
-                            doc_meta.pop("diyPassPrice", None)
-                            doc_meta["hasCustomFee"] = False
-                            doc.pop("diyFee", None)
-                            doc.pop("diyPassPrice", None)
-                            doc["hasCustomFee"] = False
-                        else:
-                            try:
-                                f_val = float(f_raw)
-                                doc["diyFee"] = f_val
-                                doc["diyPassPrice"] = f_val
-                                doc_meta["diy_fee"] = f_val
-                                doc_meta["diyFee"] = f_val
-                                doc_meta["diyPassPrice"] = f_val
-                                is_custom = bool(body.get("hasCustomFee") is True or body.get("has_custom_fee") is True or (body.get("hasCustomFee") is None and body.get("has_custom_fee") is None))
-                                doc_meta["hasCustomFee"] = is_custom
-                                doc["hasCustomFee"] = is_custom
-                            except (ValueError, TypeError):
-                                pass
-                    doc["metadataInfo"] = doc_meta
-                    doc["metadata_info"] = doc_meta
-                    doc_id = doc.get("_id", project_id)
-                    coll.replace_one({"_id": doc_id}, doc, upsert=True)
-                    doc.pop("_id", None)
-                    return doc
-        except Exception as e:
-            logger.debug(f"[MongoDB] update fallback notice: {e}")
-        raise HTTPException(404, f"Project '{project_id}' not found")
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None:
+            doc = coll.find_one({"$or": [
+                {"_id": project_id},
+                {"id": project_id},
+                {"creator_id": project_id},
+                {"creator_handle": clean_target},
+                {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+            ]})
+            if doc:
+                doc_meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
+                if isinstance(doc_meta, str):
+                    try: doc_meta = json.loads(doc_meta)
+                    except Exception: doc_meta = {}
+                meta_in = body.get("metadataInfo") or body.get("metadata_info")
+                if isinstance(meta_in, dict):
+                    doc_meta.update(meta_in)
+                for k, v in body.items():
+                    doc[k] = v
+                if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
+                    is_reset = bool(body.get("resetToDefault"))
+                    f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
+                    if is_reset or (f_raw is None and body.get("resetToDefault")):
+                        doc_meta.pop("diy_fee", None)
+                        doc_meta.pop("diyFee", None)
+                        doc_meta.pop("diyPassPrice", None)
+                        doc_meta["hasCustomFee"] = False
+                        doc.pop("diyFee", None)
+                        doc.pop("diyPassPrice", None)
+                        doc["hasCustomFee"] = False
+                    elif f_raw is not None and f_raw != "":
+                        try:
+                            f_val = float(f_raw)
+                            doc["diyFee"] = f_val
+                            doc["diyPassPrice"] = f_val
+                            doc_meta["diy_fee"] = f_val
+                            doc_meta["diyFee"] = f_val
+                            doc_meta["diyPassPrice"] = f_val
+                            is_custom = bool(body.get("hasCustomFee") is not False and body.get("has_custom_fee") is not False)
+                            doc_meta["hasCustomFee"] = is_custom
+                            doc["hasCustomFee"] = is_custom
+                        except (ValueError, TypeError):
+                            pass
+                doc["metadataInfo"] = doc_meta
+                doc["metadata_info"] = doc_meta
+                doc_id = doc.get("_id", project_id)
+                coll.replace_one({"_id": doc_id}, doc, upsert=True)
+                doc.pop("_id", None)
+                return doc
+    except Exception as e:
+        logger.error(f"[MongoDB] update_project_general error: {e}")
+    raise HTTPException(404, f"Project '{project_id}' not found")
 
     meta = body.get("metadataInfo") or body.get("metadata_info")
     raw_meta = proj.metadata_info
@@ -1338,66 +1514,58 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
 
 @router.put("/{project_id}/plan")
 def update_validation_plan(project_id: str, body: UpdatePlanRequest, db: Session = Depends(get_db)):
-    """Save or update Step 1 Validation Plan."""
-    proj = db.get(CoLaunchProject, project_id)
+    """Save or update Step 1 Validation Plan directly in MongoDB Atlas."""
+    proj = _find_mongo_project(project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    plan = proj.validation_plan
-    if not plan:
-        plan = ValidationPlan(project_id=proj.id)
-        db.add(plan)
-
-    if body.customer is not None: plan.customer = body.customer
-    if body.problem is not None: plan.problem = body.problem
-    if body.offer is not None: plan.offer = body.offer
+    plan = proj.get("validationPlan") or proj.get("validation_plan") or {}
+    if body.customer is not None: plan["customer"] = body.customer
+    if body.problem is not None: plan["problem"] = body.problem
+    if body.offer is not None: plan["offer"] = body.offer
     if body.pricing is not None:
-        plan.pricing = body.pricing
-        proj.pricing = body.pricing
-    if body.test_method is not None: plan.test_method = body.test_method
-    if body.period is not None: plan.period = body.period
-    if body.threshold is not None: plan.threshold = body.threshold
+        plan["pricing"] = body.pricing
+        proj["pricing"] = body.pricing
+    if body.test_method is not None: plan["testMethod"] = body.test_method
+    if body.period is not None: plan["period"] = body.period
+    if body.threshold is not None: plan["threshold"] = body.threshold
     if body.target_revenue is not None:
-        plan.target_revenue = body.target_revenue
-        proj.presale_target = body.target_revenue
-    if body.status is not None: plan.status = body.status
+        plan["targetRevenue"] = body.target_revenue
+        proj["presaleTarget"] = body.target_revenue
+        proj["presale_target"] = body.target_revenue
+    if body.status is not None: plan["status"] = body.status
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    proj["validationPlan"] = plan
+    proj["validation_plan"] = plan
+    _save_mongo_project(proj)
+    return _normalize_mongo_project_dict(proj)
 
 
 @router.put("/{project_id}/campaign")
 def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db: Session = Depends(get_db)):
-    """Save or update Step 2 Campaign Assets, Infrastructure, Step 3 Campaign Kit, and Creator Tasks."""
-    proj = db.get(CoLaunchProject, project_id)
+    """Save or update Step 2 Campaign Assets, Infrastructure, Step 3 Campaign Kit, and Creator Tasks in MongoDB Atlas."""
+    proj = _find_mongo_project(project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    campaign = proj.validation_campaign
-    if not campaign:
-        campaign = ValidationCampaign(project_id=proj.id)
-        db.add(campaign)
-
+    camp = proj.get("validationCampaign") or proj.get("validation_campaign") or {}
     prod_assets = body.product_assets if body.product_assets is not None else body.productAssets
     if prod_assets is not None:
-        campaign.product_assets = prod_assets
-        flag_modified(campaign, "product_assets")
+        camp["productAssets"] = prod_assets
+        camp["product_assets"] = prod_assets
     if body.infrastructure is not None:
-        campaign.infrastructure = body.infrastructure
-        flag_modified(campaign, "infrastructure")
+        camp["infrastructure"] = body.infrastructure
     res_survey = body.research_survey if body.research_survey is not None else body.researchSurvey
     if res_survey is not None:
-        campaign.research_survey = res_survey
-        flag_modified(campaign, "research_survey")
+        camp["researchSurvey"] = res_survey
+        camp["research_survey"] = res_survey
     rev_status = body.review_status if body.review_status is not None else body.reviewStatus
     if rev_status is not None:
-        campaign.review_status = rev_status
+        camp["reviewStatus"] = rev_status
+        camp["review_status"] = rev_status
         if rev_status in ("approved", "launched"):
-            campaign.approved_at = datetime.utcnow()
-            campaign.approved_by = "Lead Founder"
+            camp["approvedAt"] = datetime.utcnow().isoformat()
 
-    # Step 3: Campaign Kit & Launch State Persistence
     kit = body.campaign_kit if body.campaign_kit is not None else body.campaignKit
     if kit is None and prod_assets and isinstance(prod_assets, dict):
         if "campaign_kit" in prod_assets:
@@ -1405,64 +1573,28 @@ def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db:
         elif "campaignKit" in prod_assets:
             kit = prod_assets["campaignKit"]
 
-    meta = dict(proj.metadata_info or {})
     if kit is not None:
-        campaign.campaign_kit = kit
-        meta["campaign_kit"] = kit
-        meta["campaign_launched"] = True
-        flag_modified(campaign, "campaign_kit")
+        camp["campaignKit"] = kit
+        camp["campaign_kit"] = kit
+        proj["campaignKit"] = kit
+        proj["campaign_kit"] = kit
 
     camp_launched = body.campaign_launched if body.campaign_launched is not None else body.campaignLaunched
     if camp_launched is not None:
-        meta["campaign_launched"] = camp_launched
+        proj["campaignLaunched"] = camp_launched
         if camp_launched:
-            campaign.review_status = "approved"
+            camp["reviewStatus"] = "approved"
 
-    proj.metadata_info = meta
-    flag_modified(proj, "metadata_info")
-
-    # Step 3: Creator Campaign Tasks in PostgreSQL
     creator_tasks = body.creator_tasks if body.creator_tasks is not None else body.creatorTasks
     if creator_tasks is not None and isinstance(creator_tasks, list) and len(creator_tasks) > 0:
-        db.query(CreatorCampaignTask).filter(CreatorCampaignTask.project_id == proj.id).delete()
-        for idx, t in enumerate(creator_tasks):
-            t_day = t.get("dayNumber") or t.get("day_number") or t.get("day") or (idx + 1)
-            t_status = "completed" if (t.get("done") or t.get("status") == "completed") else (t.get("status") or "pending")
-            
-            # Smart draft extraction if draft is empty but draftKey or channel exists
-            raw_draft = str(t.get("content") or t.get("content_draft") or t.get("draft") or "").strip()
-            draft_key = t.get("draftKey") or t.get("draft_key")
-            if not raw_draft and kit and isinstance(kit, dict):
-                if draft_key and kit.get(draft_key):
-                    raw_draft = str(kit.get(draft_key))
-                elif t.get("channel") in ("Twitter / X", "twitter", "All Social Channels") and kit.get("announcementPost"):
-                    raw_draft = str(kit.get("announcementPost"))
-                elif "Story" in str(t.get("title", "")) and kit.get("storySequence"):
-                    raw_draft = str(kit.get("storySequence"))
-                elif "Video" in str(t.get("title", "")) and kit.get("videoScript"):
-                    raw_draft = str(kit.get("videoScript"))
-                elif "Newsletter" in str(t.get("title", "")) and kit.get("newsletterDraft"):
-                    raw_draft = str(kit.get("newsletterDraft"))
-                elif "DM" in str(t.get("title", "")) and kit.get("directMessageScript"):
-                    raw_draft = str(kit.get("directMessageScript"))
+        proj["creatorTasks"] = creator_tasks
+        proj["creator_tasks"] = creator_tasks
 
-            task_obj = CreatorCampaignTask(
-                project_id=proj.id,
-                day_number=int(t_day),
-                channel=str(t.get("channel") or "instagram"),
-                task_title=str(t.get("title") or t.get("task_title") or f"Day {t_day} Campaign Post"),
-                content_draft=raw_draft,
-                cta_text=str(t.get("cta") or t.get("cta_text") or ""),
-                tracking_link=str(t.get("trackingLink") or t.get("tracking_link") or ""),
-                media_prompt=str(t.get("mediaPrompt") or t.get("media_prompt") or ""),
-                status=t_status,
-                completed_at=datetime.utcnow() if t_status == "completed" else None
-            )
-            db.add(task_obj)
+    proj["validationCampaign"] = camp
+    proj["validation_campaign"] = camp
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    _save_mongo_project(proj)
+    return _normalize_mongo_project_dict(proj)
 
 
 class GenerateCampaignMediaRequest(BaseModel):
@@ -1761,10 +1893,13 @@ def send_campaign_post_email_endpoint(
             recipient_email=req.recipientEmail,
             caller=req.caller or "admin"
         )
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        m_doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) if coll is not None else None
         proj = db.get(CoLaunchProject, project_id)
         return {
             **result,
-            "project": _format_project_response(proj) if proj else None
+            "project": _normalize_mongo_project_dict(m_doc) if m_doc else (_format_project_response(proj) if proj else None)
         }
     except Exception as e:
         logger.error(f"Error dispatching campaign post email: {e}")
@@ -1778,227 +1913,266 @@ def toggle_autonomous_delivery_endpoint(
     db: Session = Depends(get_db)
 ):
     """
-    Configures autonomous morning delivery of scheduled post kits directly to creator/founder inbox.
+    Configures autonomous 24-hour delivery of scheduled post kits directly to creator/founder inbox.
     """
     proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    mongo_doc = None
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None:
+            mongo_doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]})
+    except Exception:
+        pass
+
+    if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    campaign = proj.validation_campaign
-    if not campaign:
-        campaign = ValidationCampaign(project_id=proj.id)
-        db.add(campaign)
+    kit = dict(
+        (mongo_doc.get("campaign_kit") or mongo_doc.get("campaignKit") or (mongo_doc.get("metadataInfo") or {}).get("campaign_kit") if mongo_doc else None)
+        or (proj.validation_campaign.campaign_kit if proj and proj.validation_campaign and getattr(proj.validation_campaign, "campaign_kit", None) else None)
+        or (proj.metadata_info or {}).get("campaign_kit") if proj else {}
+        or {}
+    )
 
-    kit = dict(campaign.campaign_kit or {})
     tz = (body.timezone or "").strip() or kit.get("creatorTimezone") or "UTC"
     country = (body.country or "").strip() or kit.get("creatorCountry") or "United States"
+    target_email = (
+        (body.recipientEmail or "").strip()
+        or (mongo_doc.get("creatorEmail") or mongo_doc.get("creator_email") or mongo_doc.get("email") if mongo_doc else None)
+        or (getattr(proj, "creator_email", "") if proj else "")
+        or (getattr(proj, "email", "") if proj else "")
+    )
+
     delivery_config = {
         "enabled": bool(body.enabled),
-        "recipientEmail": (body.recipientEmail or "").strip() or getattr(proj, "creator_email", "") or getattr(proj, "email", ""),
+        "recipientEmail": target_email,
         "preferredHour": 0 if body.preferredHour is None else body.preferredHour,
+        "intervalHours": 24,
+        "intervalSeconds": 86400,
+        "cadence": "24_hours",
         "timezone": tz,
         "country": country,
-        "dispatchTime": "12:00 AM",
-        "dispatchSchedule": f"12:00 AM ({tz})",
+        "dispatchTime": "Every 24 Hours",
+        "dispatchSchedule": f"Every 24 Hours ({tz})",
         "updatedAt": datetime.utcnow().isoformat()
     }
     kit["autonomousEmailDelivery"] = delivery_config
     kit["creatorTimezone"] = tz
     kit["creatorCountry"] = country
-    campaign.campaign_kit = kit
-    flag_modified(campaign, "campaign_kit")
-    db.commit()
-    db.refresh(proj)
 
+    # 1. Update MongoDB Atlas collections directly
+    p_coll = None
+    try:
+        from app.mongodb import get_collection
+        p_coll = get_collection("co_launch_projects")
+        if p_coll is not None:
+            p_doc = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) or mongo_doc or {"_id": project_id, "id": project_id}
+            meta_m = p_doc.get("metadataInfo") if isinstance(p_doc.get("metadataInfo"), dict) else {}
+            meta_m["campaign_kit"] = kit
+            p_doc["metadataInfo"] = meta_m
+            p_doc["campaign_kit"] = kit
+            p_doc["campaignKit"] = kit
+            p_coll.replace_one({"_id": p_doc.get("_id", project_id)}, p_doc, upsert=True)
+
+        vc_coll = get_collection("validation_campaigns")
+        if vc_coll is not None:
+            vc_doc = {
+                "_id": project_id,
+                "project_id": project_id,
+                "campaign_kit": kit,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            vc_coll.replace_one({"_id": project_id}, vc_doc, upsert=True)
+    except Exception as m_err:
+        logger.debug(f"[MongoDB] Toggle autonomous delivery MongoDB sync note: {m_err}")
+
+    # 2. Update SQLite in-memory models if present
+    if proj:
+        campaign = proj.validation_campaign
+        if not campaign:
+            campaign = ValidationCampaign(project_id=proj.id)
+            db.add(campaign)
+        campaign.campaign_kit = kit
+        flag_modified(campaign, "campaign_kit")
+
+        meta = dict(proj.metadata_info or {})
+        meta["campaign_kit"] = kit
+        proj.metadata_info = meta
+        flag_modified(proj, "metadata_info")
+
+        db.commit()
+        db.refresh(proj)
+
+    # 3. Return updated response prioritizing Mongo
+    updated_m = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) if p_coll is not None else None
     return {
         "success": True,
         "config": delivery_config,
-        "project": _format_project_response(proj)
+        "project": _normalize_mongo_project_dict(updated_m) if updated_m else (_format_project_response(proj) if proj else None)
     }
 
 
-@router.get("/{project_id}/creator-tasks")
-def get_creator_tasks(project_id: str, db: Session = Depends(get_db)):
-    """Fetch Step 3 Creator Campaign Tasks."""
-    tasks = db.query(CreatorCampaignTask).filter(CreatorCampaignTask.project_id == project_id).order_by(CreatorCampaignTask.day_number).all()
-    return [
-        {
-            "id": t.id,
-            "dayNumber": t.day_number,
-            "channel": t.channel,
-            "title": t.task_title,
-            "content": t.content_draft,
-            "cta": t.cta_text,
-            "trackingLink": t.tracking_link,
-            "mediaPrompt": t.media_prompt,
-            "status": t.status,
-            "completedAt": t.completed_at.isoformat() if t.completed_at else None,
-        }
-        for t in tasks
-    ]
-
-
-@router.patch("/{project_id}/creator-tasks/{task_id}")
-def update_creator_task(project_id: str, task_id: str, body: UpdateTaskRequest, db: Session = Depends(get_db)):
-    """Update a Step 3 creator campaign checklist task."""
-    task = db.query(CreatorCampaignTask).filter(
-        CreatorCampaignTask.project_id == project_id,
-        CreatorCampaignTask.id == task_id
-    ).first()
-    if not task:
-        raise HTTPException(404, f"Task '{task_id}' not found")
-
-    if body.status is not None:
-        task.status = body.status
-        if body.status == "completed":
-            task.completed_at = datetime.utcnow()
-    if body.content_draft is not None: task.content_draft = body.content_draft
-    if body.cta_text is not None: task.cta_text = body.cta_text
-    if body.tracking_link is not None: task.tracking_link = body.tracking_link
-
-    db.commit()
-    return {"status": "success", "taskId": task.id, "newStatus": task.status}
-
-
-@router.post("/{project_id}/remind-task/{task_id}")
-def send_task_reminder(project_id: str, task_id: str, db: Session = Depends(get_db)):
+@router.post("/{project_id}/campaign/start-simulation")
+async def start_campaign_simulation_endpoint(
+    project_id: str,
+    body: Optional[StartCampaignSimulationRequest] = None,
+    db: Session = Depends(get_db)
+):
     """
-    Send an email reminder to the creator for a specific or overdue campaign post task.
-    Includes the post draft, channel instructions, and tracking link.
+    Starts an autonomous 5-minute campaign email delivery simulation.
+    Sends Post 1, Post 2, Post 3, etc. spaced across the requested interval.
     """
+    from app.services.autonomous_campaign_dispatcher import run_autonomous_campaign_simulation, get_simulation_status
     proj = db.get(CoLaunchProject, project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    task = db.query(CreatorCampaignTask).filter(
-        CreatorCampaignTask.project_id == project_id,
-        CreatorCampaignTask.id == task_id
-    ).first()
+    raw_kit = (
+        (proj.validation_campaign.campaign_kit if proj.validation_campaign else None)
+        or (proj.metadata_info or {}).get("campaign_kit")
+        or {}
+    )
+    auto_config = raw_kit.get("autonomousEmailDelivery") or {}
+    recipient = (
+        (body.recipientEmail if body and body.recipientEmail else None)
+        or auto_config.get("recipientEmail")
+        or getattr(proj, "creator_email", None)
+        or getattr(proj, "email", None)
+    )
+    interval = (body.intervalSeconds if body and body.intervalSeconds else 42)
+    total_posts = (body.totalPosts if body and body.totalPosts else None)
+
+    # Launch in background asyncio task
+    asyncio.create_task(run_autonomous_campaign_simulation(
+        project_id=project_id,
+        recipient_email=recipient,
+        interval_seconds=interval,
+        total_posts=total_posts
+    ))
+
+    return {
+        "success": True,
+        "message": f"Autonomous campaign simulation started for {proj.product_name}. Delivering posts every {interval}s to {recipient}.",
+        "status": get_simulation_status(project_id)
+    }
+
+
+@router.get("/{project_id}/campaign/simulation-status")
+def get_campaign_simulation_status_endpoint(
+    project_id: str,
+    db: Session = Depends(get_db)
+):
+    """Fetches real-time status and delivery logs for active autonomous simulation."""
+    from app.services.autonomous_campaign_dispatcher import get_simulation_status
+    proj = db.get(CoLaunchProject, project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    return {
+        "success": True,
+        "projectId": project_id,
+        "simulation": get_simulation_status(project_id)
+    }
+
+
+@router.post("/{project_id}/campaign/stop-simulation")
+def stop_campaign_simulation_endpoint(
+    project_id: str,
+    db: Session = Depends(get_db)
+):
+    """Cancels any running autonomous campaign simulation."""
+    from app.services.autonomous_campaign_dispatcher import stop_simulation, get_simulation_status
+    stopped = stop_simulation(project_id)
+    return {
+        "success": True,
+        "stopped": stopped,
+        "status": get_simulation_status(project_id)
+    }
+
+
+
+@router.get("/{project_id}/creator-tasks")
+def get_creator_tasks(project_id: str, db: Session = Depends(get_db)):
+    """Fetch Step 3 Creator Campaign Tasks directly from MongoDB Atlas."""
+    proj = _find_mongo_project(project_id)
+    if not proj:
+        return []
+    tasks = proj.get("creatorTasks") or proj.get("creator_tasks") or []
+    if not tasks:
+        kit = proj.get("campaignKit") or proj.get("campaign_kit") or {}
+        tasks = kit.get("postingSchedule") or []
+    return tasks
+
+
+@router.patch("/{project_id}/creator-tasks/{task_id}")
+def update_creator_task(project_id: str, task_id: str, body: UpdateTaskRequest, db: Session = Depends(get_db)):
+    """Update a Step 3 creator campaign checklist task directly in MongoDB Atlas."""
+    proj = _find_mongo_project(project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    tasks = proj.get("creatorTasks") or proj.get("creator_tasks") or []
+    matched = None
+    for t in tasks:
+        if str(t.get("id")) == str(task_id):
+            matched = t
+            break
+    if not matched:
+        raise HTTPException(404, f"Task '{task_id}' not found")
+    if body.status is not None:
+        matched["status"] = body.status
+        if body.status == "completed":
+            matched["completedAt"] = datetime.utcnow().isoformat()
+    if body.content_draft is not None: matched["content"] = body.content_draft
+    if body.cta_text is not None: matched["cta"] = body.cta_text
+    if body.tracking_link is not None: matched["trackingLink"] = body.tracking_link
+    _save_mongo_project(proj)
+    return {"status": "success", "taskId": task_id, "newStatus": matched.get("status")}
+
+
+@router.post("/{project_id}/remind-task/{task_id}")
+def send_task_reminder(project_id: str, task_id: str, db: Session = Depends(get_db)):
+    """Send an email reminder to creator directly using MongoDB Atlas project."""
+    proj = _find_mongo_project(project_id)
+    if not proj:
+        raise HTTPException(404, f"Project '{project_id}' not found")
+    tasks = proj.get("creatorTasks") or proj.get("creator_tasks") or []
+    task = next((t for t in tasks if str(t.get("id")) == str(task_id)), None)
     if not task:
         raise HTTPException(404, f"Task '{task_id}' not found")
 
     from app.integrations.email_provider import email_provider
     from app.config import settings
 
-    creator_email = (proj.creator_email or settings.RECIPIENT_EMAIL or "").strip()
-    admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
+    creator_email = (proj.get("creatorEmail") or proj.get("creator_email") or settings.RECIPIENT_EMAIL or "").strip()
     base_frontend = (settings.FRONTEND_URL or "https://creator-forge-frontend.vercel.app").rstrip("/")
-    portal_slug = (proj.creator_handle or proj.creator_name or "creator").replace("@", "").replace(" ", "").strip().lower()
-    portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token={proj.portal_token}&project={proj.id}"
+    c_handle = proj.get("creatorHandle") or proj.get("creator_handle") or "creator"
+    portal_slug = c_handle.replace("@", "").replace(" ", "").strip().lower()
+    portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token={proj.get('portalToken', 'cf_sec_live')}&project={proj.get('id')}"
 
-    subject = f"[LAUNCH MISSION] Day {task.day_number} Posting Reminder: {task.task_title}"
-    body_text = f"""Hi {proj.creator_name or 'there'},
+    task_title = task.get("task_title") or task.get("title") or "Campaign Post"
+    day_num = task.get("dayNumber") or task.get("day") or 1
+    content_draft = task.get("content") or task.get("content_draft") or ""
+    channel = task.get("channel") or "social"
 
-This is a quick reminder for your Day {task.day_number} co-launch milestone for {proj.product_name}!
+    subject = f"[LAUNCH MISSION] Day {day_num} Posting Reminder: {task_title}"
+    body_text = f"Hi {proj.get('creatorName') or 'there'},\n\nReminder for Day {day_num} co-launch milestone for {proj.get('productName')}:\n\nMission: {task_title}\nChannel: {channel}\n\nDraft:\n{content_draft}\n\nPortal: {portal_magic_link}"
 
-Channel: {task.channel.upper()}
-Mission: {task.task_title}
-
---- READY-TO-POST CONTENT DRAFT ---
-{task.content_draft or 'See portal for draft details'}
-
-Call to Action: {task.cta_text or 'Claim founding access'}
-Your Tracking Link: {task.tracking_link or f'{base_frontend}/preorder/{portal_slug}'}
-
-You can view the full draft, story sequences, and mark this task complete in your Creator Portal:
-{portal_magic_link}
-
-Best regards,
-Creator Forge Studio Operations"""
-
-    body_html = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0c0e14; color: #f1f5f9; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);">
-        <div style="display: inline-block; padding: 4px 12px; background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.3); border-radius: 20px; font-size: 11px; font-weight: bold; color: #c084fc; margin-bottom: 12px;">
-            DAY {task.day_number} LAUNCH MISSION REMINDER
-        </div>
-        <h2 style="color: #ffffff; margin-top: 0; font-size: 20px;">{task.task_title}</h2>
-        <p style="color: #94a3b8; font-size: 14px; line-height: 1.6;">
-            Hi {proj.creator_name or 'there'}, here is your scheduled launch post for <strong>{proj.product_name}</strong> on <strong>{task.channel.capitalize()}</strong>. Ready to copy and publish to your audience:
-        </p>
-
-        <div style="margin: 20px 0; padding: 18px; background: #161a24; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;">
-            <p style="margin: 0 0 8px 0; font-size: 11px; font-weight: bold; color: #a855f7; text-transform: uppercase;">Ready-to-Post Copy Draft:</p>
-            <p style="margin: 0; font-size: 13px; color: #e2e8f0; line-height: 1.7; white-space: pre-wrap;">{task.content_draft or ''}</p>
-        </div>
-
-        <div style="margin: 16px 0; padding: 14px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px;">
-            <p style="margin: 0 0 6px 0; font-size: 11px; font-weight: bold; color: #34d399; text-transform: uppercase;">Your Unique Pre-Order Tracking Link:</p>
-            <a href="{task.tracking_link or portal_magic_link}" style="color: #6ee7b7; font-size: 13px; font-weight: bold; word-break: break-all;">{task.tracking_link or portal_magic_link}</a>
-        </div>
-
-        <div style="margin: 24px 0 12px 0; text-align: center;">
-            <a href="{portal_magic_link}" style="display: inline-block; padding: 12px 28px; background: #9333ea; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 14px; border-radius: 10px; box-shadow: 0 4px 14px rgba(147, 51, 234, 0.4);">
-                Open Creator Portal & Mark Done &rarr;
-            </a>
-        </div>
-        <p style="color: #64748b; font-size: 11px; text-align: center; margin-top: 16px;">
-            Co-Launch Partner Portal for {proj.product_name} &bull; 50/50 Revenue Share Active
-        </p>
-    </div>
-    """
-
-    sent_to = []
     if creator_email and "@" in creator_email:
-        try:
-            email_provider.send(
-                to_email=creator_email,
-                subject=subject,
-                body_html=body_html,
-                body_text=body_text
-            )
-            sent_to.append(creator_email)
-        except Exception as e:
-            logger.warning(f"Failed to send task reminder to creator {creator_email}: {e}")
+        email_provider.send(to_email=creator_email, subject=subject, body_text=body_text)
 
-    # Also notify admin
-    if admin_email and "@" in admin_email and admin_email not in sent_to:
-        try:
-            email_provider.send(
-                to_email=admin_email,
-                subject=f"[ADMIN COPY] {subject}",
-                body_html=body_html,
-                body_text=body_text
-            )
-            sent_to.append(admin_email)
-        except Exception as e:
-            logger.warning(f"Failed to send task reminder admin copy: {e}")
-
-    # Log in activity logs
-    meta = dict(proj.metadata_info or {})
-    logs = list(meta.get("activity_logs", []))
-    logs.append({
-        "id": str(uuid.uuid4()),
-        "type": "campaign_reminder",
-        "description": f"Dispatched reminder email for Day {task.day_number} ({task.channel}) to {', '.join(sent_to) if sent_to else 'Pending email'}",
-        "timestamp": datetime.utcnow().isoformat()
-    })
-    meta["activity_logs"] = logs
-    proj.metadata_info = meta
-    db.commit()
-
-    return {
-        "status": "sent" if sent_to else "mocked",
-        "sentTo": sent_to,
-        "taskId": task.id,
-        "taskTitle": task.task_title,
-        "dayNumber": task.day_number,
-        "channel": task.channel
-    }
+    return {"status": "success", "sent": True, "recipient": creator_email, "taskId": task_id, "channel": channel}
 
 
 @router.post("/{project_id}/reservations")
 def add_reservation(project_id: str, body: AddReservationRequest, db: Session = Depends(get_db)):
-    """Record a verified buyer pre-order / reservation in Step 4 Telemetry."""
-    proj = db.get(CoLaunchProject, project_id)
+    """Record a verified buyer pre-order / reservation in Step 4 Telemetry directly in MongoDB."""
+    proj = _find_mongo_project(project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    telemetry = proj.telemetry
-    if not telemetry:
-        telemetry = ValidationTelemetry(project_id=proj.id)
-        db.add(telemetry)
-
-    reservation_item = {
+    telem = proj.get("telemetry") or {}
+    cur_res = list(telem.get("reservations") or [])
+    res_item = {
         "id": f"res_{int(datetime.utcnow().timestamp()*1000)}",
         "name": body.name,
         "email": body.email,
@@ -2008,122 +2182,113 @@ def add_reservation(project_id: str, body: AddReservationRequest, db: Session = 
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
         "status": "paid"
     }
+    cur_res.insert(0, res_item)
+    telem["reservations"] = cur_res
+    telem["presalesCount"] = len(cur_res)
+    new_revenue = sum(float(r.get("amount", 0)) for r in cur_res)
+    telem["presalesRevenue"] = new_revenue
+    proj["currentPresales"] = new_revenue
+    proj["current_presales"] = new_revenue
 
-    cur_res = list(telemetry.reservations or [])
-    cur_res.insert(0, reservation_item)
-    telemetry.reservations = cur_res
-
-    # Increment telemetry metrics
-    telemetry.presales_count = len(cur_res)
-    new_revenue = sum(r.get("amount", 0) for r in cur_res)
-    telemetry.presales_revenue = new_revenue
-    proj.current_presales = new_revenue
-
-    # Update visitors and conversion rate
-    cur_visitors = max(telemetry.visitors, len(cur_res) * 6)
-    telemetry.visitors = cur_visitors
-    proj.visitors = cur_visitors
+    cur_visitors = max(int(telem.get("visitors", 0)), len(cur_res) * 6)
+    telem["visitors"] = cur_visitors
+    proj["visitors"] = cur_visitors
     conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
-    telemetry.conversion_rate = conv
-    proj.conversion_rate = conv
+    telem["conversionRate"] = conv
+    proj["conversionRate"] = conv
 
-    # Attribution
-    cur_attr = dict(telemetry.channel_attribution or {})
+    cur_attr = dict(telem.get("channelAttribution") or {})
     chan = body.channel or "direct"
     cur_attr[chan] = cur_attr.get(chan, 0) + 1
-    telemetry.channel_attribution = cur_attr
+    telem["channelAttribution"] = cur_attr
+    proj["telemetry"] = telem
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    _save_mongo_project(proj)
+    return _normalize_mongo_project_dict(proj)
 
 
 @router.post("/{project_id}/gate-decision")
 def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session = Depends(get_db)):
-    """Record Step 5 Executive Validation Gate decision."""
-    proj = db.get(CoLaunchProject, project_id)
+    """Record Step 5 Executive Validation Gate decision directly in MongoDB."""
+    proj = _find_mongo_project(project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    target = proj.presale_target or 5000.0
-    achieved = proj.current_presales or 0.0
-    is_passed = achieved >= target
+    target = float(proj.get("presaleTarget") or proj.get("presale_target") or 5000.0)
+    achieved = float(proj.get("currentPresales") or proj.get("current_presales") or 0.0)
 
     if body.decision == "pass_to_phase2":
-        proj.current_phase = 2
-        proj.current_step = "plan"
-        proj.status = "building"
+        proj["currentPhase"] = 2
+        proj["current_phase"] = 2
+        proj["currentStep"] = "plan"
+        proj["current_step"] = "plan"
+        proj["status"] = "building"
         gate_status = "passed"
     elif body.decision == "iterate_validation":
-        proj.current_phase = 1
-        proj.current_step = "optimize"
-        proj.status = "validating"
+        proj["currentPhase"] = 1
+        proj["current_phase"] = 1
+        proj["currentStep"] = "optimize"
+        proj["current_step"] = "optimize"
+        proj["status"] = "validating"
         gate_status = "iterating"
-    else: # 'kill_project'
-        proj.status = "killed"
+    else:
+        proj["status"] = "killed"
         gate_status = "failed"
 
-    decision = ValidationGateDecision(
-        project_id=proj.id,
-        decision=body.decision,
-        target_revenue=target,
-        achieved_revenue=achieved,
-        backers_count=proj.telemetry.presales_count if proj.telemetry else 0,
-        conversion_rate=proj.conversion_rate or 0.0,
-        gate_status=gate_status,
-        gate_notes=body.notes or f"Executive gate decision: {body.decision}"
-    )
-    db.add(decision)
-    db.commit()
-    db.refresh(proj)
+    gates = list(proj.get("gateDecisions") or proj.get("gate_decisions") or [])
+    gates.insert(0, {
+        "id": f"gate_{int(datetime.utcnow().timestamp()*1000)}",
+        "decision": body.decision,
+        "targetRevenue": target,
+        "achievedRevenue": achieved,
+        "gateStatus": gate_status,
+        "notes": body.notes or f"Executive gate decision: {body.decision}",
+        "decidedAt": datetime.utcnow().isoformat()
+    })
+    proj["gateDecisions"] = gates
+    proj["gate_decisions"] = gates
 
-    return _format_project_response(proj)
+    _save_mongo_project(proj)
+    return _normalize_mongo_project_dict(proj)
 
 
 @router.post("/record-visit")
 def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db)):
-    """
-    Universal public page/preorder visit recorder.
-    Accurately tracks unique devices/visitors using client IDs and device fingerprints.
-    Page reloads on the same device increment page views, NOT unique visitors.
-    """
-    # Exclude internal admin dashboard visits if accidentally sent
+    """Universal public page visit recorder operating directly on MongoDB Atlas."""
     if body.path and ("/dashboard" in body.path or "/admin" in body.path):
         return {"status": "ignored", "message": "Admin dashboard views are not tracked as customer visits"}
 
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    if coll is None:
+        return {"status": "ok", "message": "No database"}
+
     proj = None
     if body.projectId:
-        proj = db.get(CoLaunchProject, body.projectId)
-    
+        proj = _find_mongo_project(body.projectId)
+
     if not proj and body.slug:
         clean_slug = body.slug.lower().strip()
-        projects = db.query(CoLaunchProject).all()
-        for p in projects:
-            p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
-            c_slug = (p.creator_handle or "").lower().replace("@", "")
-            if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
-                proj = p
-                break
-    
+        proj = coll.find_one({"$or": [
+            {"product_name": {"$regex": clean_slug, "$options": "i"}},
+            {"productName": {"$regex": clean_slug, "$options": "i"}},
+            {"creator_handle": clean_slug},
+            {"creatorHandle": clean_slug},
+            {"id": clean_slug}
+        ]})
+
     if not proj:
-        proj = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).first()
+        proj = coll.find_one()
 
     if not proj:
         return {"status": "ok", "message": "No active project"}
 
-    telemetry = proj.telemetry
-    if not telemetry:
-        telemetry = ValidationTelemetry(project_id=proj.id)
-        db.add(telemetry)
+    telem = proj.get("telemetry") or {}
+    telem["views"] = int(telem.get("views") or 0) + 1
 
-    # 1. Total page views always increments by 1
-    telemetry.views = int(telemetry.views or 0) + 1
-
-    # 2. Check if this client ID or device fingerprint has already been recorded
-    meta = dict(proj.metadata_info or {})
+    meta = dict(proj.get("metadataInfo") or proj.get("metadata_info") or {})
     raw_tracked = meta.get("tracked_client_ids") or []
     tracked_clients = set(raw_tracked)
-
     client_key = (body.clientId or body.fingerprint or "").strip()
 
     is_truly_new = False
@@ -2131,32 +2296,30 @@ def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db
         if client_key not in tracked_clients:
             tracked_clients.add(client_key)
             meta["tracked_client_ids"] = list(tracked_clients)[-5000:]
-            proj.metadata_info = meta
+            proj["metadataInfo"] = meta
+            proj["metadata_info"] = meta
             is_truly_new = True
     elif body.isNewVisitor is True:
         is_truly_new = True
 
-    # 3. Only increment unique visitors if genuinely a new device/client, or if visitors count was 0
-    if is_truly_new or not telemetry.visitors:
-        telemetry.visitors = max(1, len(tracked_clients) if tracked_clients else (int(telemetry.visitors or 0) + 1))
-        proj.visitors = telemetry.visitors
+    if is_truly_new or not telem.get("visitors"):
+        telem["visitors"] = max(1, len(tracked_clients) if tracked_clients else (int(telem.get("visitors") or 0) + 1))
+        proj["visitors"] = telem["visitors"]
 
-    # Map normalized channel
     chan = body.channel or "Direct / Other"
-    cur_attr = dict(telemetry.channel_attribution or {})
+    cur_attr = dict(telem.get("channelAttribution") or {})
     if is_truly_new or chan not in cur_attr:
         cur_attr[chan] = cur_attr.get(chan, 0) + 1
-        telemetry.channel_attribution = cur_attr
+        telem["channelAttribution"] = cur_attr
 
-    # Recalculate conversion rate
-    res_count = len(telemetry.reservations or [])
-    if telemetry.visitors and telemetry.visitors > 0:
-        telemetry.conversion_rate = round((res_count / telemetry.visitors) * 100, 1)
-        proj.conversion_rate = telemetry.conversion_rate
+    res_count = len(telem.get("reservations") or [])
+    if telem.get("visitors") and telem["visitors"] > 0:
+        telem["conversionRate"] = round((res_count / telem["visitors"]) * 100, 1)
+        proj["conversionRate"] = telem["conversionRate"]
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    proj["telemetry"] = telem
+    _save_mongo_project(proj)
+    return _normalize_mongo_project_dict(proj)
 
 
 @router.post("/{project_id}/track-visit")
@@ -2168,36 +2331,33 @@ def track_project_visit(project_id: str, body: TrackVisitRequest, db: Session = 
 
 @router.post("/record-preorder")
 def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends(get_db)):
-    """
-    Universal public pre-order recorder called by /preorder/:slug checkout.
-    Persists reservation, updates presales revenue, unique visitors, and logs activity in DB.
-    """
+    """Universal public pre-order recorder directly in MongoDB Atlas."""
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    if coll is None:
+        raise HTTPException(500, "Database unavailable")
+
     proj = None
     if body.projectId:
-        proj = db.get(CoLaunchProject, body.projectId)
-    
+        proj = _find_mongo_project(body.projectId)
+
     if not proj and body.slug:
         clean_slug = body.slug.lower().strip()
-        projects = db.query(CoLaunchProject).all()
-        for p in projects:
-            p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
-            c_slug = (p.creator_handle or "").lower().replace("@", "")
-            if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
-                proj = p
-                break
-    
+        proj = coll.find_one({"$or": [
+            {"product_name": {"$regex": clean_slug, "$options": "i"}},
+            {"productName": {"$regex": clean_slug, "$options": "i"}},
+            {"creator_handle": clean_slug},
+            {"creatorHandle": clean_slug},
+            {"id": clean_slug}
+        ]})
+
     if not proj:
-        # Fallback to the latest active project
-        proj = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).first()
+        proj = coll.find_one()
 
     if not proj:
         raise HTTPException(404, "No active co-launch project found to record reservation")
 
-    telemetry = proj.telemetry
-    if not telemetry:
-        telemetry = ValidationTelemetry(project_id=proj.id)
-        db.add(telemetry)
-
+    telem = proj.get("telemetry") or {}
     res_id = f"res_{int(datetime.utcnow().timestamp()*1000)}"
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -2214,32 +2374,28 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
         "status": "Paid"
     }
 
-    cur_res = list(telemetry.reservations or [])
+    cur_res = list(telem.get("reservations") or [])
     cur_res.insert(0, reservation_item)
-    telemetry.reservations = cur_res
-
-    # Increment telemetry metrics
-    telemetry.presales_count = len(cur_res)
+    telem["reservations"] = cur_res
+    telem["presalesCount"] = len(cur_res)
     new_revenue = sum(float(r.get("amount", 0)) for r in cur_res)
-    telemetry.presales_revenue = new_revenue
-    proj.current_presales = new_revenue
+    telem["presalesRevenue"] = new_revenue
+    proj["currentPresales"] = new_revenue
+    proj["current_presales"] = new_revenue
 
-    # Update visitors and conversion rate
-    cur_visitors = max(int(telemetry.visitors or 0), len(cur_res) * 5, 1)
-    telemetry.visitors = cur_visitors
-    proj.visitors = cur_visitors
+    cur_visitors = max(int(telem.get("visitors", 0)), len(cur_res) * 5, 1)
+    telem["visitors"] = cur_visitors
+    proj["visitors"] = cur_visitors
     conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
-    telemetry.conversion_rate = conv
-    proj.conversion_rate = conv
+    telem["conversionRate"] = conv
+    proj["conversionRate"] = conv
 
-    # Attribution
-    cur_attr = dict(telemetry.channel_attribution or {})
+    cur_attr = dict(telem.get("channelAttribution") or {})
     chan = body.channel or "Direct / Other"
     cur_attr[chan] = cur_attr.get(chan, 0) + 1
-    telemetry.channel_attribution = cur_attr
+    telem["channelAttribution"] = cur_attr
 
-    # Activity Log
-    meta = dict(proj.metadata_info or {})
+    meta = dict(proj.get("metadataInfo") or proj.get("metadata_info") or {})
     act_logs = list(meta.get("activity_logs") or [])
     act_item = {
         "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
@@ -2250,11 +2406,12 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
     }
     act_logs.insert(0, act_item)
     meta["activity_logs"] = act_logs[:50]
-    proj.metadata_info = meta
+    proj["metadataInfo"] = meta
+    proj["metadata_info"] = meta
+    proj["telemetry"] = telem
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    _save_mongo_project(proj)
+    return _normalize_mongo_project_dict(proj)
 
 
 @router.post("/record-survey-response")
@@ -2478,8 +2635,38 @@ def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = 
 
 @router.get("/by-slug/{slug}")
 def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
-    """Lookup active co-launch project by slug or creator handle."""
+    """Lookup active co-launch project by slug or creator handle from MongoDB."""
     clean_slug = slug.lower().strip()
+
+    # 1. Prioritize MongoDB co_launch_projects
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None:
+            doc = coll.find_one({"$or": [
+                {"id": slug},
+                {"creator_handle": clean_slug},
+                {"creator_handle": f"@{clean_slug}"},
+                {"creatorHandle": clean_slug},
+                {"creatorHandle": f"@{clean_slug}"},
+                {"creator_handle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
+                {"creatorHandle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
+                {"product_name": {"$regex": clean_slug, "$options": "i"}},
+                {"productName": {"$regex": clean_slug, "$options": "i"}}
+            ]})
+            if not doc:
+                doc = coll.find_one()
+            if doc:
+                ws_coll = get_collection("workflow_states")
+                ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+                def_fee = 199.0
+                if ws_doc:
+                    def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
+                return _normalize_mongo_project_dict(doc, def_fee)
+    except Exception as e:
+        logger.debug(f"[MongoDB] get_project_by_slug notice: {e}")
+
+    # 2. In-memory scratchpad lookup
     projects = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).all()
     for p in projects:
         p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
@@ -2490,69 +2677,35 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
     if projects:
         return _format_project_response(projects[0])
 
-    # Check MongoDB fallback if SQLite has no matches
-    try:
-        from app.mongodb import get_collection
-        coll = get_collection("co_launch_projects")
-        if coll is not None:
-            doc = coll.find_one({"$or": [
-                {"id": slug},
-                {"creator_handle": clean_slug},
-                {"creator_handle": f"@{clean_slug}"},
-                {"creator_handle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
-                {"product_name": {"$regex": clean_slug, "$options": "i"}}
-            ]})
-            if not doc:
-                doc = coll.find_one()
-            if doc:
-                doc.pop("_id", None)
-                if not doc.get("hasCustomFee"):
-                    ws_coll = get_collection("workflow_states")
-                    ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
-                    def_fee = 199.0
-                    if ws_doc:
-                        def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
-                    doc["diyFee"] = def_fee
-                    doc["diyPassPrice"] = def_fee
-                return doc
-    except Exception as e:
-        logger.debug(f"[MongoDB] get_project_by_slug fallback notice: {e}")
-
     raise HTTPException(404, f"No project found matching slug '{slug}'")
 
 
 @router.delete("")
 @router.delete("/")
 def delete_all_projects(db: Session = Depends(get_db)):
-    """Delete all co-launch projects, associated validation records, and all uploaded Cloudinary files."""
-    from app.integrations.cloudinary_service import delete_all_files_for_project
-    projects = db.query(CoLaunchProject).all()
-    count = len(projects)
-    for proj in projects:
-        try:
-            delete_all_files_for_project(proj)
-        except Exception as e:
-            logger.warning(f"[DeleteAllProjects] Cloudinary purge error: {e}")
-        db.delete(proj)
-    db.commit()
+    """Delete all co-launch projects directly from MongoDB Atlas."""
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    count = 0
+    if coll is not None:
+        count = coll.count_documents({})
+        coll.delete_many({})
     return {"status": "success", "deleted_count": count, "message": f"Deleted {count} co-launch projects."}
 
 
 @router.delete("/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db)):
-    """Delete a co-launch project, all validation records, and all uploaded Cloudinary files."""
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
-        raise HTTPException(404, f"Project '{project_id}' not found")
-    
-    try:
-        from app.integrations.cloudinary_service import delete_all_files_for_project
-        delete_all_files_for_project(proj)
-    except Exception as e:
-        logger.warning(f"[DeleteProject] Cloudinary purge error: {e}")
-
-    db.delete(proj)
-    db.commit()
-    return {"status": "success", "message": f"Project '{project_id}' and all associated Cloudinary files deleted."}
-
-
+    """Delete a co-launch project directly from MongoDB Atlas."""
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    if coll is not None:
+        clean_target = project_id.replace("@", "").lower().strip()
+        coll.delete_one({"$or": [
+            {"_id": project_id},
+            {"id": project_id},
+            {"creator_id": project_id},
+            {"creatorId": project_id},
+            {"creator_handle": clean_target},
+            {"creatorHandle": clean_target},
+        ]})
+    return {"status": "success", "message": f"Project '{project_id}' deleted."}

@@ -379,20 +379,27 @@ def create_creator(body: CreatorCreate, actor: str = "internal", db: Session = D
         raise HTTPException(400, str(e))
 
 
-def _build_project_map(db: Session) -> dict:
+def _build_project_map(db: Any = None) -> dict:
     try:
-        from app.models.project import CoLaunchProject
-        all_projs = db.query(CoLaunchProject).all()
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is None:
+            return {"by_id": {}, "by_handle": {}, "by_email": {}}
+        all_projs = list(coll.find({}))
         by_id = {}
         by_handle = {}
         by_email = {}
         for p in all_projs:
-            if p.creator_id:
-                by_id[p.creator_id] = p
-            if p.creator_handle:
-                by_handle[p.creator_handle.lstrip("@").strip().lower()] = p
-            if p.creator_email:
-                by_email[p.creator_email.strip().lower()] = p
+            p_id = p.get("id") or str(p.get("_id", ""))
+            c_id = p.get("creator_id") or p.get("creatorId")
+            c_h = p.get("creator_handle") or p.get("creatorHandle")
+            c_e = p.get("creator_email") or p.get("creatorEmail")
+            if c_id:
+                by_id[c_id] = p
+            if c_h:
+                by_handle[c_h.lstrip("@").strip().lower()] = p
+            if c_e:
+                by_email[c_e.strip().lower()] = p
         return {"by_id": by_id, "by_handle": by_handle, "by_email": by_email}
     except Exception:
         return {"by_id": {}, "by_handle": {}, "by_email": {}}
@@ -405,65 +412,42 @@ def list_creators(
     sort_by: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db),
 ):
-    q = db.query(Creator)
+    """List creators directly and exclusively from MongoDB Atlas creators collection."""
+    from app.mongodb import get_collection
+    coll = get_collection("creators")
+    if coll is None:
+        return []
+
+    query: Dict[str, Any] = {}
     if status and status != "all":
-        q = q.filter(Creator.status == status)
+        query["status"] = status
     if platform and platform != "all":
-        q = q.filter(Creator.platform == platform)
+        query["platform"] = platform
+
+    cursor = coll.find(query)
 
     # Dynamic sorting
     if sort_by == "followers_desc":
-        q = q.order_by(Creator.follower_count.desc())
+        cursor = cursor.sort("follower_count", -1)
     elif sort_by == "followers_asc":
-        q = q.order_by(Creator.follower_count.asc())
+        cursor = cursor.sort("follower_count", 1)
     elif sort_by == "name_asc":
-        q = q.order_by(Creator.display_name.asc())
+        cursor = cursor.sort("display_name", 1)
     elif sort_by == "name_desc":
-        q = q.order_by(Creator.display_name.desc())
+        cursor = cursor.sort("display_name", -1)
     elif sort_by == "score_desc":
-        q = q.order_by(Creator.engagement_score.desc())
+        cursor = cursor.sort("engagement_score", -1)
     elif sort_by == "created_at_asc":
-        q = q.order_by(Creator.created_at.asc())
+        cursor = cursor.sort("created_at", 1)
     else:
-        q = q.order_by(Creator.created_at.desc())
+        cursor = cursor.sort("created_at", -1)
 
     capped_limit = min(1000, max(1, limit)) if limit > 0 else 50
-    creators = q.offset(skip).limit(capped_limit).all()
-    try:
-        from app.mongodb import get_collection
-        coll = get_collection("creators")
-        if coll is not None:
-            existing_handles = {c.handle.lower().lstrip('@') for c in db.query(Creator.handle).all() if c.handle}
-            mongo_docs = list(coll.find({}))
-            new_added = False
-            import json
-            from datetime import datetime
-            creator_cols = {c.name for c in Creator.__table__.columns}
-            for doc in mongo_docs:
-                h = (doc.get("handle") or "").lower().lstrip('@')
-                if h and h not in existing_handles:
-                    r = dict(doc)
-                    r.pop("_id", None)
-                    if isinstance(r.get("niche"), str):
-                        try: r["niche"] = json.loads(r["niche"])
-                        except Exception: r["niche"] = [r["niche"]]
-                    for dt_field in ["created_at", "updated_at"]:
-                        if r.get(dt_field) and isinstance(r[dt_field], str):
-                            try: r[dt_field] = datetime.fromisoformat(r[dt_field])
-                            except Exception: r[dt_field] = datetime.utcnow()
-                    filtered = {k: v for k, v in r.items() if k in creator_cols}
-                    db.add(Creator(**filtered))
-                    existing_handles.add(h)
-                    new_added = True
-            if new_added:
-                db.commit()
-                creators = q.offset(skip).limit(capped_limit).all()
-    except Exception as m_err:
-        logger.debug(f"[ListCreators] MongoDB sync notice: {m_err}")
-    project_map = _build_project_map(db)
-    return [_creator_dict(c, project_map=project_map) for c in creators]
+    docs = list(cursor.skip(skip).limit(capped_limit))
+    project_map = _build_project_map()
+    return [_creator_dict(d, project_map=project_map) for d in docs]
+
 
 
 
@@ -554,18 +538,26 @@ def get_creator_comments_endpoint(
 
 
 @router.get("/{creator_id}")
-def get_creator(creator_id: str, db: Session = Depends(get_db)):
-    c = db.get(Creator, creator_id)
-    if not c:
-        clean_handle = creator_id.lstrip("@").strip().lower()
-        c = db.query(Creator).filter(
-            (Creator.handle.ilike(clean_handle)) |
-            (Creator.handle.ilike(f"@{clean_handle}"))
-        ).first()
-    if not c:
-        raise HTTPException(404, "Creator not found")
-    project_map = _build_project_map(db)
-    return _creator_dict(c, project_map=project_map)
+def get_creator(creator_id: str):
+    from app.mongodb import get_collection
+    clean_handle = creator_id.lstrip("@").strip().lower()
+    coll = get_collection("creators")
+    if coll is not None:
+        doc = coll.find_one({
+            "$or": [
+                {"_id": creator_id},
+                {"id": creator_id},
+                {"handle": clean_handle},
+                {"handle": f"@{clean_handle}"},
+                {"handle": {"$regex": f"^{clean_handle}$", "$options": "i"}},
+                {"email_public": creator_id.strip()},
+            ]
+        })
+        if doc:
+            project_map = _build_project_map()
+            return _creator_dict(doc, project_map=project_map)
+
+    raise HTTPException(404, "Creator not found")
 
 
 @router.get("/{creator_id}/videos")
@@ -680,38 +672,42 @@ def update_creator_details(
     creator_id: str,
     body: CreatorUpdate,
     actor: str = "user",
-    db: Session = Depends(get_db)
 ):
-    c = db.get(Creator, creator_id)
-    if not c:
-        clean_handle = creator_id.lstrip("@").strip().lower()
-        c = db.query(Creator).filter(
-            (Creator.handle.ilike(clean_handle)) |
-            (Creator.handle.ilike(f"@{clean_handle}")) |
-            (Creator.email_public.ilike(creator_id.strip())) |
-            (Creator.display_name.ilike(creator_id.strip()))
-        ).first()
-
-    if not c:
-        raise HTTPException(404, f"Creator {creator_id} not found")
+    from app.mongodb import get_collection
+    coll = get_collection("creators")
+    if coll is None:
+        raise HTTPException(500, "MongoDB unavailable")
     
+    clean_handle = creator_id.lstrip("@").strip().lower()
+    doc = coll.find_one({
+        "$or": [
+            {"_id": creator_id},
+            {"id": creator_id},
+            {"handle": clean_handle},
+            {"handle": f"@{clean_handle}"},
+            {"handle": {"$regex": f"^{clean_handle}$", "$options": "i"}},
+            {"email_public": creator_id.strip()}
+        ]
+    })
+
+    if not doc:
+        raise HTTPException(404, f"Creator {creator_id} not found")
+
     data = body.model_dump(exclude_unset=True)
     target_email = (body.email_public or body.email or "").strip()
-    is_email_changing = bool(target_email and target_email.lower() != (c.email_public or "").strip().lower())
-
     if target_email:
-        c.email_public = target_email
+        doc["email_public"] = target_email
 
-    for field, val in data.items():
-        if field not in ("email", "email_public", "selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept", "reply_classification", "reply_text", "discovery_notes") and hasattr(c, field):
-            setattr(c, field, val)
+    for field in ["display_name", "bio", "profile_url", "follower_count", "niche", "location", "website", "status"]:
+        if field in data and data[field] is not None:
+            doc[field] = data[field]
 
     # Manage discovery_notes JSON attributes
     import json
     notes = {}
-    if c.discovery_notes and c.discovery_notes.startswith("{"):
+    if doc.get("discovery_notes") and str(doc["discovery_notes"]).startswith("{"):
         try:
-            notes = json.loads(c.discovery_notes)
+            notes = json.loads(doc["discovery_notes"])
         except Exception:
             notes = {}
 
@@ -722,34 +718,11 @@ def update_creator_details(
         except Exception:
             pass
 
-    # Explicit reply classification updates
     if "reply_classification" in data:
         notes["reply_classification"] = data["reply_classification"]
     if "reply_text" in data:
         notes["reply_text"] = data["reply_text"]
 
-    # When email is modified or added to an uncontacted creator: ALWAYS clear stale reply classifications!
-    is_uncontacted = c.status not in ("contacted", "pitched", "ready_for_launch", "partnered")
-    if is_email_changing and is_uncontacted:
-        notes["reply_classification"] = None
-        notes["reply_text"] = None
-        notes.pop("reply_classification", None)
-        notes.pop("reply_text", None)
-        # Purge any old orphan threads that had this email
-        try:
-            from app.models.outreach import Thread, Reply
-            orphan_threads = db.query(Thread).filter(
-                (Thread.creator_id == c.id) |
-                (Thread.recipient_email.ilike(target_email)) |
-                (Thread.creator_email.ilike(target_email))
-            ).all()
-            for ot in orphan_threads:
-                db.query(Reply).filter(Reply.thread_id == ot.id).delete(synchronize_session=False)
-                db.delete(ot)
-        except Exception as th_err:
-            logger.warning(f"Error purging orphan threads on email change: {th_err}")
-
-    # Persist selected_concept_id and selected_concept to discovery_notes JSON
     if any(k in data for k in ("selected_concept_id", "selectedConceptId", "selected_concept", "selectedConcept")):
         sel_id = data.get("selected_concept_id") or data.get("selectedConceptId")
         if sel_id:
@@ -758,23 +731,10 @@ def update_creator_details(
         if sel_concept:
             notes["selected_concept"] = sel_concept
 
-    c.discovery_notes = json.dumps(notes)
-    
-    if target_email:
-        try:
-            from app.models.creator import Contact
-            contact = db.query(Contact).filter(Contact.creator_id == c.id, Contact.contact_type == "email").first()
-            if contact:
-                contact.value = target_email
-            else:
-                contact = Contact(creator_id=c.id, contact_type="email", value=target_email, source="manual_edit")
-                db.add(contact)
-        except Exception:
-            pass
-            
-    db.commit()
-    db.refresh(c)
-    return {"status": "success", "creator": _creator_dict(c)}
+    doc["discovery_notes"] = json.dumps(notes)
+    doc["updated_at"] = datetime.utcnow().isoformat()
+    coll.replace_one({"_id": doc["_id"]}, doc)
+    return {"status": "success", "creator": _creator_dict(doc, project_map=_build_project_map())}
 
 
 @router.patch("/{creator_id}/status")
@@ -887,329 +847,97 @@ def suppress_creator(
 
 
 @router.delete("/all")
+@router.delete("")
 def delete_all_creators(db: Session = Depends(get_db)):
-    """Delete all creators and all associated contacts, outreach messages, threads, and replies."""
-    from sqlalchemy import text
+    """Delete all creators and reset pipeline directly in MongoDB Atlas."""
+    from app.mongodb import get_collection
+    total_deleted = 0
     try:
-        bind_url = str(db.bind.url) if db.bind else ""
-        if "postgresql" in bind_url or "postgres" in bind_url:
-            db.execute(text("""
-                TRUNCATE TABLE 
-                    validation_gate_decisions, validation_telemetry, creator_campaign_tasks,
-                    validation_campaigns, validation_plans, co_launch_projects,
-                    replies, follow_ups, threads, outreach_messages, suppression_list,
-                    contacts, analyses, content_samples, decks, metrics_snapshots,
-                    partnerships, post_suggestions, product_recommendations, creators
-                CASCADE;
-            """))
-            # Reset global workflow state to prevent orphan choices or pitch history from resurfacing
-            try:
-                from app.models.workflow_state import WorkflowState
-                state = db.get(WorkflowState, "default")
-                if state:
-                    state.active_section = "section1"
-                    state.active_step = 1
-                    state.selected_creator_id = None
-                    state.active_project_id = None
-                    state.pitch_sent_map = {}
-                    state.ai_choice_map = {}
-                    state.answer_sent_map = {}
-                    state.persuasion_sent_map = {}
-                    state.creator_stage_map = {}
-                    state.extra_state = {}
-                    state.updated_at = datetime.utcnow()
-            except Exception as ws_err:
-                logger.warning(f"Failed to reset workflow state during delete_all: {ws_err}")
+        c_coll = get_collection("creators")
+        if c_coll is not None:
+            res = c_coll.delete_many({})
+            total_deleted = res.deleted_count
 
-            # Also purge MongoDB Atlas collections
-            try:
-                from app.mongodb import get_collection
-                for col_name in [
-                    "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks",
-                    "validation_campaigns", "validation_plans", "co_launch_projects",
-                    "replies", "follow_ups", "threads", "outreach_messages", "suppression_list",
-                    "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
-                    "partnerships", "post_suggestions", "product_recommendations", "creators"
-                ]:
-                    c = get_collection(col_name)
-                    if c is not None:
-                        c.delete_many({})
-            except Exception as m_err:
-                logger.warning(f"[DeleteAllCreators] MongoDB purge notice: {m_err}")
+        for col_name in [
+            "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks",
+            "validation_campaigns", "validation_plans", "co_launch_projects",
+            "replies", "follow_ups", "threads", "outreach_messages", "suppression_list",
+            "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
+            "partnerships", "post_suggestions", "product_recommendations"
+        ]:
+            c = get_collection(col_name)
+            if c is not None:
+                c.delete_many({})
 
-            db.commit()
-            return {"success": True, "deleted_count": 0, "message": "Successfully wiped all creators, projects, and workflow states"}
-        else:
-            from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
-            from app.models.creator import (
-                Contact, Analysis, ContentSample, Deck,
-                MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
+        # Reset global workflow state in MongoDB
+        wf_coll = get_collection("workflow_states")
+        if wf_coll is not None:
+            wf_coll.replace_one(
+                {"_id": "default"},
+                {
+                    "_id": "default", "id": "default", "active_section": "section1", "active_step": 1,
+                    "selected_creator_id": None, "active_project_id": None,
+                    "pitch_sent_map": {}, "ai_choice_map": {}, "answer_sent_map": {}, "persuasion_sent_map": {}, "creator_stage_map": {}, "extra_state": {},
+                    "default_pass_price": 50.0, "cobuilder_pass_price": 50.0, "updated_at": datetime.utcnow().isoformat()
+                },
+                upsert=True
             )
-            from app.models.project import (
-                CoLaunchProject, ValidationPlan, ValidationCampaign,
-                CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
-            )
-            db.query(Reply).delete(synchronize_session=False)
-            db.query(FollowUp).delete(synchronize_session=False)
-            db.query(Thread).delete(synchronize_session=False)
-            db.query(OutreachMessage).delete(synchronize_session=False)
-            db.query(SuppressionList).delete(synchronize_session=False)
-            db.query(Contact).delete(synchronize_session=False)
-            db.query(Analysis).delete(synchronize_session=False)
-            db.query(ContentSample).delete(synchronize_session=False)
-            db.query(Deck).delete(synchronize_session=False)
-            db.query(MetricsSnapshot).delete(synchronize_session=False)
-            db.query(Partnership).delete(synchronize_session=False)
-            db.query(PostSuggestion).delete(synchronize_session=False)
-            db.query(ProductRecommendation).delete(synchronize_session=False)
-            db.query(ValidationGateDecision).delete(synchronize_session=False)
-            db.query(ValidationTelemetry).delete(synchronize_session=False)
-            db.query(CreatorCampaignTask).delete(synchronize_session=False)
-            db.query(ValidationCampaign).delete(synchronize_session=False)
-            db.query(ValidationPlan).delete(synchronize_session=False)
-            db.query(CoLaunchProject).delete(synchronize_session=False)
-            deleted_count = db.query(Creator).delete(synchronize_session=False)
-
-            # Reset global workflow state
-            try:
-                from app.models.workflow_state import WorkflowState
-                state = db.get(WorkflowState, "default")
-                if state:
-                    state.active_section = "section1"
-                    state.active_step = 1
-                    state.selected_creator_id = None
-                    state.active_project_id = None
-                    state.pitch_sent_map = {}
-                    state.ai_choice_map = {}
-                    state.answer_sent_map = {}
-                    state.persuasion_sent_map = {}
-                    state.creator_stage_map = {}
-                    state.extra_state = {}
-                    state.updated_at = datetime.utcnow()
-            except Exception as ws_err:
-                logger.warning(f"Failed to reset workflow state during delete_all: {ws_err}")
-
-            # Also purge MongoDB Atlas collections
-            try:
-                from app.mongodb import get_collection
-                for col_name in [
-                    "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks",
-                    "validation_campaigns", "validation_plans", "co_launch_projects",
-                    "replies", "follow_ups", "threads", "outreach_messages", "suppression_list",
-                    "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
-                    "partnerships", "post_suggestions", "product_recommendations", "creators"
-                ]:
-                    c = get_collection(col_name)
-                    if c is not None:
-                        c.delete_many({})
-            except Exception as m_err:
-                logger.warning(f"[DeleteAllCreators] MongoDB purge notice: {m_err}")
-
-            db.commit()
-            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and reset workflow states"}
-    except Exception as e:
-        db.rollback()
         try:
-            from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
-            from app.models.creator import (
-                Contact, Analysis, ContentSample, Deck,
-                MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
-            )
-            from app.models.project import (
-                CoLaunchProject, ValidationPlan, ValidationCampaign,
-                CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
-            )
-            # Purge all Cloudinary assets for all ventures
-            try:
-                from app.integrations.cloudinary_service import delete_all_files_for_project
-                all_projs = db.query(CoLaunchProject).all()
-                for p in all_projs:
-                    delete_all_files_for_project(p)
-            except Exception as cld_err:
-                logger.warning(f"[DeleteAllCreators] Cloudinary purge error: {cld_err}")
-
-            db.query(Reply).delete(synchronize_session=False)
-            db.query(FollowUp).delete(synchronize_session=False)
-            db.query(Thread).delete(synchronize_session=False)
-            db.query(OutreachMessage).delete(synchronize_session=False)
-            db.query(SuppressionList).delete(synchronize_session=False)
-            db.query(Contact).delete(synchronize_session=False)
-            db.query(Analysis).delete(synchronize_session=False)
-            db.query(ContentSample).delete(synchronize_session=False)
-            db.query(Deck).delete(synchronize_session=False)
-            db.query(MetricsSnapshot).delete(synchronize_session=False)
-            db.query(Partnership).delete(synchronize_session=False)
-            db.query(PostSuggestion).delete(synchronize_session=False)
-            db.query(ProductRecommendation).delete(synchronize_session=False)
-            db.query(ValidationGateDecision).delete(synchronize_session=False)
-            db.query(ValidationTelemetry).delete(synchronize_session=False)
-            db.query(CreatorCampaignTask).delete(synchronize_session=False)
-            db.query(ValidationCampaign).delete(synchronize_session=False)
-            db.query(ValidationPlan).delete(synchronize_session=False)
-            db.query(CoLaunchProject).delete(synchronize_session=False)
-            deleted_count = db.query(Creator).delete(synchronize_session=False)
+            db.query(Creator).delete(synchronize_session=False)
             db.commit()
-            return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} creators and all venture files from Cloudinary & DB"}
-        except Exception as e2:
-            db.rollback()
-            raise HTTPException(500, f"Failed to delete all creators: {str(e2)}")
+        except Exception:
+            pass
+        return {"success": True, "deleted_count": total_deleted, "message": f"Successfully deleted {total_deleted} creators and wiped all related pipeline data from MongoDB Atlas"}
+    except Exception as e:
+        logger.error(f"[DeleteAllCreators] MongoDB purge error: {e}")
+        raise HTTPException(500, f"Failed to delete all creators: {e}")
 
 
 @router.delete("/{creator_id}")
 def delete_creator(
     creator_id: str, actor: str = "ops_dashboard", db: Session = Depends(get_db)
 ):
-    """Ops dashboard — delete a creator entirely with all chats, threads, and dependencies cascaded."""
+    """Ops dashboard — delete a creator entirely with all dependencies cascaded from MongoDB Atlas."""
     if creator_id == "all":
         return delete_all_creators(db=db)
 
-    creator = db.get(Creator, creator_id)
+    from app.mongodb import get_collection
+    coll = get_collection("creators")
+    if coll is None:
+        raise HTTPException(500, "MongoDB unavailable")
+
     clean_handle = creator_id.lstrip("@").strip().lower()
-    if not creator:
-        creator = db.query(Creator).filter(
-            (Creator.handle.ilike(clean_handle)) |
-            (Creator.handle.ilike(f"@{clean_handle}")) |
-            (Creator.email_public.ilike(creator_id.strip())) |
-            (Creator.display_name.ilike(creator_id.strip()))
-        ).first()
+    doc = coll.find_one({
+        "$or": [
+            {"_id": creator_id},
+            {"id": creator_id},
+            {"handle": clean_handle},
+            {"handle": f"@{clean_handle}"},
+            {"handle": {"$regex": f"^{clean_handle}$", "$options": "i"}},
+            {"email_public": creator_id.strip()}
+        ]
+    })
+    
+    del_count = 0
+    if doc:
+        doc_id = doc.get("id") or str(doc.get("_id", ""))
+        del_res = coll.delete_one({"_id": doc["_id"]})
+        del_count = del_res.deleted_count
 
-    if not creator:
-        # Check MongoDB directly
-        try:
-            from app.mongodb import get_collection
-            coll = get_collection("creators")
-            if coll is not None:
-                doc = coll.find_one({"$or": [{"_id": creator_id}, {"id": creator_id}, {"handle": clean_handle}, {"handle": f"@{clean_handle}"}]})
-                if doc:
-                    doc_id = doc.get("id") or doc.get("_id")
-                    coll.delete_many({"$or": [{"_id": doc_id}, {"id": doc_id}, {"handle": clean_handle}, {"handle": f"@{clean_handle}"}]})
-                    for col_name in ["contacts", "analyses", "content_samples", "decks", "metrics_snapshots", "partnerships", "post_suggestions", "product_recommendations", "outreach_messages", "threads", "replies", "follow_ups", "suppression_list", "co_launch_projects"]:
-                        c = get_collection(col_name)
-                        if c is not None:
-                            c.delete_many({"$or": [{"creator_id": doc_id}, {"creatorId": doc_id}]})
-                    return {"deleted": True, "creator_id": doc_id}
-        except Exception as m_err:
-            logger.warning(f"[DeleteCreator] MongoDB fallback notice: {m_err}")
-
-        # Fallback: check if there is an orphan CoLaunchProject matching this ID, handle, or name!
-        from app.models.project import CoLaunchProject
-        orphan_projs = db.query(CoLaunchProject).filter(
-            (CoLaunchProject.id == creator_id) |
-            (CoLaunchProject.creator_id == creator_id) |
-            (CoLaunchProject.creator_handle.ilike(f"%{clean_handle}%")) |
-            (CoLaunchProject.creator_name.ilike(f"%{creator_id.strip()}%"))
-        ).all()
-        if orphan_projs:
-            for op in orphan_projs:
-                db.delete(op)
-            db.commit()
-            return {"status": "success", "deleted_projects": len(orphan_projs), "message": f"Deleted {len(orphan_projs)} orphan projects"}
-        raise HTTPException(404, "Creator not found")
-
-    real_id = creator.id
-
-    from app.models.outreach import OutreachMessage, Thread, Reply, FollowUp, SuppressionList
-    from app.models.creator import (
-        Contact, Analysis, ContentSample, Deck,
-        MetricsSnapshot, Partnership, PostSuggestion, ProductRecommendation
-    )
-    from app.models.project import CoLaunchProject
+        for col_name in ["contacts", "analyses", "content_samples", "decks", "metrics_snapshots", "partnerships", "post_suggestions", "product_recommendations", "outreach_messages", "threads", "replies", "follow_ups", "suppression_list", "co_launch_projects"]:
+            c = get_collection(col_name)
+            if c is not None:
+                c.delete_many({"$or": [{"creator_id": doc_id}, {"creatorId": doc_id}, {"creator_handle": clean_handle}]})
 
     try:
-        creator_email = (creator.email_public or "").strip().lower()
+        c_obj = db.get(Creator, creator_id)
+        if c_obj:
+            db.delete(c_obj)
+            db.commit()
+    except Exception:
+        pass
 
-        thread_ids = [t.id for t in db.query(Thread.id).filter(Thread.creator_id == real_id).all()]
-        if creator_email:
-            more_thread_ids = [t.id for t in db.query(Thread.id).filter(
-                (Thread.recipient_email.ilike(creator_email)) |
-                (Thread.creator_email.ilike(creator_email))
-            ).all()]
-            thread_ids = list(set(thread_ids + more_thread_ids))
-
-        if thread_ids:
-            db.query(Reply).filter(Reply.thread_id.in_(thread_ids)).delete(synchronize_session=False)
-            db.query(FollowUp).filter(FollowUp.thread_id.in_(thread_ids)).delete(synchronize_session=False)
-            db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
-
-        if creator_email:
-            db.query(Reply).filter(Reply.from_address.ilike(creator_email)).delete(synchronize_session=False)
-            db.query(OutreachMessage).filter(OutreachMessage.creator_email.ilike(creator_email)).delete(synchronize_session=False)
-            db.query(SuppressionList).filter(SuppressionList.email.ilike(creator_email)).delete(synchronize_session=False)
-
-        db.query(Thread).filter(Thread.creator_id == real_id).delete(synchronize_session=False)
-        db.query(OutreachMessage).filter(OutreachMessage.creator_id == real_id).delete(synchronize_session=False)
-        db.query(SuppressionList).filter(SuppressionList.creator_id == real_id).delete(synchronize_session=False)
-        db.query(Contact).filter(Contact.creator_id == real_id).delete(synchronize_session=False)
-        db.query(Analysis).filter(Analysis.creator_id == real_id).delete(synchronize_session=False)
-        db.query(ContentSample).filter(ContentSample.creator_id == real_id).delete(synchronize_session=False)
-        db.query(Deck).filter(Deck.creator_id == real_id).delete(synchronize_session=False)
-        db.query(MetricsSnapshot).filter(MetricsSnapshot.creator_id == real_id).delete(synchronize_session=False)
-        db.query(Partnership).filter(Partnership.creator_id == real_id).delete(synchronize_session=False)
-        db.query(PostSuggestion).filter(PostSuggestion.creator_id == real_id).delete(synchronize_session=False)
-        db.query(ProductRecommendation).filter(ProductRecommendation.creator_id == real_id).delete(synchronize_session=False)
-
-        # Purge all Cloudinary assets and co-launch projects associated with this creator
-        try:
-            from app.integrations.cloudinary_service import delete_all_files_for_project, delete_media_from_cloudinary
-            clean_h = (creator.handle or '').lstrip('@').strip().lower()
-            creator_projs = db.query(CoLaunchProject).filter(
-                (CoLaunchProject.creator_id == real_id) |
-                (CoLaunchProject.creator_handle.ilike(f"%{clean_h}%")) |
-                (CoLaunchProject.creator_name.ilike(f"%{creator.display_name or ''}%")) |
-                (CoLaunchProject.creator_email.ilike(f"%{creator_email}%") if creator_email else False)
-            ).all()
-            for p in creator_projs:
-                delete_all_files_for_project(p)
-                db.delete(p)
-
-            if creator.avatar_url and "cloudinary.com" in creator.avatar_url:
-                delete_media_from_cloudinary(url=creator.avatar_url)
-        except Exception as cld_err:
-            logger.warning(f"[DeleteCreator] Cloudinary purge error: {cld_err}")
-
-        db.delete(creator)
-
-        # Purge creator from global workflow state maps
-        try:
-            from app.models.workflow_state import WorkflowState
-            state = db.get(WorkflowState, "default")
-            if state:
-                dirty = False
-                for map_name in ("pitch_sent_map", "ai_choice_map", "answer_sent_map", "persuasion_sent_map", "creator_stage_map"):
-                    curr = dict(getattr(state, map_name) or {})
-                    keys_to_remove = [k for k in curr if k in (real_id, clean_handle, f"@{clean_handle}")]
-                    if keys_to_remove:
-                        for k in keys_to_remove:
-                            curr.pop(k, None)
-                        setattr(state, map_name, curr)
-                        dirty = True
-                if state.selected_creator_id in (real_id, clean_handle, f"@{clean_handle}"):
-                    state.selected_creator_id = None
-                    dirty = True
-                if dirty:
-                    state.updated_at = datetime.utcnow()
-        except Exception as ws_err:
-            logger.warning(f"Failed to purge creator from workflow state: {ws_err}")
-
-        # Cascade delete from MongoDB Atlas
-        try:
-            from app.mongodb import get_collection
-            coll = get_collection("creators")
-            if coll is not None:
-                clean_h = (creator.handle or creator_id).lstrip("@").strip().lower()
-                coll.delete_many({"$or": [{"_id": real_id}, {"id": real_id}, {"handle": clean_h}, {"handle": f"@{clean_h}"}]})
-            for col_name in ["contacts", "analyses", "content_samples", "decks", "metrics_snapshots", "partnerships", "post_suggestions", "product_recommendations", "outreach_messages", "threads", "replies", "follow_ups", "suppression_list", "co_launch_projects"]:
-                c = get_collection(col_name)
-                if c is not None:
-                    c.delete_many({"$or": [{"creator_id": real_id}, {"creatorId": real_id}]})
-        except Exception as mongo_err:
-            logger.warning(f"[DeleteCreator] MongoDB cascade delete notice: {mongo_err}")
-
-        db.commit()
-        return {"deleted": True, "creator_id": real_id}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Failed to delete creator: {str(e)}")
+    return {"deleted": True, "creator_id": creator_id, "deleted_count": del_count}
 
 
 class CreatorPatchBody(BaseModel):
@@ -1554,44 +1282,91 @@ def get_creator_analysis(creator_id: str, db: Session = Depends(get_db)):
     }
 
 
-def _creator_dict(c: Creator, project_map: dict = None) -> dict:
+def _creator_dict(c: Any, project_map: dict = None) -> dict:
+    if not c:
+        return {}
+    if isinstance(c, dict):
+        c_id = c.get("id") or str(c.get("_id", ""))
+        handle = c.get("handle") or ""
+        platform = c.get("platform") or "youtube"
+        display_name = c.get("display_name") or handle
+        bio = c.get("bio") or ""
+        profile_url = c.get("profile_url") or ""
+        avatar_url = c.get("avatar_url") or ""
+        follower_count = int(c.get("follower_count") or 0)
+        niche = c.get("niche") or []
+        if isinstance(niche, str):
+            try: niche = json.loads(niche)
+            except Exception: niche = [niche]
+        location = c.get("location")
+        website = c.get("website")
+        email_public = c.get("email_public") or ""
+        status = c.get("status") or "discovered"
+        discovery_source = c.get("discovery_source") or "manual"
+        discovery_notes = c.get("discovery_notes") or ""
+        engagement_score = float(c.get("engagement_score") or 0.0)
+        created_at = c.get("created_at")
+        updated_at = c.get("updated_at")
+        content_samples = c.get("content_samples") or []
+    else:
+        c_id = getattr(c, "id", "")
+        handle = getattr(c, "handle", "")
+        platform = getattr(c, "platform", "youtube")
+        display_name = getattr(c, "display_name", handle)
+        bio = getattr(c, "bio", "")
+        profile_url = getattr(c, "profile_url", "")
+        avatar_url = getattr(c, "avatar_url", "")
+        follower_count = int(getattr(c, "follower_count", 0) or 0)
+        niche = getattr(c, "niche", []) or []
+        location = getattr(c, "location", None)
+        website = getattr(c, "website", None)
+        email_public = getattr(c, "email_public", "") or ""
+        status = getattr(c, "status", "discovered")
+        discovery_source = getattr(c, "discovery_source", "manual")
+        discovery_notes = getattr(c, "discovery_notes", "") or ""
+        engagement_score = float(getattr(c, "engagement_score", 0.0) or 0.0)
+        created_at = getattr(c, "created_at", None)
+        if created_at and hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+        updated_at = getattr(c, "updated_at", None)
+        if updated_at and hasattr(updated_at, "isoformat"):
+            updated_at = updated_at.isoformat()
+        content_samples = getattr(c, "content_samples", []) or []
+
     reply_classification = None
     reply_text = None
     product_concepts = []
     selected_concept_id = None
     selected_concept = None
     has_studio_replied = False
-    try:
-        if c.discovery_notes and c.discovery_notes.startswith("{"):
-            import json
-            parsed = json.loads(c.discovery_notes)
+
+    if discovery_notes and str(discovery_notes).startswith("{"):
+        try:
+            parsed = json.loads(discovery_notes)
             reply_classification = parsed.get("reply_classification")
             reply_text = parsed.get("reply_text")
             has_studio_replied = bool(parsed.get("has_studio_replied"))
             product_concepts = parsed.get("product_concepts") or []
             selected_concept_id = parsed.get("selected_concept_id") or parsed.get("selectedConceptId")
             selected_concept = parsed.get("selected_concept") or parsed.get("selectedConcept")
-    except Exception:
-        pass
+        except Exception:
+            pass
 
-    # Uncontacted Guard: Prevent phantom replies for newly discovered creators who have not been contacted
     is_contacted = (
-        c.status in ("contacted", "in_review", "qualified", "approved", "pitched", "ready_for_launch", "partnered", "launched", "active", "building")
+        status in ("contacted", "in_review", "qualified", "approved", "pitched", "ready_for_launch", "partnered", "launched", "active", "building")
         or bool(reply_classification)
-        or bool(getattr(c, "threads", None))
-        or bool(getattr(c, "outreach_messages", None))
     )
     if not is_contacted:
         reply_classification = None
         reply_text = None
 
-    clean_h = (c.handle or "").lstrip("@").strip().lower()
-    clean_email = (c.email_public or "").strip().lower()
+    clean_h = handle.lstrip("@").strip().lower()
+    clean_email = email_public.strip().lower()
 
     matched_proj = None
     if project_map:
         matched_proj = (
-            project_map.get("by_id", {}).get(c.id) or
+            project_map.get("by_id", {}).get(c_id) or
             project_map.get("by_handle", {}).get(clean_h) or
             (project_map.get("by_email", {}).get(clean_email) if clean_email else None)
         )
@@ -1600,45 +1375,63 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
     if matched_proj:
         project_id = matched_proj.get("id") if isinstance(matched_proj, dict) else getattr(matched_proj, "id", None)
 
-    effective_status = "launched" if matched_proj else c.status
+    effective_status = "launched" if matched_proj else status
     recent_posts = []
-    if getattr(c, "content_samples", None) and len(c.content_samples) > 0:
-        for s in c.content_samples[:6]:
-            vid_id = s.content_url.split("v=")[-1] if "v=" in (s.content_url or "") else s.id
-            recent_posts.append({
-                "id": s.id,
-                "videoId": vid_id,
-                "title": s.caption or "Channel Upload",
-                "caption": s.caption or "",
-                "url": s.content_url or f"https://www.youtube.com/watch?v={vid_id}",
-                "views": s.views or 0,
-                "likes": s.likes or 0,
-                "comments": s.comments or 0,
-            })
-    elif c.discovery_notes and c.discovery_notes.startswith("{"):
+    if content_samples:
+        for s in content_samples[:6]:
+            if isinstance(s, dict):
+                vid_id = (s.get("content_url") or "").split("v=")[-1]
+                recent_posts.append({
+                    "id": s.get("id", ""),
+                    "videoId": vid_id,
+                    "title": s.get("caption") or "Channel Upload",
+                    "caption": s.get("caption") or "",
+                    "url": s.get("content_url") or f"https://www.youtube.com/watch?v={vid_id}",
+                    "views": s.get("views") or 0,
+                    "likes": s.get("likes") or 0,
+                    "comments": s.get("comments") or 0,
+                })
+            else:
+                vid_id = s.content_url.split("v=")[-1] if "v=" in (s.content_url or "") else s.id
+                recent_posts.append({
+                    "id": s.id,
+                    "videoId": vid_id,
+                    "title": s.caption or "Channel Upload",
+                    "caption": s.caption or "",
+                    "url": s.content_url or f"https://www.youtube.com/watch?v={vid_id}",
+                    "views": s.views or 0,
+                    "likes": s.likes or 0,
+                    "comments": s.comments or 0,
+                })
+    elif discovery_notes and str(discovery_notes).startswith("{"):
         try:
-            import json
-            parsed = json.loads(c.discovery_notes)
+            parsed = json.loads(discovery_notes)
             recent_posts = parsed.get("recent_posts") or parsed.get("recentPosts") or parsed.get("videos") or []
         except Exception:
             pass
 
     comments = []
-    if c.discovery_notes and c.discovery_notes.startswith("{"):
+    if discovery_notes and str(discovery_notes).startswith("{"):
         try:
-            import json
-            parsed = json.loads(c.discovery_notes)
+            parsed = json.loads(discovery_notes)
             comments = parsed.get("comments") or parsed.get("audience_comments") or parsed.get("audienceComments") or []
         except Exception:
             pass
 
     return {
-        "id": c.id, "handle": c.handle, "platform": c.platform,
-        "display_name": c.display_name, "bio": c.bio,
-        "profile_url": c.profile_url, "avatar_url": c.avatar_url,
-        "follower_count": c.follower_count, "niche": c.niche or [],
-        "location": c.location, "website": c.website,
-        "email_public": c.email_public, "status": effective_status,
+        "id": c_id,
+        "handle": handle,
+        "platform": platform,
+        "display_name": display_name,
+        "bio": bio,
+        "profile_url": profile_url,
+        "avatar_url": avatar_url,
+        "follower_count": follower_count,
+        "niche": niche or [],
+        "location": location,
+        "website": website,
+        "email_public": email_public,
+        "status": effective_status,
         "project_id": project_id,
         "projectId": project_id,
         "has_project": bool(matched_proj),
@@ -1659,10 +1452,10 @@ def _creator_dict(c: Creator, project_map: dict = None) -> dict:
         "comments": comments,
         "audience_comments": comments,
         "audienceComments": comments,
-        "discovery_source": c.discovery_source,
-        "engagement_score": c.engagement_score,
-        "created_at": c.created_at.isoformat() if c.created_at else None,
-        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "discovery_source": discovery_source,
+        "engagement_score": engagement_score,
+        "created_at": created_at,
+        "updated_at": updated_at,
     }
 
 

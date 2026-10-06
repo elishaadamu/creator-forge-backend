@@ -1,3 +1,4 @@
+import app.ssl_patch  # Prevents macOS LibreSSL 2.8.3 TLS 1.3 session ticket double-free crash
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, Depends
 from fastapi.staticfiles import StaticFiles
@@ -50,6 +51,9 @@ from app.services.autonomous_outreach import (
     start_autonomous_scheduler_loop, stop_autonomous_scheduler_loop,
     start_followup_scheduler_loop, stop_followup_scheduler_loop,
 )
+from app.services.autonomous_campaign_dispatcher import (
+    start_campaign_schedule_loop, stop_campaign_schedule_loop,
+)
 
 # ── Database init ────────────────────────────────────────────────────────────
 @app.on_event("startup")
@@ -66,6 +70,9 @@ async def startup():
         asyncio.create_task(start_followup_scheduler_loop())
     else:
         logger.info("[Autonomous Scheduler] Background batch loops disabled (Human Mode active).")
+
+    # Start the autonomous 24-hour campaign post kit dispatcher loop
+    asyncio.create_task(start_campaign_schedule_loop(check_interval_seconds=60))
 
     # Initialize MongoDB connection and verify collections
     try:
@@ -84,6 +91,7 @@ def shutdown():
     stop_poller_loop()
     stop_autonomous_scheduler_loop()
     stop_followup_scheduler_loop()
+    stop_campaign_schedule_loop()
 
 
 # ── Static files + templates (only mount if the directory exists) ─────────────
@@ -129,34 +137,28 @@ def mongodb_status_endpoint():
 
 @app.post("/api/mongodb/sync")
 def mongodb_sync_endpoint():
-    """Syncs collections from backend/data_backup.json into MongoDB."""
-    from app.mongodb import check_mongo_connection, seed_from_backup_if_empty
+    """Reports MongoDB status (Atlas is single source of truth)."""
+    from app.mongodb import check_mongo_connection
     status = check_mongo_connection()
-    if status.get("status") != "connected":
-        return {
-            "status": "error",
-            "message": "MongoDB is not connected. Configure MONGODB_URI in backend/.env to sync.",
-            "details": status
-        }
-    seed_from_backup_if_empty()
-    return {"status": "success", "message": "MongoDB collections synchronized with data_backup.json"}
-
-
+    return {"status": "success", "message": "MongoDB Atlas is the single source of truth.", "details": status}
 # ── Analytics alias (/api/analytics/summary used by ops CampaignStats) ──────
 @app.get("/analytics/summary")
 @app.get("/api/analytics/summary")
 def analytics_summary_alias():
-    """Ops dashboard analytics — counts across all pipeline stages."""
-    from app.database import get_db
-    from app.models.outreach import OutreachMessage, Thread, Reply
-    from app.models.creator import Creator
-    db = next(get_db())
+    """Ops dashboard analytics — counts across all pipeline stages directly from MongoDB."""
+    from app.mongodb import get_collection
     try:
-        total_scraped   = db.query(Creator).count()
-        total_qualified = db.query(Creator).filter(Creator.status == "qualified").count()
-        total_sent      = db.query(OutreachMessage).filter(OutreachMessage.status == "sent").count()
-        total_replies   = db.query(Reply).count()
-        total_converted = db.query(Thread).filter(Thread.status == "converted").count()
+        c_coll = get_collection("creators")
+        o_coll = get_collection("outreach_messages")
+        r_coll = get_collection("replies")
+        t_coll = get_collection("threads")
+
+        total_scraped = c_coll.count_documents({}) if c_coll is not None else 0
+        total_qualified = c_coll.count_documents({"status": "qualified"}) if c_coll is not None else 0
+        total_sent = o_coll.count_documents({"status": "sent"}) if o_coll is not None else 0
+        total_replies = r_coll.count_documents({}) if r_coll is not None else 0
+        total_converted = t_coll.count_documents({"status": "converted"}) if t_coll is not None else 0
+
         return {
             "total_scraped":       total_scraped,
             "total_qualified":     total_qualified,
@@ -168,8 +170,19 @@ def analytics_summary_alias():
             "open_rate":           0,
             "campaigns":           [],
         }
-    finally:
-        db.close()
+    except Exception as e:
+        return {
+            "total_scraped": 0,
+            "total_qualified": 0,
+            "total_outreach_sent": 0,
+            "total_replies": 0,
+            "total_interested": 0,
+            "total_converted": 0,
+            "reply_rate": 0,
+            "open_rate": 0,
+            "campaigns": [],
+            "error": str(e),
+        }
 
 
 # ── UI Routes ────────────────────────────────────────────────────────────────
