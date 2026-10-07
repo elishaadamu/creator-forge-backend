@@ -665,6 +665,7 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         d["productName"] = p_name
         d["title"] = p_name
         d["product_name"] = p_name
+    d["slug"] = (d.get("slug") or p_name or "product").lower().replace(" ", "-").replace("'", "")
 
     # 4. Synchronize & format pricing string
     sel_c = d.get("selectedConcept") or d.get("selected_concept")
@@ -729,6 +730,22 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
                     "Direct private Slack & alpha advisory council access",
                     f"50% lifetime discount locked in forever (${founding_p}/yr)"
                 ]
+        for copy_key in ("announcementPost", "newsletterDraft", "videoScript", "directMessageScript"):
+            copy_val = kit.get(copy_key)
+            if isinstance(copy_val, str):
+                new_copy = copy_val
+                if "($89)" in new_copy:
+                    new_copy = new_copy.replace("($89)", f"(${founding_p})")
+                if "$89" in new_copy:
+                    new_copy = new_copy.replace("$89", f"${founding_p}")
+                if "($177)" in new_copy:
+                    new_copy = new_copy.replace("($177)", f"(${founding_p})")
+                if "$177" in new_copy:
+                    new_copy = new_copy.replace("$177", f"${founding_p}")
+                if "$18" in new_copy and deposit_p != 18:
+                    new_copy = new_copy.replace("$18", f"${deposit_p}")
+                kit[copy_key] = new_copy
+
         schedule = kit.get("postingSchedule")
         if isinstance(schedule, list):
             for t in schedule:
@@ -2648,16 +2665,19 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
         from app.mongodb import get_collection
         coll = get_collection("co_launch_projects")
         if coll is not None:
+            slug_regex = clean_slug.replace("-", "[- ]")
             doc = coll.find_one({"$or": [
                 {"id": slug},
+                {"slug": clean_slug},
                 {"creator_handle": clean_slug},
                 {"creator_handle": f"@{clean_slug}"},
                 {"creatorHandle": clean_slug},
                 {"creatorHandle": f"@{clean_slug}"},
                 {"creator_handle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
                 {"creatorHandle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
-                {"product_name": {"$regex": clean_slug, "$options": "i"}},
-                {"productName": {"$regex": clean_slug, "$options": "i"}}
+                {"product_name": {"$regex": slug_regex, "$options": "i"}},
+                {"productName": {"$regex": slug_regex, "$options": "i"}},
+                {"title": {"$regex": slug_regex, "$options": "i"}}
             ]})
             if not doc:
                 doc = coll.find_one()
