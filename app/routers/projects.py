@@ -651,6 +651,28 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
                 t["day_number"] = idx + 1
                 t["milestoneNumber"] = idx + 1
                 t["spacingNotice"] = f"Day {idx + 1} of {len(schedule)}"
+        
+        # Standardize autonomousEmailDelivery configuration
+        auto_del = kit.get("autonomousEmailDelivery")
+        if not auto_del or not isinstance(auto_del, dict):
+            auto_del = {}
+        target_recip = (
+            auto_del.get("recipientEmail")
+            or d.get("creatorEmail")
+            or d.get("creator_email")
+            or d.get("email")
+            or ""
+        )
+        if target_recip:
+            auto_del["recipientEmail"] = target_recip
+        if "enabled" not in auto_del:
+            auto_del["enabled"] = True
+            auto_del["intervalHours"] = 24
+            auto_del["intervalSeconds"] = 86400
+            auto_del["cadence"] = "24_hours"
+            auto_del["dispatchTime"] = "Every 24 Hours"
+        kit["autonomousEmailDelivery"] = auto_del
+
         d["campaignKit"] = kit
         d["campaign_kit"] = kit
         if "validationCampaign" in d and isinstance(d["validationCampaign"], dict):
@@ -2209,13 +2231,11 @@ def send_campaign_post_email_endpoint(
             recipient_email=req.recipientEmail,
             caller=req.caller or "admin"
         )
-        from app.mongodb import get_collection
-        coll = get_collection("co_launch_projects")
-        m_doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) if coll is not None else None
-        proj = db.get(CoLaunchProject, project_id)
+        m_doc = _find_mongo_project(project_id)
+        proj = db.get(CoLaunchProject, project_id) if db else None
         return {
             **result,
-            "project": _normalize_mongo_project_dict(m_doc) if m_doc else (_format_project_response(proj) if proj else None)
+            "project": _format_any_project(mongo_doc=m_doc, db_proj=proj)
         }
     except Exception as e:
         logger.error(f"Error dispatching campaign post email: {e}")
@@ -2231,15 +2251,8 @@ def toggle_autonomous_delivery_endpoint(
     """
     Configures autonomous 24-hour delivery of scheduled post kits directly to creator/founder inbox.
     """
-    proj = db.get(CoLaunchProject, project_id)
-    mongo_doc = None
-    try:
-        from app.mongodb import get_collection
-        coll = get_collection("co_launch_projects")
-        if coll is not None:
-            mongo_doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]})
-    except Exception:
-        pass
+    mongo_doc = _find_mongo_project(project_id)
+    proj = db.get(CoLaunchProject, project_id) if db else None
 
     if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -2276,32 +2289,36 @@ def toggle_autonomous_delivery_endpoint(
     kit["autonomousEmailDelivery"] = delivery_config
     kit["creatorTimezone"] = tz
     kit["creatorCountry"] = country
+    if target_email:
+        kit["creatorEmail"] = target_email
 
     # 1. Update MongoDB Atlas collections directly
-    p_coll = None
-    try:
-        from app.mongodb import get_collection
-        p_coll = get_collection("co_launch_projects")
-        if p_coll is not None:
-            p_doc = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) or mongo_doc or {"_id": project_id, "id": project_id}
-            meta_m = p_doc.get("metadataInfo") if isinstance(p_doc.get("metadataInfo"), dict) else {}
-            meta_m["campaign_kit"] = kit
-            p_doc["metadataInfo"] = meta_m
-            p_doc["campaign_kit"] = kit
-            p_doc["campaignKit"] = kit
-            p_coll.replace_one({"_id": p_doc.get("_id", project_id)}, p_doc, upsert=True)
+    if mongo_doc:
+        p_doc = mongo_doc
+        meta_m = p_doc.get("metadataInfo") if isinstance(p_doc.get("metadataInfo"), dict) else {}
+        meta_m["campaign_kit"] = kit
+        p_doc["metadataInfo"] = meta_m
+        p_doc["campaign_kit"] = kit
+        p_doc["campaignKit"] = kit
+        if target_email:
+            p_doc["creatorEmail"] = target_email
+            p_doc["creator_email"] = target_email
+        _save_mongo_project(p_doc)
 
-        vc_coll = get_collection("validation_campaigns")
-        if vc_coll is not None:
-            vc_doc = {
-                "_id": project_id,
-                "project_id": project_id,
-                "campaign_kit": kit,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-            vc_coll.replace_one({"_id": project_id}, vc_doc, upsert=True)
-    except Exception as m_err:
-        logger.debug(f"[MongoDB] Toggle autonomous delivery MongoDB sync note: {m_err}")
+        try:
+            from app.mongodb import get_collection
+            vc_coll = get_collection("validation_campaigns")
+            if vc_coll is not None:
+                doc_id = str(p_doc.get("_id") or p_doc.get("id") or project_id)
+                vc_doc = {
+                    "_id": doc_id,
+                    "project_id": doc_id,
+                    "campaign_kit": _sanitize_heavy_media(kit),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+                vc_coll.replace_one({"_id": doc_id}, vc_doc, upsert=True)
+        except Exception as m_err:
+            logger.debug(f"[MongoDB] Toggle autonomous delivery validation_campaigns note: {m_err}")
 
     # 2. Update SQLite in-memory models if present
     if proj:
@@ -2321,11 +2338,11 @@ def toggle_autonomous_delivery_endpoint(
         db.refresh(proj)
 
     # 3. Return updated response prioritizing Mongo
-    updated_m = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) if p_coll is not None else None
+    updated_m = _find_mongo_project(project_id)
     return {
         "success": True,
         "config": delivery_config,
-        "project": _normalize_mongo_project_dict(updated_m) if updated_m else (_format_project_response(proj) if proj else None)
+        "project": _format_any_project(mongo_doc=updated_m, db_proj=proj)
     }
 
 

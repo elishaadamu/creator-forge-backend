@@ -128,8 +128,44 @@ class EmailProvider:
 
         errors = []
 
-        # ── 0. Brevo HTTPS API Direct (Port 443 — Verified sending domain) ─────
-        # If BREVO_API_KEY is configured, prioritize Brevo HTTPS API with matching replyTo.
+        # ── 1. Google SMTP Direct (Port 465 SSL & Port 587 STARTTLS — Direct verified SPF/DKIM delivery) ──
+        if settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD:
+            smtp_user = settings.GOOGLE_EMAIL.strip()
+            smtp_password = settings.GOOGLE_APP_PASSWORD.replace(" ", "").strip()
+
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = f"{display_name} <{smtp_user}>"
+            msg["Reply-To"] = reply_email
+            msg["To"] = to_email
+            msg.attach(MIMEText(body_text, "plain"))
+            msg.attach(MIMEText(body_html, "html"))
+
+            # Port 465 SSL via IPv4
+            try:
+                server = _connect_smtp_multi_ipv4("smtp.gmail.com", 465, timeout=5, use_ssl=True)
+                server.login(smtp_user, smtp_password)
+                server.sendmail(smtp_user, to_email, msg.as_string())
+                server.quit()
+                logger.info(f"[EmailProvider] Sent email to {to_email} via Google SMTP (Port 465 SSL)")
+                return {"message_id": str(uuid.uuid4()), "status": "sent", "provider": "google_smtp_465"}
+            except Exception as e465:
+                errors.append(f"Google SMTP 465: {e465}")
+                logger.warning(f"[EmailProvider] Google SMTP 465 failed: {e465}, trying Port 587 STARTTLS...")
+
+            # Port 587 STARTTLS via IPv4
+            try:
+                server = _connect_smtp_multi_ipv4("smtp.gmail.com", 587, timeout=5, use_ssl=False)
+                server.login(smtp_user, smtp_password)
+                server.sendmail(smtp_user, to_email, msg.as_string())
+                server.quit()
+                logger.info(f"[EmailProvider] Sent email to {to_email} via Google SMTP (Port 587 STARTTLS)")
+                return {"message_id": str(uuid.uuid4()), "status": "sent", "provider": "google_smtp_587"}
+            except Exception as e587:
+                errors.append(f"Google SMTP 587: {e587}")
+                logger.warning(f"[EmailProvider] Google SMTP 587 failed: {e587}, falling back to HTTPS relays...")
+
+        # ── 2. Brevo HTTPS API Direct (Port 443) ──────────────────────────────
         if settings.BREVO_API_KEY:
             try:
                 brevo_payload = {
@@ -157,44 +193,7 @@ class EmailProvider:
                 errors.append(f"Brevo HTTPS (443): {e_brevo}")
                 logger.warning(f"[EmailProvider] Brevo API error: {e_brevo}, trying fallback providers...")
 
-        # ── 1. Google SMTP Direct (Port 465 SSL & Port 587 STARTTLS) ──────────
-        if settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD:
-            smtp_user = settings.GOOGLE_EMAIL.strip()
-            smtp_password = settings.GOOGLE_APP_PASSWORD.replace(" ", "").strip()
-
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = f"{display_name} <{smtp_user}>"
-            msg["Reply-To"] = reply_email
-            msg["To"] = to_email
-            msg.attach(MIMEText(body_text, "plain"))
-            msg.attach(MIMEText(body_html, "html"))
-
-            # Port 465 SSL
-            try:
-                server = _connect_smtp_multi_ipv4("smtp.gmail.com", port=465, timeout=8, use_ssl=True)
-                server.login(smtp_user, smtp_password)
-                server.sendmail(smtp_user, to_email, msg.as_string())
-                server.quit()
-                logger.info(f"[EmailProvider] Sent email to {to_email} via Google SMTP (Port 465 SSL)")
-                return {"message_id": str(uuid.uuid4()), "status": "sent", "provider": "google_smtp_465"}
-            except Exception as e465:
-                errors.append(f"Google SMTP 465: {e465}")
-                logger.warning(f"[EmailProvider] Google SMTP 465 failed: {e465}, trying Port 587 STARTTLS...")
-
-            # Port 587 STARTTLS
-            try:
-                server = _connect_smtp_multi_ipv4("smtp.gmail.com", port=587, timeout=8, use_ssl=False)
-                server.login(smtp_user, smtp_password)
-                server.sendmail(smtp_user, to_email, msg.as_string())
-                server.quit()
-                logger.info(f"[EmailProvider] Sent email to {to_email} via Google SMTP (Port 587 STARTTLS)")
-                return {"message_id": str(uuid.uuid4()), "status": "sent", "provider": "google_smtp_587"}
-            except Exception as e587:
-                errors.append(f"Google SMTP 587: {e587}")
-                logger.warning(f"[EmailProvider] Google SMTP 587 failed: {e587}, falling back to HTTPS relays...")
-
-        # ── 2. Resend HTTPS API (Port 443 — Instant, free tier, 100% immune to Render firewall) ──
+        # ── 3. Resend HTTPS API (Port 443) ────────────────────────────────────
         if settings.RESEND_API_KEY:
             try:
                 resend_from = (
@@ -231,7 +230,7 @@ class EmailProvider:
                 errors.append(f"Resend HTTPS (443): {e_resend}")
                 logger.warning(f"[EmailProvider] Resend API error: {e_resend}")
 
-        # ── 3. SendGrid HTTPS API (Port 443) ──────────────────────────────────
+        # ── 4. SendGrid HTTPS API (Port 443) ──────────────────────────────────
         if settings.SENDGRID_API_KEY:
             try:
                 sg_payload = {
@@ -258,34 +257,6 @@ class EmailProvider:
             except Exception as e_sg:
                 errors.append(f"SendGrid HTTPS (443): {e_sg}")
                 logger.warning(f"[EmailProvider] SendGrid API error: {e_sg}")
-
-        # ── 4. Brevo HTTPS API (Port 443 — Free 300 emails/day) ───────────────
-        if settings.BREVO_API_KEY:
-            try:
-                brevo_payload = {
-                    "sender": {"name": display_name, "email": sender_email},
-                    "to": [{"email": to_email}],
-                    "replyTo": {"email": reply_email, "name": display_name},
-                    "subject": subject,
-                    "htmlContent": body_html,
-                    "textContent": body_text,
-                }
-                req = urllib.request.Request(
-                    "https://api.brevo.com/v3/smtp/email",
-                    data=json.dumps(brevo_payload).encode("utf-8"),
-                    headers={
-                        "api-key": settings.BREVO_API_KEY.strip(),
-                        "Content-Type": "application/json",
-                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    if resp.status in (200, 201):
-                        logger.info(f"[EmailProvider] Sent email to {to_email} via Brevo HTTPS API")
-                        return {"message_id": str(uuid.uuid4()), "status": "sent", "provider": "brevo"}
-            except Exception as e_brevo:
-                errors.append(f"Brevo HTTPS (443): {e_brevo}")
-                logger.warning(f"[EmailProvider] Brevo API error: {e_brevo}")
 
         raise IntegrationError(
             f"Email delivery failed across all available methods: {' | '.join(errors)}. "

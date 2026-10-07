@@ -208,17 +208,39 @@ def dispatch_campaign_post_email(
     Locates the scheduled post for the given project, constructs the daily post kit email,
     and dispatches it to the creator/founder's inbox.
     """
-    # 1. Fetch project from MongoDB first
+    # 1. Fetch project from MongoDB first with flexible ID / handle resolution
     mongo_proj = None
     try:
-        from app.mongodb import get_collection
-        p_coll = get_collection("co_launch_projects")
-        if p_coll is not None:
-            mongo_proj = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]})
+        from app.routers.projects import _find_mongo_project
+        mongo_proj = _find_mongo_project(project_id)
     except Exception:
         pass
 
-    proj = db.get(CoLaunchProject, project_id) if db else None
+    if not mongo_proj:
+        try:
+            from app.mongodb import get_collection
+            p_coll = get_collection("co_launch_projects")
+            if p_coll is not None:
+                clean_target = str(project_id).replace("@", "").lower().strip()
+                mongo_proj = p_coll.find_one({"$or": [
+                    {"_id": project_id},
+                    {"id": project_id},
+                    {"creator_id": project_id},
+                    {"creatorId": project_id},
+                    {"creator_handle": clean_target},
+                    {"creatorHandle": clean_target},
+                    {"creator_handle": f"@{clean_target}"},
+                    {"creatorHandle": f"@{clean_target}"},
+                ]})
+        except Exception:
+            pass
+
+    proj = None
+    if db:
+        try:
+            proj = db.get(CoLaunchProject, project_id)
+        except Exception:
+            proj = None
     if not proj and not mongo_proj:
         raise ValueError(f"Project '{project_id}' not found")
 
@@ -289,11 +311,12 @@ def dispatch_campaign_post_email(
 
     # Resolve recipient email address
     auto_config = kit.get("autonomousEmailDelivery") or {}
+    proj_email = getattr(proj, "email", None) if proj else None
     target_email = (
         recipient_email
         or auto_config.get("recipientEmail")
         or c_email
-        or getattr(proj, "email", None) if proj else None
+        or proj_email
         or getattr(settings, "ADMIN_EMAIL", None)
         or getattr(settings, "GOOGLE_EMAIL", None)
     )
@@ -411,30 +434,47 @@ Pre-Order URL: {preorder_link}
 
     # 1. Update MongoDB Atlas collections directly
     kit["postingSchedule"] = schedule
+    if target_email:
+        kit["creatorEmail"] = target_email
+        auto_del = kit.get("autonomousEmailDelivery")
+        if not auto_del or not isinstance(auto_del, dict):
+            auto_del = {}
+        auto_del["recipientEmail"] = target_email
+        if "enabled" not in auto_del:
+            auto_del["enabled"] = True
+            auto_del["intervalHours"] = 24
+            auto_del["intervalSeconds"] = 86400
+            auto_del["cadence"] = "24_hours"
+            auto_del["dispatchTime"] = "Every 24 Hours"
+        auto_del["updatedAt"] = datetime.utcnow().isoformat()
+        kit["autonomousEmailDelivery"] = auto_del
+
     try:
         from app.mongodb import get_collection
-        from app.routers.projects import _save_mongo_project, _sanitize_heavy_media
-        p_coll = get_collection("co_launch_projects")
-        if p_coll is not None:
-            p_doc = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) or {"_id": project_id, "id": project_id}
-            meta_m = p_doc.get("metadataInfo") if isinstance(p_doc.get("metadataInfo"), dict) else {}
-            meta_m["campaign_kit"] = kit
-            meta_m["campaign_launched"] = True
-            p_doc["metadataInfo"] = meta_m
-            p_doc["campaign_kit"] = kit
-            p_doc["campaignKit"] = kit
-            _save_mongo_project(p_doc)
+        from app.routers.projects import _find_mongo_project, _save_mongo_project, _sanitize_heavy_media
+        p_doc = _find_mongo_project(project_id) or mongo_proj or {"_id": project_id, "id": project_id}
+        meta_m = p_doc.get("metadataInfo") if isinstance(p_doc.get("metadataInfo"), dict) else {}
+        meta_m["campaign_kit"] = kit
+        meta_m["campaign_launched"] = True
+        p_doc["metadataInfo"] = meta_m
+        p_doc["campaign_kit"] = kit
+        p_doc["campaignKit"] = kit
+        if target_email:
+            p_doc["creatorEmail"] = target_email
+            p_doc["creator_email"] = target_email
+        _save_mongo_project(p_doc)
 
         vc_coll = get_collection("validation_campaigns")
         if vc_coll is not None:
+            doc_id = str(p_doc.get("_id") or p_doc.get("id") or project_id)
             vc_doc = {
-                "_id": project_id,
-                "project_id": project_id,
+                "_id": doc_id,
+                "project_id": doc_id,
                 "campaign_kit": _sanitize_heavy_media(kit),
                 "campaign_launched": True,
                 "updated_at": datetime.utcnow().isoformat(),
             }
-            vc_coll.replace_one({"_id": project_id}, vc_doc, upsert=True)
+            vc_coll.replace_one({"_id": doc_id}, vc_doc, upsert=True)
     except Exception as m_err:
         logger.debug(f"[MongoDB] Autonomous dispatch MongoDB update note: {m_err}")
 
@@ -532,28 +572,48 @@ async def run_autonomous_campaign_simulation(
         try:
             mongo_proj = None
             try:
-                from app.mongodb import get_collection
-                p_coll = get_collection("co_launch_projects")
-                if p_coll is not None:
-                    mongo_proj = p_coll.find_one({"$or": [
-                        {"_id": project_id},
-                        {"id": project_id},
-                        {"creator_id": project_id},
-                        {"creatorId": project_id},
-                        {"creator_handle": project_id.replace("@", "").lower().strip()},
-                        {"creatorHandle": project_id.replace("@", "").lower().strip()}
-                    ]})
+                from app.routers.projects import _find_mongo_project
+                mongo_proj = _find_mongo_project(project_id)
             except Exception:
                 pass
 
-            proj = db.get(CoLaunchProject, project_id)
+            if not mongo_proj:
+                try:
+                    from app.mongodb import get_collection
+                    p_coll = get_collection("co_launch_projects")
+                    if p_coll is not None:
+                        clean_target = str(project_id).replace("@", "").lower().strip()
+                        mongo_proj = p_coll.find_one({"$or": [
+                            {"_id": project_id},
+                            {"id": project_id},
+                            {"creator_id": project_id},
+                            {"creatorId": project_id},
+                            {"creator_handle": clean_target},
+                            {"creatorHandle": clean_target},
+                            {"creator_handle": f"@{clean_target}"},
+                            {"creatorHandle": f"@{clean_target}"}
+                        ]})
+                except Exception:
+                    pass
+
+            proj = None
+            if db:
+                try:
+                    proj = db.get(CoLaunchProject, project_id)
+                except Exception:
+                    proj = None
             if not proj and not mongo_proj:
                 raise ValueError(f"Project '{project_id}' not found in database")
 
+            sql_kit = None
+            if proj:
+                if proj.validation_campaign and getattr(proj.validation_campaign, "campaign_kit", None):
+                    sql_kit = proj.validation_campaign.campaign_kit
+                elif proj.metadata_info:
+                    sql_kit = (proj.metadata_info or {}).get("campaign_kit")
             raw_kit = (
                 (mongo_proj.get("campaign_kit") or mongo_proj.get("campaignKit") or (mongo_proj.get("metadataInfo") or {}).get("campaign_kit") if mongo_proj else None)
-                or (proj.validation_campaign.campaign_kit if proj and proj.validation_campaign else None)
-                or (proj.metadata_info or {}).get("campaign_kit") if proj else {}
+                or sql_kit
                 or {}
             )
             schedule = list(raw_kit.get("postingSchedule") or [])
@@ -656,10 +716,15 @@ def _evaluate_autonomous_delivery_for_project_data(
     Enforces a strict 24-hour (86,400 seconds) interval from the last emailed post.
     """
     auto_config = raw_kit.get("autonomousEmailDelivery") or {}
-    if not auto_config.get("enabled"):
+    if auto_config.get("enabled") is False:
         return None
 
-    recipient = auto_config.get("recipientEmail") or creator_email
+    recipient = (
+        auto_config.get("recipientEmail")
+        or creator_email
+        or raw_kit.get("creatorEmail")
+        or raw_kit.get("creator_email")
+    )
     if not recipient or "@" not in recipient:
         return None
 
