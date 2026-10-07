@@ -849,7 +849,7 @@ def suppress_creator(
 @router.delete("/all")
 @router.delete("")
 def delete_all_creators(db: Session = Depends(get_db)):
-    """Delete all creators and reset pipeline directly in MongoDB Atlas."""
+    """Delete all creators and reset pipeline directly in MongoDB Atlas and SQL."""
     from app.mongodb import get_collection
     total_deleted = 0
     try:
@@ -860,7 +860,7 @@ def delete_all_creators(db: Session = Depends(get_db)):
 
         for col_name in [
             "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks",
-            "validation_campaigns", "validation_plans", "co_launch_projects",
+            "validation_campaigns", "validation_plans", "co_launch_projects", "autonomous_campaigns", "campaigns",
             "replies", "follow_ups", "threads", "outreach_messages", "suppression_list",
             "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
             "partnerships", "post_suggestions", "product_recommendations"
@@ -882,11 +882,27 @@ def delete_all_creators(db: Session = Depends(get_db)):
                 },
                 upsert=True
             )
+
+        # Thorough cascade deletion across all SQL tables
         try:
+            from app.models.outreach import Reply, FollowUp, Thread, OutreachMessage
+            from app.models.creator import Contact
+            from app.models.project import CoLaunchProject, ValidationCampaign
+            db.query(Reply).delete(synchronize_session=False)
+            db.query(FollowUp).delete(synchronize_session=False)
+            db.query(Thread).delete(synchronize_session=False)
+            db.query(OutreachMessage).delete(synchronize_session=False)
+            db.query(Contact).delete(synchronize_session=False)
+            try:
+                db.query(ValidationCampaign).delete(synchronize_session=False)
+                db.query(CoLaunchProject).delete(synchronize_session=False)
+            except Exception:
+                pass
             db.query(Creator).delete(synchronize_session=False)
             db.commit()
-        except Exception:
-            pass
+        except Exception as sql_err:
+            logger.warning(f"[DeleteAllCreators] SQL purge note: {sql_err}")
+
         return {"success": True, "deleted_count": total_deleted, "message": f"Successfully deleted {total_deleted} creators and wiped all related pipeline data from MongoDB Atlas"}
     except Exception as e:
         logger.error(f"[DeleteAllCreators] MongoDB purge error: {e}")
@@ -897,7 +913,7 @@ def delete_all_creators(db: Session = Depends(get_db)):
 def delete_creator(
     creator_id: str, actor: str = "ops_dashboard", db: Session = Depends(get_db)
 ):
-    """Ops dashboard — delete a creator entirely with all dependencies cascaded from MongoDB Atlas."""
+    """Ops dashboard — delete a creator entirely with all dependencies cascaded from MongoDB Atlas and SQL."""
     if creator_id == "all":
         return delete_all_creators(db=db)
 
@@ -919,23 +935,57 @@ def delete_creator(
     })
     
     del_count = 0
+    target_ids = {creator_id}
     if doc:
         doc_id = doc.get("id") or str(doc.get("_id", ""))
+        if doc_id:
+            target_ids.add(doc_id)
         del_res = coll.delete_one({"_id": doc["_id"]})
         del_count = del_res.deleted_count
 
-        for col_name in ["contacts", "analyses", "content_samples", "decks", "metrics_snapshots", "partnerships", "post_suggestions", "product_recommendations", "outreach_messages", "threads", "replies", "follow_ups", "suppression_list", "co_launch_projects"]:
-            c = get_collection(col_name)
-            if c is not None:
-                c.delete_many({"$or": [{"creator_id": doc_id}, {"creatorId": doc_id}, {"creator_handle": clean_handle}]})
+    # Cascade delete in MongoDB collections
+    query_filters = []
+    for tid in target_ids:
+        query_filters.extend([{"creator_id": tid}, {"creatorId": tid}])
+    if clean_handle:
+        query_filters.extend([
+            {"creator_handle": clean_handle}, {"creatorHandle": clean_handle},
+            {"creator_handle": f"@{clean_handle}"}, {"creatorHandle": f"@{clean_handle}"}
+        ])
 
+    for col_name in [
+        "contacts", "analyses", "content_samples", "decks", "metrics_snapshots",
+        "partnerships", "post_suggestions", "product_recommendations",
+        "outreach_messages", "threads", "replies", "follow_ups", "suppression_list",
+        "co_launch_projects", "validation_campaigns", "validation_plans",
+        "validation_gate_decisions", "validation_telemetry", "creator_campaign_tasks", "autonomous_campaigns"
+    ]:
+        c = get_collection(col_name)
+        if c is not None and query_filters:
+            c.delete_many({"$or": query_filters})
+
+    # Cascade delete in SQL tables
     try:
-        c_obj = db.get(Creator, creator_id)
-        if c_obj:
+        from app.models.outreach import Reply, FollowUp, Thread, OutreachMessage
+        from app.models.creator import Contact
+        c_objs = db.query(Creator).filter(
+            (Creator.id.in_(list(target_ids))) |
+            (Creator.handle == clean_handle) |
+            (Creator.handle == f"@{clean_handle}")
+        ).all()
+        for c_obj in c_objs:
+            c_id = c_obj.id
+            threads = db.query(Thread).filter(Thread.creator_id == c_id).all()
+            for t in threads:
+                db.query(Reply).filter(Reply.thread_id == t.id).delete(synchronize_session=False)
+                db.query(FollowUp).filter(FollowUp.thread_id == t.id).delete(synchronize_session=False)
+                db.delete(t)
+            db.query(OutreachMessage).filter(OutreachMessage.creator_id == c_id).delete(synchronize_session=False)
+            db.query(Contact).filter(Contact.creator_id == c_id).delete(synchronize_session=False)
             db.delete(c_obj)
-            db.commit()
-    except Exception:
-        pass
+        db.commit()
+    except Exception as sql_err:
+        logger.warning(f"[DeleteCreator] SQL cascade delete note: {sql_err}")
 
     return {"deleted": True, "creator_id": creator_id, "deleted_count": del_count}
 

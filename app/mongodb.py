@@ -70,9 +70,9 @@ def get_mongo_client() -> MongoClient:
             return _client
         uri = get_mongo_uri()
         kwargs: Dict[str, Any] = {
-            "serverSelectionTimeoutMS": 15000,
-            "connectTimeoutMS": 15000,
-            "socketTimeoutMS": 20000,
+            "serverSelectionTimeoutMS": 30000,
+            "connectTimeoutMS": 30000,
+            "socketTimeoutMS": 45000,
             "maxPoolSize": 50,
             "minPoolSize": 1,
             "retryWrites": True,

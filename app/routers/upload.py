@@ -50,6 +50,7 @@ async def upload_file_direct(body: JsonUploadRequest, db: Session = Depends(get_
             }
             try:
                 from app.mongodb import get_collection
+                from app.routers.projects import _save_mongo_project
                 coll = get_collection("co_launch_projects")
                 if coll is not None:
                     p_doc = coll.find_one({"$or": [{"_id": body.projectId}, {"id": body.projectId}]})
@@ -60,7 +61,7 @@ async def upload_file_direct(body: JsonUploadRequest, db: Session = Depends(get_
                         cur_meta["project_files"] = cur_files
                         p_doc["metadataInfo"] = cur_meta
                         p_doc["metadata_info"] = cur_meta
-                        coll.replace_one({"_id": p_doc.get("_id", body.projectId)}, p_doc, upsert=True)
+                        _save_mongo_project(p_doc)
             except Exception as m_err:
                 logger.warning(f"Failed to sync upload file to MongoDB project: {m_err}")
 
@@ -125,6 +126,7 @@ async def upload_form_file(
             }
             try:
                 from app.mongodb import get_collection
+                from app.routers.projects import _save_mongo_project
                 coll = get_collection("co_launch_projects")
                 if coll is not None:
                     p_doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]})
@@ -136,7 +138,7 @@ async def upload_form_file(
                         cur_meta["project_files"] = cur_files
                         p_doc["metadataInfo"] = cur_meta
                         p_doc["metadata_info"] = cur_meta
-                        coll.replace_one({"_id": p_doc.get("_id", project_id)}, p_doc, upsert=True)
+                        _save_mongo_project(p_doc)
             except Exception as m_err:
                 logger.warning(f"Failed to sync form upload to MongoDB project: {m_err}")
 
@@ -175,6 +177,7 @@ def delete_file_from_cloud(payload: DeleteMediaRequest, db: Session = Depends(ge
         if payload.projectId and payload.fileId:
             try:
                 from app.mongodb import get_collection
+                from app.routers.projects import _save_mongo_project
                 coll = get_collection("co_launch_projects")
                 if coll is not None:
                     p_doc = coll.find_one({"$or": [{"_id": payload.projectId}, {"id": payload.projectId}]})
@@ -185,7 +188,7 @@ def delete_file_from_cloud(payload: DeleteMediaRequest, db: Session = Depends(ge
                         cur_meta["project_files"] = cur_files
                         p_doc["metadataInfo"] = cur_meta
                         p_doc["metadata_info"] = cur_meta
-                        coll.replace_one({"_id": p_doc.get("_id", payload.projectId)}, p_doc, upsert=True)
+                        _save_mongo_project(p_doc)
             except Exception as m_err:
                 logger.warning(f"Failed to delete file from MongoDB project: {m_err}")
 

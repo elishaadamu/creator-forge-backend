@@ -842,10 +842,29 @@ def _find_mongo_project(project_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _sanitize_heavy_media(obj: Any) -> Any:
+    """Recursively strip huge base64 data strings (e.g. postImageDataUrl) when URLs are present or when length > 50KB."""
+    if isinstance(obj, dict):
+        cleaned = {}
+        for k, v in obj.items():
+            if k == "postImageDataUrl" and isinstance(v, str):
+                if obj.get("postImageUrl") or obj.get("cloudinaryUrl") or obj.get("cloudinary_url") or len(v) > 50000:
+                    continue
+            elif isinstance(v, str) and v.startswith("data:image/") and len(v) > 50000:
+                continue
+            else:
+                cleaned[k] = _sanitize_heavy_media(v)
+        return cleaned
+    elif isinstance(obj, list):
+        return [_sanitize_heavy_media(item) for item in obj]
+    return obj
+
+
 def _save_mongo_project(doc: Dict[str, Any]) -> Dict[str, Any]:
     """Helper to upsert project into MongoDB Atlas co_launch_projects."""
     if not doc:
         return doc
+    doc = _sanitize_heavy_media(doc)
     p_id = doc.get("id") or doc.get("_id")
     if not p_id:
         p_id = f"proj_{int(datetime.utcnow().timestamp()*1000)}"
@@ -900,10 +919,25 @@ def list_projects(db: Session = Depends(get_db)):
         from app.mongodb import get_collection
         coll = get_collection("co_launch_projects")
         if coll is None:
+            if _project_cache:
+                unique_cached = {p.get("id") or p.get("_id"): p for p in _project_cache.values() if isinstance(p, dict) and (p.get("id") or p.get("_id"))}
+                return [_normalize_mongo_project_dict(d, 50.0) for d in unique_cached.values()]
             return []
         docs = list(coll.find({}))
+        for d in docs:
+            pid = str(d.get("id") or d.get("_id") or "")
+            if pid:
+                _project_cache[pid] = d
+            handle = (d.get("creatorHandle") or d.get("creator_handle") or "").replace("@", "").lower().strip()
+            if handle:
+                _project_cache[handle] = d
+
         ws_coll = get_collection("workflow_states")
-        ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+        ws_doc = None
+        try:
+            ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+        except Exception:
+            pass
         def_fee = None
         if ws_doc:
             def_fee = ws_doc.get("default_pass_price")
@@ -914,6 +948,9 @@ def list_projects(db: Session = Depends(get_db)):
         return [_normalize_mongo_project_dict(d, float(def_fee)) for d in docs]
     except Exception as e:
         logger.error(f"[MongoDB] list_projects error: {e}")
+        if _project_cache:
+            unique_cached = {p.get("id") or p.get("_id"): p for p in _project_cache.values() if isinstance(p, dict) and (p.get("id") or p.get("_id"))}
+            return [_normalize_mongo_project_dict(d, 50.0) for d in unique_cached.values()]
         return []
 
 
@@ -1908,9 +1945,10 @@ def generate_project_campaign_image(
             from app.mongodb import get_collection
             vc_coll = get_collection("validation_campaigns")
             if vc_coll is not None:
+                clean_kit = _sanitize_heavy_media(kit)
                 vc_coll.update_one(
                     {"$or": [{"project_id": effective_proj_id}, {"id": f"vc_{effective_proj_id}"}, {"id": effective_proj_id}, {"_id": effective_proj_id}]},
-                    {"$set": {"campaign_kit": kit, "campaignKit": kit, "updated_at": datetime.utcnow().isoformat()}},
+                    {"$set": {"campaign_kit": clean_kit, "campaignKit": clean_kit, "updated_at": datetime.utcnow().isoformat()}},
                     upsert=True
                 )
         except Exception as err:
@@ -2116,9 +2154,10 @@ def generate_project_campaign_video(
             from app.mongodb import get_collection
             vc_coll = get_collection("validation_campaigns")
             if vc_coll is not None:
+                clean_kit = _sanitize_heavy_media(kit)
                 vc_coll.update_one(
                     {"$or": [{"project_id": effective_proj_id}, {"id": f"vc_{effective_proj_id}"}, {"id": effective_proj_id}, {"_id": effective_proj_id}]},
-                    {"$set": {"campaign_kit": kit, "campaignKit": kit, "updated_at": datetime.utcnow().isoformat()}},
+                    {"$set": {"campaign_kit": clean_kit, "campaignKit": clean_kit, "updated_at": datetime.utcnow().isoformat()}},
                     upsert=True
                 )
         except Exception as err:

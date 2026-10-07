@@ -150,13 +150,12 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         c = db.get(Creator, cand_id)
         if c:
             creator_id = c.id
-        elif cand_handle:
-            c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
-            if c:
-                creator_id = c.id
-
-    # 2. Handle token match: Handle:@<handle> or [#<handle>]
-    if not creator_id and cand_handle:
+        else:
+            # If the email explicitly contained a CF-CID that belongs to a deleted creator,
+            # NEVER fall back to handle matching — that email was for a previous/deleted creator run!
+            logger.info(f"[Inbox Poller] Explicit CF-CID token '{cand_id}' belongs to a deleted/inactive creator. Ignoring stale email.")
+            return None
+    elif cand_handle:
         c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
         if c:
             creator_id = c.id
@@ -229,11 +228,15 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
     if not creator_id:
         return None
 
-    # STRICT UNCONTACTED & TIMING GUARD:
-    # A creator who was NEVER contacted (no sent OutreachMessage) cannot have an outreach reply!
+    # STRICT UNCONTACTED & LIFECYCLE GUARD:
+    # A creator who is merely "discovered" or was NEVER sent an OutreachMessage in this run CANNOT have a reply!
     from app.models.outreach import OutreachMessage
     matched_creator = db.get(Creator, creator_id)
     if not matched_creator:
+        return None
+
+    if matched_creator.status == "discovered":
+        logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) is in 'discovered' status (uncontacted). Ignoring stale email.")
         return None
 
     sent_outreach = db.query(OutreachMessage).filter(
@@ -241,18 +244,17 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         OutreachMessage.status == "sent"
     ).order_by(OutreachMessage.sent_at.desc()).first()
 
-    # If matching purely by sender email (without an explicit tracking token in the email):
-    if not (cid_match or handle_match):
-        if not sent_outreach:
-            logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has no sent outreach message. Ignoring unaddressed email from {from_email_clean}.")
+    if not sent_outreach:
+        logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has no sent outreach message in this run. Ignoring unaddressed email from {from_email_clean}.")
+        return None
+
+    # Timing guard: The email received in Gmail MUST be sent after or around the time outreach was sent
+    if msg_datetime and sent_outreach.sent_at:
+        msg_dt_naive = msg_datetime.replace(tzinfo=None) if msg_datetime.tzinfo else msg_datetime
+        sent_at_naive = sent_outreach.sent_at.replace(tzinfo=None) if sent_outreach.sent_at.tzinfo else sent_outreach.sent_at
+        if msg_dt_naive < (sent_at_naive - timedelta(seconds=60)):
+            logger.info(f"[Inbox Poller] Email from {from_email_clean} dated {msg_dt_naive} was sent before outreach was sent ({sent_at_naive}). Ignoring stale email.")
             return None
-        # Timing guard: The email received in Gmail MUST be sent after or around the time outreach was sent
-        if msg_datetime and sent_outreach.sent_at:
-            msg_dt_naive = msg_datetime.replace(tzinfo=None) if msg_datetime.tzinfo else msg_datetime
-            sent_at_naive = sent_outreach.sent_at.replace(tzinfo=None) if sent_outreach.sent_at.tzinfo else sent_outreach.sent_at
-            if msg_dt_naive < (sent_at_naive - timedelta(seconds=60)):
-                logger.info(f"[Inbox Poller] Email from {from_email_clean} dated {msg_dt_naive} was sent before outreach was sent ({sent_at_naive}). Ignoring stale email.")
-                return None
 
     # Find or create latest thread for this specific creator
     thread = db.query(Thread).filter(Thread.creator_id == creator_id).order_by(Thread.created_at.desc()).first()

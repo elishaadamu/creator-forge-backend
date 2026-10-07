@@ -413,6 +413,7 @@ Pre-Order URL: {preorder_link}
     kit["postingSchedule"] = schedule
     try:
         from app.mongodb import get_collection
+        from app.routers.projects import _save_mongo_project, _sanitize_heavy_media
         p_coll = get_collection("co_launch_projects")
         if p_coll is not None:
             p_doc = p_coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]}) or {"_id": project_id, "id": project_id}
@@ -422,14 +423,14 @@ Pre-Order URL: {preorder_link}
             p_doc["metadataInfo"] = meta_m
             p_doc["campaign_kit"] = kit
             p_doc["campaignKit"] = kit
-            p_coll.replace_one({"_id": project_id}, p_doc, upsert=True)
+            _save_mongo_project(p_doc)
 
         vc_coll = get_collection("validation_campaigns")
         if vc_coll is not None:
             vc_doc = {
                 "_id": project_id,
                 "project_id": project_id,
-                "campaign_kit": kit,
+                "campaign_kit": _sanitize_heavy_media(kit),
                 "campaign_launched": True,
                 "updated_at": datetime.utcnow().isoformat(),
             }
