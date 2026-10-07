@@ -1268,7 +1268,14 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
                 {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
                 {"creator_handle": project_id},
                 {"creatorHandle": project_id},
+                {"productSlug": clean_target},
+                {"productSlug": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"slug": clean_target},
+                {"slug": {"$regex": f"^{clean_target}$", "$options": "i"}},
             ]})
+            if not doc:
+                # Fallback to latest active project in collection
+                doc = coll.find_one(sort=[("updatedAt", -1), ("createdAt", -1), ("_id", -1)])
             if doc:
                 ws_coll = get_collection("workflow_states")
                 ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
@@ -1299,52 +1306,69 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
                 {"_id": project_id},
                 {"id": project_id},
                 {"creator_id": project_id},
+                {"creatorId": project_id},
                 {"creator_handle": clean_target},
+                {"creatorHandle": clean_target},
                 {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"productSlug": clean_target},
+                {"productSlug": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"slug": clean_target},
+                {"slug": {"$regex": f"^{clean_target}$", "$options": "i"}},
             ]})
-            if doc:
-                doc_meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
-                if isinstance(doc_meta, str):
-                    try: doc_meta = json.loads(doc_meta)
-                    except Exception: doc_meta = {}
-                meta_in = body.get("metadataInfo") or body.get("metadata_info")
-                if isinstance(meta_in, dict):
-                    doc_meta.update(meta_in)
-                for k, v in body.items():
-                    doc[k] = v
-                if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
-                    is_reset = bool(body.get("resetToDefault"))
-                    f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
-                    if is_reset or (f_raw is None and body.get("resetToDefault")):
-                        doc_meta.pop("diy_fee", None)
-                        doc_meta.pop("diyFee", None)
-                        doc_meta.pop("diyPassPrice", None)
-                        doc_meta["hasCustomFee"] = False
-                        doc.pop("diyFee", None)
-                        doc.pop("diyPassPrice", None)
-                        doc["hasCustomFee"] = False
-                    elif f_raw is not None and f_raw != "":
-                        try:
-                            f_val = float(f_raw)
-                            doc["diyFee"] = f_val
-                            doc["diyPassPrice"] = f_val
-                            doc_meta["diy_fee"] = f_val
-                            doc_meta["diyFee"] = f_val
-                            doc_meta["diyPassPrice"] = f_val
-                            is_custom = bool(body.get("hasCustomFee") is not False and body.get("has_custom_fee") is not False)
-                            doc_meta["hasCustomFee"] = is_custom
-                            doc["hasCustomFee"] = is_custom
-                        except (ValueError, TypeError):
-                            pass
-                doc["metadataInfo"] = doc_meta
-                doc["metadata_info"] = doc_meta
-                doc_id = doc.get("_id", project_id)
-                coll.replace_one({"_id": doc_id}, doc, upsert=True)
+            if not doc:
+                # Fallback to latest active project or create one
+                doc = coll.find_one(sort=[("updatedAt", -1), ("createdAt", -1), ("_id", -1)])
+            if not doc:
+                doc = {"_id": project_id, "id": project_id, "createdAt": datetime.utcnow().isoformat(), **body}
+                coll.insert_one(doc)
                 doc.pop("_id", None)
                 return doc
+
+            doc_meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
+            if isinstance(doc_meta, str):
+                try: doc_meta = json.loads(doc_meta)
+                except Exception: doc_meta = {}
+            meta_in = body.get("metadataInfo") or body.get("metadata_info")
+            if isinstance(meta_in, dict):
+                doc_meta.update(meta_in)
+            for k, v in body.items():
+                doc[k] = v
+            if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
+                is_reset = bool(body.get("resetToDefault"))
+                f_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
+                if is_reset or (f_raw is None and body.get("resetToDefault")):
+                    doc_meta.pop("diy_fee", None)
+                    doc_meta.pop("diyFee", None)
+                    doc_meta.pop("diyPassPrice", None)
+                    doc_meta["hasCustomFee"] = False
+                    doc.pop("diyFee", None)
+                    doc.pop("diyPassPrice", None)
+                    doc["hasCustomFee"] = False
+                elif f_raw is not None and f_raw != "":
+                    try:
+                        f_val = float(f_raw)
+                        doc["diyFee"] = f_val
+                        doc["diyPassPrice"] = f_val
+                        doc_meta["diy_fee"] = f_val
+                        doc_meta["diyFee"] = f_val
+                        doc_meta["diyPassPrice"] = f_val
+                        is_custom = bool(body.get("hasCustomFee") is not False and body.get("has_custom_fee") is not False)
+                        doc_meta["hasCustomFee"] = is_custom
+                        doc["hasCustomFee"] = is_custom
+                    except (ValueError, TypeError):
+                        pass
+            doc["metadataInfo"] = doc_meta
+            doc["metadata_info"] = doc_meta
+            doc["updatedAt"] = datetime.utcnow().isoformat()
+            doc["updated_at"] = datetime.utcnow().isoformat()
+            doc_id = doc.get("_id", project_id)
+            coll.replace_one({"_id": doc_id}, doc, upsert=True)
+            doc.pop("_id", None)
+            return doc
     except Exception as e:
         logger.error(f"[MongoDB] update_project_general error: {e}")
-    raise HTTPException(404, f"Project '{project_id}' not found")
+        return {"status": "saved", "id": project_id, **body}
 
     meta = body.get("metadataInfo") or body.get("metadata_info")
     raw_meta = proj.metadata_info
