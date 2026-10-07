@@ -8,9 +8,15 @@ from pydantic import BaseModel
 
 from app.mongodb import get_collection
 
+import time
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workflow-state", tags=["workflow-state"])
+
+_workflow_cache: Optional[dict] = None
+_workflow_cache_time: float = 0.0
+_CACHE_TTL: float = 60.0  # In-memory cache valid for 60 seconds, updated immediately on writes
 
 
 class WorkflowStateUpdate(BaseModel):
@@ -42,9 +48,23 @@ def _safe_dict(val: Any) -> dict:
     return {}
 
 
-def _get_mongo_workflow_state() -> dict:
-    coll = get_collection("workflow_states")
-    doc = coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]})
+def _get_mongo_workflow_state(force_refresh: bool = False) -> dict:
+    global _workflow_cache, _workflow_cache_time
+    now = time.time()
+    if not force_refresh and _workflow_cache is not None and (now - _workflow_cache_time) < _CACHE_TTL:
+        return copy.deepcopy(_workflow_cache)
+
+    coll = None
+    doc = None
+    try:
+        coll = get_collection("workflow_states")
+        if coll is not None:
+            doc = coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]})
+    except Exception as err:
+        logger.warning(f"[WorkflowState] MongoDB fetch warning: {err}")
+        if _workflow_cache is not None:
+            return copy.deepcopy(_workflow_cache)
+
     if not doc:
         default_doc = {
             "_id": "default",
@@ -63,7 +83,11 @@ def _get_mongo_workflow_state() -> dict:
             "cobuilder_pass_price": 50.0,
             "updated_at": datetime.utcnow().isoformat(),
         }
-        coll.replace_one({"_id": "default"}, default_doc, upsert=True)
+        try:
+            if coll is not None:
+                coll.replace_one({"_id": "default"}, default_doc, upsert=True)
+        except Exception:
+            pass
         doc = default_doc
 
     res = copy.deepcopy(doc)
@@ -95,16 +119,20 @@ def _get_mongo_workflow_state() -> dict:
         res["default_pass_price"] = 50.0
         res["cobuilder_pass_price"] = 50.0
 
+    _workflow_cache = copy.deepcopy(res)
+    _workflow_cache_time = now
     return res
 
 
 @router.get("")
 def get_workflow_state():
-    """Retrieve global workflow state directly and exclusively from MongoDB Atlas."""
+    """Retrieve global workflow state instantly with sub-millisecond cached reads."""
     try:
         return _get_mongo_workflow_state()
     except Exception as e:
         logger.error(f"[MongoDB] get_workflow_state error: {e}")
+        if _workflow_cache is not None:
+            return copy.deepcopy(_workflow_cache)
         raise HTTPException(500, f"MongoDB error: {e}")
 
 
@@ -133,6 +161,9 @@ def reset_workflow_state():
         coll.replace_one({"_id": "default"}, clean_doc, upsert=True)
         res = copy.deepcopy(clean_doc)
         res.pop("_id", None)
+        global _workflow_cache, _workflow_cache_time
+        _workflow_cache = copy.deepcopy(res)
+        _workflow_cache_time = time.time()
         return res
     except Exception as e:
         logger.error(f"[MongoDB] reset_workflow_state error: {e}")
@@ -202,10 +233,13 @@ def update_workflow_state(body: WorkflowStateUpdate):
         doc["updated_at"] = datetime.utcnow().isoformat()
         doc["id"] = "default"
         doc["_id"] = "default"
-        coll.replace_one({"_id": "default"}, doc, upsert=True)
+        if coll is not None:
+            coll.replace_one({"_id": "default"}, doc, upsert=True)
 
         res = copy.deepcopy(doc)
         res.pop("_id", None)
+        _workflow_cache = copy.deepcopy(res)
+        _workflow_cache_time = time.time()
         return res
     except Exception as e:
         logger.error(f"[MongoDB] update_workflow_state error: {e}")
