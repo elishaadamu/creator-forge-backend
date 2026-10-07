@@ -805,6 +805,18 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
                     elif "($177)" in cta_val:
                         t["cta"] = cta_val.replace("($177)", f"(${founding_p})")
 
+    # 6. Synchronize and prioritize real buyer reservations from telemetry
+    telem = d.get("telemetry") or {}
+    telem_res = telem.get("reservations") if isinstance(telem.get("reservations"), list) else []
+    top_res = d.get("reservations") if isinstance(d.get("reservations"), list) else []
+    if telem_res:
+        d["reservations"] = telem_res
+    elif top_res:
+        d["reservations"] = top_res
+        if "reservations" not in telem:
+            telem["reservations"] = top_res
+            d["telemetry"] = telem
+
     return d
 
 
@@ -2527,6 +2539,7 @@ def add_reservation(project_id: str, body: AddReservationRequest, db: Session = 
     telem["presalesRevenue"] = new_revenue
     proj["currentPresales"] = new_revenue
     proj["current_presales"] = new_revenue
+    proj["reservations"] = cur_res
 
     cur_visitors = max(int(telem.get("visitors", 0)), len(cur_res) * 6)
     telem["visitors"] = cur_visitors
@@ -2720,6 +2733,7 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
     telem["presalesRevenue"] = new_revenue
     proj["currentPresales"] = new_revenue
     proj["current_presales"] = new_revenue
+    proj["reservations"] = cur_res
 
     cur_visitors = max(int(telem.get("visitors", 0)), len(cur_res) * 5, 1)
     telem["visitors"] = cur_visitors
