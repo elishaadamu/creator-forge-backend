@@ -35,23 +35,39 @@ async def upload_file_direct(body: JsonUploadRequest, db: Session = Depends(get_
         
         # If projectId provided, append file metadata to project
         if body.projectId and res.get("success"):
+            new_item = {
+                "id": f"cld-{res.get('public_id')}",
+                "public_id": res.get("public_id"),
+                "name": body.fileName,
+                "url": res.get("secure_url"),
+                "optimizeUrl": res.get("optimize_url"),
+                "thumbnailUrl": res.get("thumbnail_url"),
+                "size": f"{(res.get('bytes', 0) / 1024):.1f} KB",
+                "type": res.get("format") or "media",
+                "category": res.get("resource_type") or "image",
+                "content": res.get("secure_url"),
+                "updatedAt": "Cloudinary CDN"
+            }
+            try:
+                from app.mongodb import get_collection
+                coll = get_collection("co_launch_projects")
+                if coll is not None:
+                    p_doc = coll.find_one({"$or": [{"_id": body.projectId}, {"id": body.projectId}]})
+                    if p_doc:
+                        cur_meta = dict(p_doc.get("metadataInfo") or p_doc.get("metadata_info") or {})
+                        cur_files = list(cur_meta.get("project_files") or [])
+                        cur_files.append(new_item)
+                        cur_meta["project_files"] = cur_files
+                        p_doc["metadataInfo"] = cur_meta
+                        p_doc["metadata_info"] = cur_meta
+                        coll.replace_one({"_id": p_doc.get("_id", body.projectId)}, p_doc, upsert=True)
+            except Exception as m_err:
+                logger.warning(f"Failed to sync upload file to MongoDB project: {m_err}")
+
             proj = db.get(CoLaunchProject, body.projectId)
             if proj:
                 cur_meta = dict(proj.metadata_info or {})
                 cur_files = cur_meta.get("project_files", [])
-                new_item = {
-                    "id": f"cld-{res.get('public_id')}",
-                    "public_id": res.get("public_id"),
-                    "name": body.fileName,
-                    "url": res.get("secure_url"),
-                    "optimizeUrl": res.get("optimize_url"),
-                    "thumbnailUrl": res.get("thumbnail_url"),
-                    "size": f"{(res.get('bytes', 0) / 1024):.1f} KB",
-                    "type": res.get("format") or "media",
-                    "category": res.get("resource_type") or "image",
-                    "content": res.get("secure_url"),
-                    "updatedAt": "Cloudinary CDN"
-                }
                 cur_files.append(new_item)
                 cur_meta["project_files"] = cur_files
                 proj.metadata_info = cur_meta
@@ -91,28 +107,46 @@ async def upload_form_file(
         raw_text_content = content_bytes.decode("utf-8", errors="ignore") if is_text else res.get("secure_url")
 
         if project_id and res.get("success"):
+            new_item = {
+                "id": f"cld-{res.get('public_id')}",
+                "public_id": res.get("public_id"),
+                "name": file.filename,
+                "path": file.filename,
+                "folder": folder.split("/")[-1] if ("/" in folder and not folder.endswith("codebase")) else "root",
+                "url": res.get("secure_url"),
+                "cloudinaryUrl": res.get("secure_url"),
+                "optimizeUrl": res.get("optimize_url"),
+                "thumbnailUrl": res.get("thumbnail_url"),
+                "size": f"{(res.get('bytes', len(content_bytes)) / 1024):.1f} KB",
+                "type": res.get("format") or file.filename.split('.')[-1],
+                "category": "Code" if is_text else (res.get("resource_type") or ("video" if "video" in mime else "image")),
+                "content": raw_text_content,
+                "updatedAt": "Cloudinary CDN"
+            }
+            try:
+                from app.mongodb import get_collection
+                coll = get_collection("co_launch_projects")
+                if coll is not None:
+                    p_doc = coll.find_one({"$or": [{"_id": project_id}, {"id": project_id}]})
+                    if p_doc:
+                        cur_meta = dict(p_doc.get("metadataInfo") or p_doc.get("metadata_info") or {})
+                        cur_files = list(cur_meta.get("project_files") or [])
+                        cur_files = [f for f in cur_files if f.get("name") != file.filename and f.get("path") != file.filename]
+                        cur_files.append(new_item)
+                        cur_meta["project_files"] = cur_files
+                        p_doc["metadataInfo"] = cur_meta
+                        p_doc["metadata_info"] = cur_meta
+                        coll.replace_one({"_id": p_doc.get("_id", project_id)}, p_doc, upsert=True)
+            except Exception as m_err:
+                logger.warning(f"Failed to sync form upload to MongoDB project: {m_err}")
+
             proj = db.get(CoLaunchProject, project_id)
             if proj:
                 cur_meta = dict(proj.metadata_info or {})
                 cur_files = cur_meta.get("project_files", [])
                 cur_files = [f for f in cur_files if f.get("name") != file.filename and f.get("path") != file.filename]
-                new_item = {
-                    "id": f"cld-{res.get('public_id')}",
-                    "public_id": res.get("public_id"),
-                    "name": file.filename,
-                    "path": file.filename,
-                    "folder": folder.split("/")[-1] if ("/" in folder and not folder.endswith("codebase")) else "root",
-                    "url": res.get("secure_url"),
-                    "cloudinaryUrl": res.get("secure_url"),
-                    "optimizeUrl": res.get("optimize_url"),
-                    "thumbnailUrl": res.get("thumbnail_url"),
-                    "size": f"{(res.get('bytes', len(content_bytes)) / 1024):.1f} KB",
-                    "type": res.get("format") or file.filename.split('.')[-1],
-                    "category": "Code" if is_text else (res.get("resource_type") or ("video" if "video" in mime else "image")),
-                    "content": raw_text_content,
-                    "updatedAt": "Cloudinary CDN"
-                }
-                cur_files.append(new_item)
+                new_item_sql = dict(new_item)
+                cur_files.append(new_item_sql)
                 cur_meta["project_files"] = cur_files
                 proj.metadata_info = cur_meta
                 db.commit()
@@ -137,8 +171,24 @@ def delete_file_from_cloud(payload: DeleteMediaRequest, db: Session = Depends(ge
             resource_type=resource_type
         )
 
-        # Also purge from PostgreSQL project metadata if project_id and file_id are provided
+        # Also purge from project metadata if project_id and file_id are provided
         if payload.projectId and payload.fileId:
+            try:
+                from app.mongodb import get_collection
+                coll = get_collection("co_launch_projects")
+                if coll is not None:
+                    p_doc = coll.find_one({"$or": [{"_id": payload.projectId}, {"id": payload.projectId}]})
+                    if p_doc:
+                        cur_meta = dict(p_doc.get("metadataInfo") or p_doc.get("metadata_info") or {})
+                        cur_files = list(cur_meta.get("project_files") or [])
+                        cur_files = [f for f in cur_files if f.get("id") != payload.fileId and f.get("url") != url]
+                        cur_meta["project_files"] = cur_files
+                        p_doc["metadataInfo"] = cur_meta
+                        p_doc["metadata_info"] = cur_meta
+                        coll.replace_one({"_id": p_doc.get("_id", payload.projectId)}, p_doc, upsert=True)
+            except Exception as m_err:
+                logger.warning(f"Failed to delete file from MongoDB project: {m_err}")
+
             proj = db.get(CoLaunchProject, payload.projectId)
             if proj:
                 cur_meta = dict(proj.metadata_info or {})

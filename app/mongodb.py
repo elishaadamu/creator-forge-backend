@@ -77,6 +77,7 @@ def get_mongo_client() -> MongoClient:
             "minPoolSize": 1,
             "retryWrites": True,
             "retryReads": True,
+            "readPreference": "primaryPreferred",
         }
         try:
             import certifi

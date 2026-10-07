@@ -21,10 +21,8 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Ensure media directory exists
-BASE_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
-GENERATED_MEDIA_DIR = BASE_STATIC_DIR / "generated"
-GENERATED_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+# Media files are streamed strictly to Cloudinary - zero local disk persistence
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 def _get_live_env_openai_key() -> str:
@@ -32,7 +30,7 @@ def _get_live_env_openai_key() -> str:
     if key and not (key.endswith("WOYA") or key.endswith("jwwA")):
         return key.strip().strip('"\'')
     # Read dynamically from .env
-    env_file = BASE_STATIC_DIR.parent / ".env"
+    env_file = BASE_DIR / ".env"
     if env_file.exists():
         try:
             for line in env_file.read_text(encoding="utf-8-sig").splitlines():
@@ -98,49 +96,74 @@ def build_creator_channel_image_prompt(
     """
     Constructs an authentic, high-converting social media announcement graphic prompt
     that strictly respects the creator's channel theme, niche aesthetic, audience, and the actual social post copy.
+    Engineered to generate ultra-premium 4K commercial-grade visuals via gpt-image-1.
     """
     post_snippet = (announcement_post or "").strip()
     post_context = ""
     if post_snippet:
         lines = [l.strip() for l in post_snippet.split("\n") if l.strip() and not l.startswith("http")]
-        key_snippet = " ".join(lines[:3])[:220]
+        key_snippet = " ".join(lines[:3])[:280]
         if key_snippet:
             post_context = f"The official social announcement hook is: \"{key_snippet}\"."
 
     niche_lower = (niche or "Tech").lower()
-    if any(k in niche_lower for k in ["code", "developer", "software", "tech", "saas", "ai", "hardware", "engineering"]):
-        channel_style = "Sleek dark-mode developer & tech aesthetic with elegant terminal accents, glowing glassmorphic IDE/dashboard UI card, neon cyan and emerald indicators, futuristic minimalism, and authentic workstation studio lighting."
+    if any(k in niche_lower for k in ["game", "gaming", "stream", "esport", "play", "rts", "strategy", "civ"]):
+        channel_style = (
+            "Cyber-tactical gaming command aesthetic: dark obsidian surfaces with ambient neon amber, violet, and electric teal rim lighting. "
+            "Futuristic tactical battle map overlays, holographic HUD widgets, sleek floating translucent acrylic dashboard card, "
+            "Unreal Engine 5 cinematic lighting, dramatic studio depth-of-field, authentic high-end gaming creator station vibe."
+        )
+    elif any(k in niche_lower for k in ["code", "developer", "software", "tech", "saas", "ai", "hardware", "engineering"]):
+        channel_style = (
+            "Ultra-modern dark-mode developer executive aesthetic: obsidian glassmorphism with glowing cyan, emerald, and violet accents. "
+            "Floating 3D software dashboard interface cards with telemetry graphs, crisp terminal micro-details, volumetric god rays, "
+            "Apple-grade industrial design product photography, immaculate studio reflections, and Octane Render lighting."
+        )
     elif any(k in niche_lower for k in ["design", "art", "creative", "video", "photo", "film", "motion"]):
-        channel_style = "High-aesthetic creator studio design with Swiss typography hierarchy, cinematic lens flares, premium monochrome contrast, subtle color gradients, and museum-grade visual layout."
+        channel_style = (
+            "Museum-grade Swiss editorial aesthetic: high-contrast monochrome with subtle titanium and warm amber gradients. "
+            "Architectural layout, dramatic sculptural shadow play, sleek floating acrylic glass cards, flawless typography composition, "
+            "and cinematic Hasselblad medium-format camera quality."
+        )
     elif any(k in niche_lower for k in ["business", "finance", "money", "invest", "wealth", "crypto", "growth", "marketing"]):
-        channel_style = "Modern executive fintech aesthetic with bold analytical charts, clean metrics HUD, dark sapphire and gold accents, and authoritative creator brand elevation."
+        channel_style = (
+            "Stealth-wealth fintech aesthetic: deep midnight sapphire and brushed platinum, glowing gold and emerald trendlines, "
+            "ultra-crisp frosted glass HUD cards, dynamic lighting, Bloomberg-meets-Stripe executive elegance, 8K commercial lighting."
+        )
     elif any(k in niche_lower for k in ["fitness", "health", "wellness", "biohack", "sport", "physique"]):
-        channel_style = "High-energy athletic performance aesthetic with high-contrast dramatic studio lighting, biometric telemetry charts, bold modern typography, and clean vitality accents."
-    elif any(k in niche_lower for k in ["gaming", "streamer", "esports", "entertainment"]):
-        channel_style = "Vibrant immersive creator studio aesthetic with ambient RGB room glows, sleek holographic product HUD badge, and high-impact streamer brand styling."
+        channel_style = (
+            "High-performance telemetry aesthetic: intense dramatic chiaroscuro studio lighting, athletic obsidian and crimson/lime accents, "
+            "floating biometric health telemetry charts, ultra-crisp depth of field, and Nike Lab commercial finish."
+        )
     else:
-        channel_style = "Modern creator studio aesthetic with clean typography, premium glassmorphic UI card, vibrant brand lighting, and sleek commercial showcase styling."
+        channel_style = (
+            "Modern creator studio aesthetic: sleek dark-mode glassmorphism with dynamic ambient backlight glows, "
+            "floating 3D UI showcase cards, pristine ray-traced reflections, and cinematic product showcase photography."
+        )
 
     c_name = creator_name or "Creator"
     handle = f" (@{creator_handle.lstrip('@')})" if creator_handle else ""
-    p_name = product_name or "Exclusive Tool OS"
+    p_name = product_name or "TacticianAI"
     tagline = f" — {product_tagline}" if product_tagline else ""
     audience = f" tailored for an audience of {target_audience}" if target_audience else ""
 
     parts = [
-        f"A professional, visually arresting social media announcement post graphic designed specifically for the official channel of {c_name}{handle} in the {niche} space.",
-        f"Announcing their co-founded software venture: '{p_name}'{tagline}{audience}.",
-        f"Channel Aesthetic: {channel_style}",
+        f"A breathtaking, ultra-premium commercial advertising announcement graphic created for the official channel of {c_name}{handle} ({niche} niche).",
+        f"Showcasing the flagship co-founded software venture: '{p_name}'{tagline}{audience}.",
+        f"Art Direction & Style: {channel_style}",
     ]
 
     if post_context:
-        parts.append(f"Post Context: {post_context}")
+        parts.append(f"Campaign Context: {post_context}")
 
     if user_prompt and user_prompt.strip() and not user_prompt.startswith("Announcement graphic for:"):
-        parts.append(f"Specific creator notes: {user_prompt.strip()}")
+        parts.append(f"Custom Creator Direction: {user_prompt.strip()}")
 
     parts.append(
-        "Visual Layout: Centered around a premium 3D floating product dashboard showcase card with sleek UI elements, illuminated badge signifying 'Official Co-Launch' and 'Founding Cohort Access', and subtle creator channel visual motifs. 4K resolution, photo-realistic studio lighting, ultra-sharp detail, crisp modern graphic design for Twitter/X and LinkedIn. No distorted text, no random watermarks, high commercial quality."
+        "Hero Visual Composition: A stunning 3D isometric floating product showcase in the center, featuring a sleek translucent glass UI dashboard "
+        f"with real-time features of {p_name}, illuminated badge 'Founding Cohort / Co-Launch Live', ray-traced ambient lighting, glowing edges, "
+        "and cinematic depth of field. 8K resolution, Octane Render style, high-end commercial tech product photography, photorealistic materials, "
+        "no cheap clip art, no low-res artifacts, no generic flat cards. Visually magnetic and unforgettable."
     )
 
     return " ".join(parts)
@@ -302,66 +325,67 @@ def _create_cinematic_mp4_teaser(
     frames_per_stage = (fps * duration_sec) // len(stages)
     n_frames = frames_per_stage * len(stages)
 
-    temp_filename = f"temp_teaser_{int(time.time())}_{os.urandom(4).hex()}.mp4"
-    temp_path = GENERATED_MEDIA_DIR / temp_filename
+    import tempfile
+    temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    temp_path = Path(temp_file.name)
+    temp_file.close()
 
-    # Stream frame by frame to disk to avoid buffering all frames in RAM (prevents Render 512MB OOM)
-    writer = iio.get_writer(str(temp_path), fps=fps, codec='libx264', quality=5, pixelformat='yuv420p')
-
-    for f in range(n_frames):
-        s_idx = min(f // frames_per_stage, len(stages) - 1)
-        st = stages[s_idx]
-        stage_t = (f % frames_per_stage) / float(frames_per_stage)
-        total_t = f / float(n_frames)
-
-        # Smooth camera zoom
-        scale = 1.0 + 0.03 * stage_t
-        nw, nh = int(w * scale), int(h * scale)
-        scaled = base_img.resize((nw, nh), Image.Resampling.BILINEAR)
-        left = (nw - w) // 2
-        top = (nh - h) // 2
-        frame = scaled.crop((left, top, left + w, top + h))
-
-        d = ImageDraw.Draw(frame, "RGBA")
-
-        # Stage Card Overlay
-        accent = st["accent"]
-        d.rectangle([(20, 42), (w - 20, h - 46)], fill=(8, 12, 22, 225), outline=accent, width=1)
-
-        # Stage badge
-        d.text((32, 54), f"STAGE {st['num']} / 04 • {st['stage']}", fill=accent)
-        d.text((32, 72), st['title'], fill=(255, 255, 255))
-        d.line([(32, 92), (w - 32, 92)], fill=(accent[0], accent[1], accent[2], 120), width=1)
-
-        # Body lines
-        body_lines = _wrap_text_lines(st['text'], max_chars=36, max_lines=3)
-        y_text = 104
-        for b_line in body_lines:
-            d.text((32, y_text), b_line, fill=(226, 232, 240))
-            y_text += 20
-
-        # Top Header Bar & Live Scrubber
-        d.rectangle([(0, 0), (w, 30)], fill=(4, 7, 15, 240))
-        d.text((12, 8), f"OFFICIAL VIDEO TEASER • {p_name.upper()} • {n_tag}", fill=(245, 158, 11))
-        prog_w = max(4, int(w * total_t))
-        d.rectangle([(0, 28), (prog_w, 30)], fill=accent)
-
-        # Bottom Bar
-        d.rectangle([(0, h - 34), (w, h)], fill=(4, 7, 15, 245))
-        d.text((12, h - 24), f"{c_name} {handle} — Co-Launch Video Demo", fill=(203, 213, 225))
-        sim_sec = int(total_t * 60)
-        time_str = f"0:{sim_sec:02d} / 1:00"
-        d.text((w - 80, h - 24), time_str, fill=accent)
-
-        writer.append_data(np.array(frame))
-        del frame
-
-    writer.close()
-    data = temp_path.read_bytes()
     try:
+        # Stream frame by frame to tempfile to avoid buffering all frames in RAM (prevents Render 512MB OOM)
+        writer = iio.get_writer(str(temp_path), fps=fps, codec='libx264', quality=5, pixelformat='yuv420p')
+
+        for f in range(n_frames):
+            s_idx = min(f // frames_per_stage, len(stages) - 1)
+            st = stages[s_idx]
+            stage_t = (f % frames_per_stage) / float(frames_per_stage)
+            total_t = f / float(n_frames)
+
+            # Smooth camera zoom
+            scale = 1.0 + 0.03 * stage_t
+            nw, nh = int(w * scale), int(h * scale)
+            scaled = base_img.resize((nw, nh), Image.Resampling.BILINEAR)
+            left = (nw - w) // 2
+            top = (nh - h) // 2
+            frame = scaled.crop((left, top, left + w, top + h))
+
+            d = ImageDraw.Draw(frame, "RGBA")
+
+            # Stage Card Overlay
+            accent = st["accent"]
+            d.rectangle([(20, 42), (w - 20, h - 46)], fill=(8, 12, 22, 225), outline=accent, width=1)
+
+            # Stage badge
+            d.text((32, 54), f"STAGE {st['num']} / 04 • {st['stage']}", fill=accent)
+            d.text((32, 72), st['title'], fill=(255, 255, 255))
+            d.line([(32, 92), (w - 32, 92)], fill=(accent[0], accent[1], accent[2], 120), width=1)
+
+            # Body lines
+            body_lines = _wrap_text_lines(st['text'], max_chars=36, max_lines=3)
+            y_text = 104
+            for b_line in body_lines:
+                d.text((32, y_text), b_line, fill=(226, 232, 240))
+                y_text += 20
+
+            # Top Header Bar & Live Scrubber
+            d.rectangle([(0, 0), (w, 30)], fill=(4, 7, 15, 240))
+            d.text((12, 8), f"OFFICIAL VIDEO TEASER • {p_name.upper()} • {n_tag}", fill=(245, 158, 11))
+            prog_w = max(4, int(w * total_t))
+            d.rectangle([(0, 28), (prog_w, 30)], fill=accent)
+
+            # Bottom Bar
+            d.rectangle([(0, h - 34), (w, h)], fill=(4, 7, 15, 245))
+            d.text((12, h - 24), f"{c_name} {handle} — Co-Launch Video Demo", fill=(203, 213, 225))
+            sim_sec = int(total_t * 60)
+            time_str = f"0:{sim_sec:02d} / 1:00"
+            d.text((w - 80, h - 24), time_str, fill=accent)
+
+            writer.append_data(np.array(frame))
+            del frame
+
+        writer.close()
+        data = temp_path.read_bytes()
+    finally:
         temp_path.unlink(missing_ok=True)
-    except Exception:
-        pass
 
     gc.collect()
     return data
@@ -390,19 +414,19 @@ def generate_campaign_social_image(
     provider_used = "openai"
     last_error = None
 
-    # 1. Primary AI Image Model: Standard OpenAI Image Models (dall-e-3, dall-e-2)
+    # 1. Primary AI Image Model: High-Resolution OpenAI Image Models (gpt-image-1, chatgpt-image-latest, gpt-image-1.5, gpt-image-1-mini)
     resolved_key = openai_api_key or api_key or _get_live_env_openai_key()
     if resolved_key:
         try:
             oai_client = _get_openai_client(resolved_key)
-            logger.info("🎨 [OPENAI IMAGES] Requesting image via DALL-E...")
-            candidate_models = ["dall-e-3", "dall-e-2"]
+            logger.info("🎨 [OPENAI IMAGES] Requesting image via OpenAI Image API...")
+            candidate_models = ["gpt-image-1", "chatgpt-image-latest", "gpt-image-1.5", "gpt-image-1-mini", "dall-e-3", "dall-e-2"]
             for m in candidate_models:
                 try:
                     logger.info(f"🎨 Trying OpenAI model: {m}...")
                     res = oai_client.images.generate(
                         model=m,
-                        prompt=prompt[:1000],
+                        prompt=prompt[:2000],
                         n=1,
                     )
                     if res.data and getattr(res.data[0], "b64_json", None):
@@ -466,16 +490,8 @@ def generate_campaign_social_image(
             logger.error(f"Local graphic fallback failed: {e_pil}")
             raise RuntimeError(f"Image generation failed: {last_error or e_pil}")
 
-    filename = f"campaign_post_{int(time.time())}_{os.urandom(4).hex()}.png"
-    filepath = GENERATED_MEDIA_DIR / filename
-
-    with open(filepath, "wb") as f:
-        f.write(image_bytes)
-
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:image/png;base64,{b64_data}"
-
-    logger.info(f"✅ Generated campaign image saved locally to {filepath}")
 
     # Build creator-profile partitioned Cloudinary folder and public ID
     clean_handle = (creator_handle or "").replace("@", "").strip()
@@ -506,33 +522,26 @@ def generate_campaign_social_image(
         "generated_by": generated_by or "admin"
     }
 
-    final_url = f"/static/generated/{filename}"
-    is_cloudinary = False
-    cld_public_id_saved = None
-    optimize_url = None
-    thumbnail_url = None
+    from app.integrations.cloudinary_service import upload_media_to_cloudinary
+    cld_res = upload_media_to_cloudinary(
+        file_data=image_bytes,
+        public_id=cld_public_id,
+        folder=cld_folder,
+        resource_type="image",
+        tags=tags,
+        context=context
+    )
 
-    try:
-        from app.integrations.cloudinary_service import upload_media_to_cloudinary
-        cld_res = upload_media_to_cloudinary(
-            file_data=str(filepath),
-            public_id=cld_public_id,
-            folder=cld_folder,
-            resource_type="image",
-            tags=tags,
-            context=context
-        )
-        if cld_res.get("success") and cld_res.get("secure_url"):
-            final_url = cld_res.get("secure_url")
-            is_cloudinary = True
-            cld_public_id_saved = cld_res.get("public_id")
-            optimize_url = cld_res.get("optimize_url")
-            thumbnail_url = cld_res.get("thumbnail_url")
-            logger.info(f"☁️ Successfully uploaded campaign image to Cloudinary under creator folder '{cld_folder}': {final_url}")
-        else:
-            logger.warning(f"⚠️ Cloudinary upload returned error: {cld_res.get('error')}. Using local delivery.")
-    except Exception as cld_err:
-        logger.warning(f"⚠️ Cloudinary upload exception: {cld_err}. Using local delivery.")
+    if not (cld_res.get("success") and cld_res.get("secure_url")):
+        err_msg = cld_res.get("error") or "Cloudinary upload failed"
+        logger.error(f"❌ Cloudinary upload failed: {err_msg}")
+        raise RuntimeError(f"Cloudinary upload failed: {err_msg}. Media files must be saved to Cloudinary, local storage is disabled.")
+
+    final_url = cld_res.get("secure_url")
+    cld_public_id_saved = cld_res.get("public_id")
+    optimize_url = cld_res.get("optimize_url")
+    thumbnail_url = cld_res.get("thumbnail_url")
+    logger.info(f"☁️ Successfully uploaded campaign image to Cloudinary under creator folder '{cld_folder}': {final_url}")
 
     import gc
     gc.collect()
@@ -540,14 +549,14 @@ def generate_campaign_social_image(
     return {
         "url": final_url,
         "secure_url": final_url,
-        "cloudinary_url": final_url if is_cloudinary else None,
+        "cloudinary_url": final_url,
         "cloudinary_public_id": cld_public_id_saved,
         "optimize_url": optimize_url or final_url,
         "thumbnail_url": thumbnail_url or final_url,
         "creator_folder": cld_folder,
         "creator_slug": creator_slug,
-        "is_cloudinary": is_cloudinary,
-        "filename": filename,
+        "is_cloudinary": True,
+        "filename": f"{cld_public_id}.png",
         "data_url": data_url,
         "prompt": prompt,
         "model": model_used or "gemini-3.1-flash-image",
@@ -605,19 +614,19 @@ def generate_campaign_video(
             if operation.done and getattr(operation, "response", None):
                 gen_videos = getattr(operation.response, "generated_videos", None)
                 if gen_videos and len(gen_videos) > 0:
-                    generated_video = gen_videos[0]
-                    dest_temp = GENERATED_MEDIA_DIR / f"dialogue_example_{int(time.time())}_{os.urandom(4).hex()}.mp4"
-                    genai_client.files.download(file=generated_video.video, destination=str(dest_temp))
-                    if dest_temp.exists() and dest_temp.stat().st_size > 0:
-                        video_bytes = dest_temp.read_bytes()
-                        model_used = "veo-3.1-generate-preview"
-                        provider_used = "google-genai"
-                        print(f"Generated video saved to {dest_temp.name}")
-                        logger.info(f"✅ Generated video saved to {dest_temp.name}")
-                        try:
-                            dest_temp.unlink(missing_ok=True)
-                        except Exception:
-                            pass
+                    import tempfile
+                    temp_f = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                    dest_temp = Path(temp_f.name)
+                    temp_f.close()
+                    try:
+                        genai_client.files.download(file=generated_video.video, destination=str(dest_temp))
+                        if dest_temp.exists() and dest_temp.stat().st_size > 0:
+                            video_bytes = dest_temp.read_bytes()
+                            model_used = "veo-3.1-generate-preview"
+                            provider_used = "google-genai"
+                            logger.info("✅ Generated Veo video downloaded to memory")
+                    finally:
+                        dest_temp.unlink(missing_ok=True)
             elif not operation.done:
                 logger.info("⏳ Veo generation took longer than max wait window; compiling cinematic MP4 teaser...")
     except Exception as veo_err:
@@ -638,14 +647,6 @@ def generate_campaign_video(
         )
         model_used = "launch-teaser-multistage"
         provider_used = "studio"
-
-    filename = f"campaign_video_{int(time.time())}_{os.urandom(4).hex()}.mp4"
-    filepath = GENERATED_MEDIA_DIR / filename
-
-    with open(filepath, "wb") as f:
-        f.write(video_bytes)
-
-    logger.info(f"✅ Generated campaign video saved locally to {filepath}")
 
     # Build creator-specific folder strictly from creator's profile
     clean_handle = (creator_handle or "").replace("@", "").strip()
@@ -673,33 +674,26 @@ def generate_campaign_video(
         "generated_by": generated_by or "admin"
     }
 
-    final_video_url = f"/static/generated/{filename}"
-    is_cloudinary = False
-    cld_public_id_saved = None
-    optimize_url = None
-    thumbnail_url = None
+    from app.integrations.cloudinary_service import upload_media_to_cloudinary
+    cld_res = upload_media_to_cloudinary(
+        file_data=video_bytes,
+        public_id=cld_video_id,
+        folder=cld_folder,
+        resource_type="video",
+        tags=tags,
+        context=context
+    )
 
-    try:
-        from app.integrations.cloudinary_service import upload_media_to_cloudinary
-        cld_res = upload_media_to_cloudinary(
-            file_data=str(filepath),
-            public_id=cld_video_id,
-            folder=cld_folder,
-            resource_type="video",
-            tags=tags,
-            context=context
-        )
-        if cld_res.get("success") and cld_res.get("secure_url"):
-            final_video_url = cld_res.get("secure_url")
-            is_cloudinary = True
-            cld_public_id_saved = cld_res.get("public_id")
-            optimize_url = cld_res.get("optimize_url")
-            thumbnail_url = cld_res.get("thumbnail_url")
-            logger.info(f"☁️ Successfully uploaded campaign video to Cloudinary under creator folder '{cld_folder}': {final_video_url}")
-        else:
-            logger.warning(f"⚠️ Cloudinary video upload returned error: {cld_res.get('error')}. Using local delivery.")
-    except Exception as cld_err:
-        logger.warning(f"⚠️ Cloudinary video upload skipped/failed: {cld_err}")
+    if not (cld_res.get("success") and cld_res.get("secure_url")):
+        err_msg = cld_res.get("error") or "Cloudinary upload failed"
+        logger.error(f"❌ Cloudinary video upload failed: {err_msg}")
+        raise RuntimeError(f"Cloudinary video upload failed: {err_msg}. Media files must be saved to Cloudinary, local storage is disabled.")
+
+    final_video_url = cld_res.get("secure_url")
+    cld_public_id_saved = cld_res.get("public_id")
+    optimize_url = cld_res.get("optimize_url")
+    thumbnail_url = cld_res.get("thumbnail_url")
+    logger.info(f"☁️ Successfully uploaded campaign video to Cloudinary under creator folder '{cld_folder}': {final_video_url}")
 
     import gc
     gc.collect()

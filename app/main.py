@@ -288,8 +288,6 @@ def update_settings(body: dict):
             updated.append(field)
 
     if env_updates:
-        env_path = _Path(settings.DATABASE_URL.replace("sqlite:///", "").replace("creator_forge.db", "")).parent / ".env"
-        # Use BASE_DIR
         from app.config import BASE_DIR
         env_path = BASE_DIR / ".env"
         existing = {}
@@ -600,8 +598,15 @@ class SyncRequest(BaseModel):
 def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
     from app.models.creator import UserProfile
     from fastapi import HTTPException
+    from app.mongodb import get_collection
 
-    # Check unique constraints
+    # Check unique constraints in MongoDB Atlas & DB
+    u_coll = get_collection("user_profiles")
+    if u_coll is not None:
+        m_existing = u_coll.find_one({"$or": [{"username": req.username}, {"email": req.email}]})
+        if m_existing:
+            raise HTTPException(status_code=400, detail="Username or email already registered")
+
     existing = db.query(UserProfile).filter(
         (UserProfile.username == req.username) | (UserProfile.email == req.email)
     ).first()
@@ -621,6 +626,26 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    # Persist directly into MongoDB Atlas user_profiles
+    if u_coll is not None:
+        try:
+            u_coll.replace_one(
+                {"username": req.username},
+                {
+                    "_id": req.username,
+                    "username": req.username,
+                    "email": req.email,
+                    "password": req.password,
+                    "creator_data": req.creator_data,
+                    "calendar_data": req.calendar_data,
+                    "launch_pack_data": req.launch_pack_data,
+                    "studio_data": req.studio_data
+                },
+                upsert=True
+            )
+        except Exception:
+            pass
+
     return {
         "status": "success",
         "username": user.username,
@@ -635,10 +660,30 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
 def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
     from app.models.creator import UserProfile
     from fastapi import HTTPException
+    from app.mongodb import get_collection
 
     user = db.query(UserProfile).filter(
         (UserProfile.username == req.identifier) | (UserProfile.email == req.identifier)
     ).first()
+
+    if not user:
+        u_coll = get_collection("user_profiles")
+        if u_coll is not None:
+            m_user = u_coll.find_one({"$or": [{"username": req.identifier}, {"email": req.identifier}]})
+            if m_user and m_user.get("password") == req.password:
+                user = UserProfile(
+                    username=m_user.get("username"),
+                    email=m_user.get("email"),
+                    password=m_user.get("password"),
+                    creator_data=m_user.get("creator_data"),
+                    calendar_data=m_user.get("calendar_data"),
+                    launch_pack_data=m_user.get("launch_pack_data"),
+                    studio_data=m_user.get("studio_data"),
+                    ai_keys=m_user.get("ai_keys")
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
 
     if not user or user.password != req.password:
         raise HTTPException(status_code=400, detail="Invalid username/email or password credentials.")
@@ -658,8 +703,21 @@ def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
 def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
     from app.models.creator import UserProfile
     from fastapi import HTTPException
+    from app.mongodb import get_collection
 
     user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
+    if not user:
+        u_coll = get_collection("user_profiles")
+        if u_coll is not None:
+            m_user = u_coll.find_one({"username": req.username})
+            if m_user:
+                user = UserProfile(
+                    username=m_user.get("username"),
+                    email=m_user.get("email"),
+                    password=m_user.get("password")
+                )
+                db.add(user)
+
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -673,6 +731,21 @@ def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
         user.studio_data = req.studio_data
 
     db.commit()
+
+    # Sync to MongoDB Atlas user_profiles
+    u_coll = get_collection("user_profiles")
+    if u_coll is not None:
+        try:
+            update_fields = {}
+            if req.creator_data is not None: update_fields["creator_data"] = req.creator_data
+            if req.calendar_data is not None: update_fields["calendar_data"] = req.calendar_data
+            if req.launch_pack_data is not None: update_fields["launch_pack_data"] = req.launch_pack_data
+            if req.studio_data is not None: update_fields["studio_data"] = req.studio_data
+            if update_fields:
+                u_coll.update_one({"username": req.username}, {"$set": update_fields}, upsert=True)
+        except Exception:
+            pass
+
     return {"status": "success"}
 
 
@@ -854,59 +927,36 @@ def delete_admin_user(username: str, db: Session = Depends(get_db)):
 
 @app.get("/api/admin/system-stats")
 def get_system_stats(db: Session = Depends(get_db)):
-    """Return database stats and row counts."""
-    from app.models.creator import UserProfile, Creator, ProductRecommendation
-    from pathlib import Path as _Path
+    """Return database stats and row counts directly from MongoDB Atlas."""
+    from app.mongodb import get_mongo_db, get_collection
     
     db_size_bytes = 0
     try:
-        db_path = _Path(settings.DATABASE_URL.replace("sqlite:///", ""))
-        if db_path.exists():
-            db_size_bytes = db_path.stat().st_size
+        mdb = get_mongo_db()
+        stats = mdb.command("dbstats")
+        db_size_bytes = stats.get("dataSize", 0) + stats.get("indexSize", 0)
     except Exception:
         pass
 
-    try:
-        users_count = db.query(UserProfile).count()
-    except Exception:
-        users_count = 0
+    def _c_count(col_name):
+        try:
+            c = get_collection(col_name)
+            return c.count_documents({}) if c is not None else 0
+        except Exception:
+            return 0
 
-    try:
-        creators_count = db.query(Creator).count()
-    except Exception:
-        creators_count = 0
-
-    try:
-        recs_count = db.query(ProductRecommendation).count()
-    except Exception:
-        recs_count = 0
-
-    try:
-        from app.models.campaign import Campaign
-        campaigns_count = db.query(Campaign).count()
-    except Exception:
-        campaigns_count = 0
-
-    try:
-        from app.models.outreach import OutreachMessage
-        outreach_count = db.query(OutreachMessage).count()
-    except Exception:
-        outreach_count = 0
-
-    try:
-        from app.models.outreach import SuppressionList
-        suppression_count = db.query(SuppressionList).count()
-    except Exception:
-        suppression_count = 0
-
-    try:
-        from app.models.audit import AuditLog
-        audit_logs_count = db.query(AuditLog).count()
-    except Exception:
-        audit_logs_count = 0
+    users_count = _c_count("user_profiles")
+    creators_count = _c_count("creators")
+    recs_count = _c_count("product_recommendations")
+    campaigns_count = _c_count("campaigns")
+    outreach_count = _c_count("outreach_messages")
+    suppression_count = _c_count("suppression_list")
+    audit_logs_count = _c_count("audit_logs")
+    projects_count = _c_count("co_launch_projects")
 
     return {
         "status": "success",
+        "database": "MongoDB Atlas",
         "db_size": f"{db_size_bytes / 1024:.1f} KB",
         "users_count": users_count,
         "creators_count": creators_count,
@@ -915,6 +965,7 @@ def get_system_stats(db: Session = Depends(get_db)):
         "outreach_count": outreach_count,
         "suppression_count": suppression_count,
         "audit_logs_count": audit_logs_count,
+        "projects_count": projects_count,
     }
 
 
@@ -992,24 +1043,16 @@ def save_media_image(req: SaveMediaRequest, db: Session = Depends(get_db)):
         if not file_bytes:
             raise HTTPException(status_code=400, detail="Could not read image bytes")
             
-        filename = f"prod_{int(time.time())}_{uuid.uuid4().hex[:12]}.{ext}"
-        filepath = MEDIA_DIR / filename
-        
-        # Save to filesystem
-        with open(filepath, "wb") as f:
-            f.write(file_bytes)
-            
-        # Save to database for persistence across ephemeral disk restarts
-        content_type = f"image/{ext}" if ext != "jpg" else "image/jpeg"
-        db_image = MediaImage(
-            filename=filename,
-            image_bytes=file_bytes,
-            content_type=content_type
+        from app.integrations.cloudinary_service import upload_media_to_cloudinary
+        cld_res = upload_media_to_cloudinary(
+            file_data=file_bytes,
+            public_id=f"concept_{int(time.time())}_{uuid.uuid4().hex[:8]}",
+            folder="creator_forge/concepts",
+            resource_type="image"
         )
-        db.add(db_image)
-        db.commit()
-            
-        return {"url": f"/api/static/media/{filename}"}
+        if cld_res.get("success") and cld_res.get("secure_url"):
+            return {"url": cld_res["secure_url"]}
+        raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {cld_res.get('error')}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to save image: {str(e)}")
 
@@ -1027,14 +1070,6 @@ def serve_media_image(filename: str, db: Session = Depends(get_db)):
     db_image = db.query(MediaImage).filter(MediaImage.filename == filename).first()
     if not db_image:
         raise HTTPException(status_code=404, detail="Image not found")
-        
-    # Re-cache to disk for fast subsequent accesses
-    try:
-        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(filepath, "wb") as f:
-            f.write(db_image.image_bytes)
-    except Exception as e:
-        print(f"Failed to write image cache to disk: {e}")
         
     return Response(content=db_image.image_bytes, media_type=db_image.content_type)
 

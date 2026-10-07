@@ -759,54 +759,111 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
     return d
 
 
+_project_cache: Dict[str, Dict[str, Any]] = {}
+
+
 def _find_mongo_project(project_id: str) -> Optional[Dict[str, Any]]:
-    """Helper to locate project in MongoDB Atlas by any identifier."""
+    """Helper to locate project in MongoDB Atlas by any identifier with in-memory caching fallback."""
+    if not project_id:
+        return None
+    clean_target = str(project_id).replace("@", "").lower().strip()
     try:
         from app.mongodb import get_collection
+        from pymongo import ReadPreference
         coll = get_collection("co_launch_projects")
-        if coll is None or not project_id:
-            return None
-        clean_target = str(project_id).replace("@", "").lower().strip()
-        doc = coll.find_one({"$or": [
-            {"_id": project_id},
-            {"id": project_id},
-            {"creator_id": project_id},
-            {"creatorId": project_id},
-            {"creator_handle": clean_target},
-            {"creatorHandle": clean_target},
-            {"creator_handle": f"@{clean_target}"},
-            {"creatorHandle": f"@{clean_target}"},
-            {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
-            {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
-            {"creator_handle": project_id},
-            {"creatorHandle": project_id},
-        ]})
-        return doc
+        if coll is not None:
+            doc = coll.with_options(read_preference=ReadPreference.PRIMARY_PREFERRED).find_one({"$or": [
+                {"_id": project_id},
+                {"id": project_id},
+                {"creator_id": project_id},
+                {"creatorId": project_id},
+                {"creator_handle": clean_target},
+                {"creatorHandle": clean_target},
+                {"creator_handle": f"@{clean_target}"},
+                {"creatorHandle": f"@{clean_target}"},
+                {"creator_handle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
+                {"creator_handle": project_id},
+                {"creatorHandle": project_id},
+            ]})
+            if doc:
+                p_id = doc.get("id") or doc.get("_id")
+                if p_id:
+                    _project_cache[str(p_id)] = doc
+                c_handle = (doc.get("creatorHandle") or doc.get("creator_handle") or "").replace("@", "").lower().strip()
+                if c_handle:
+                    _project_cache[c_handle] = doc
+                return doc
     except Exception as e:
         logger.error(f"[MongoDB] _find_mongo_project error: {e}")
-        return None
+
+    # Fallback to local cache if MongoDB connection had a hiccup
+    if project_id in _project_cache:
+        return _project_cache[project_id]
+    if clean_target in _project_cache:
+        return _project_cache[clean_target]
+    for p in _project_cache.values():
+        if (
+            str(p.get("id")) == str(project_id)
+            or str(p.get("_id")) == str(project_id)
+            or str(p.get("creatorId")) == str(project_id)
+            or str(p.get("creator_id")) == str(project_id)
+            or str(p.get("creatorHandle", "")).replace("@", "").lower().strip() == clean_target
+            or str(p.get("creator_handle", "")).replace("@", "").lower().strip() == clean_target
+        ):
+            return p
+    return None
 
 
 def _save_mongo_project(doc: Dict[str, Any]) -> Dict[str, Any]:
     """Helper to upsert project into MongoDB Atlas co_launch_projects."""
+    if not doc:
+        return doc
+    p_id = doc.get("id") or doc.get("_id")
+    if not p_id:
+        p_id = f"proj_{int(datetime.utcnow().timestamp()*1000)}"
+        doc["id"] = p_id
+    doc["_id"] = p_id
+    now_str = datetime.utcnow().isoformat()
+    doc["updated_at"] = now_str
+    doc["updatedAt"] = now_str
+
+    _project_cache[str(p_id)] = doc
+    c_handle = (doc.get("creatorHandle") or doc.get("creator_handle") or "").replace("@", "").lower().strip()
+    if c_handle:
+        _project_cache[c_handle] = doc
+
     try:
         from app.mongodb import get_collection
         coll = get_collection("co_launch_projects")
-        if coll is None or not doc:
-            return doc
-        p_id = doc.get("id") or doc.get("_id")
-        if not p_id:
-            p_id = f"proj_{int(datetime.utcnow().timestamp()*1000)}"
-            doc["id"] = p_id
-        doc["_id"] = p_id
-        now_str = datetime.utcnow().isoformat()
-        doc["updated_at"] = now_str
-        doc["updatedAt"] = now_str
-        coll.replace_one({"_id": p_id}, doc, upsert=True)
+        if coll is not None:
+            coll.replace_one({"_id": p_id}, doc, upsert=True)
         return doc
     except Exception as e:
         logger.error(f"[MongoDB] _save_mongo_project error: {e}")
         return doc
+
+
+def _format_any_project(mongo_doc: Optional[Dict[str, Any]] = None, db_proj: Optional[CoLaunchProject] = None) -> Optional[Dict[str, Any]]:
+    """Format and normalize project response supporting MongoDB Atlas documents and database models."""
+    if mongo_doc:
+        try:
+            from app.mongodb import get_collection
+            ws_coll = get_collection("workflow_states")
+            ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
+            def_fee = None
+            if ws_doc:
+                def_fee = ws_doc.get("default_pass_price")
+                if def_fee is None:
+                    def_fee = (ws_doc.get("extra_state") or {}).get("default_pass_price")
+            if def_fee is None:
+                def_fee = 50.0
+            return _normalize_mongo_project_dict(mongo_doc, float(def_fee))
+        except Exception:
+            return _normalize_mongo_project_dict(mongo_doc, 50.0)
+    if db_proj:
+        return _format_project_response(db_proj)
+    return None
 
 
 @router.get("")
@@ -1637,21 +1694,72 @@ def generate_project_campaign_image(
     db: Session = Depends(get_db)
 ):
     """Generate social media post image and store in Cloudinary under creator's profile folder."""
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    mongo_doc = _find_mongo_project(project_id)
+    proj = db.get(CoLaunchProject, project_id) if db else None
+    if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    kit = proj.validation_campaign.campaign_kit if proj.validation_campaign else {}
+    creator_name = (mongo_doc.get("creatorName") or mongo_doc.get("creator_name")) if mongo_doc else None
+    if not creator_name and proj:
+        creator_name = proj.creator_name
+    creator_name = creator_name or "Creator"
+
+    creator_handle = (mongo_doc.get("creatorHandle") or mongo_doc.get("creator_handle")) if mongo_doc else None
+    if not creator_handle and proj:
+        creator_handle = proj.creator_handle
+    creator_handle = creator_handle or ""
+
+    creator_id = (mongo_doc.get("creatorId") or mongo_doc.get("creator_id")) if mongo_doc else None
+    if not creator_id and proj:
+        creator_id = proj.creator_id
+    creator_id = creator_id or ""
+
+    niche = mongo_doc.get("niche") if mongo_doc else (proj.niche if proj else None)
+    niche = niche or "Tech"
+
+    product_name = (mongo_doc.get("productName") or mongo_doc.get("product_name")) if mongo_doc else None
+    if not product_name and proj:
+        product_name = proj.product_name
+    product_name = product_name or "New Software"
+
+    product_tagline = (mongo_doc.get("productTagline") or mongo_doc.get("product_tagline")) if mongo_doc else None
+    if not product_tagline and proj:
+        product_tagline = proj.product_tagline
+    product_tagline = product_tagline or ""
+
+    target_audience = (mongo_doc.get("targetAudience") or mongo_doc.get("target_audience")) if mongo_doc else None
+    if not target_audience and proj:
+        target_audience = proj.target_audience
+    target_audience = target_audience or ""
+
+    effective_proj_id = (mongo_doc.get("id") or mongo_doc.get("_id")) if mongo_doc else (proj.id if proj else project_id)
+
+    kit = None
+    if mongo_doc:
+        kit = (
+            mongo_doc.get("campaignKit")
+            or mongo_doc.get("campaign_kit")
+            or (mongo_doc.get("validationCampaign") or {}).get("campaignKit")
+            or (mongo_doc.get("validationCampaign") or {}).get("campaign_kit")
+            or (mongo_doc.get("metadataInfo") or {}).get("campaign_kit")
+            or (mongo_doc.get("metadata_info") or {}).get("campaign_kit")
+        )
+    if not kit and proj and proj.validation_campaign:
+        kit = proj.validation_campaign.campaign_kit
+    if not kit and proj and proj.metadata_info:
+        kit = proj.metadata_info.get("campaign_kit")
+    kit = dict(kit or {})
+
     announcement_post = kit.get("announcementPost") if isinstance(kit, dict) else ""
 
     from app.services.campaign_media import build_creator_channel_image_prompt, generate_campaign_social_image
     prompt = build_creator_channel_image_prompt(
-        creator_name=proj.creator_name or "Creator",
-        creator_handle=proj.creator_handle or "",
-        niche=proj.niche or "Tech",
-        product_name=proj.product_name or "New Software",
-        product_tagline=proj.product_tagline or "",
-        target_audience=proj.target_audience or "",
+        creator_name=creator_name,
+        creator_handle=creator_handle,
+        niche=niche,
+        product_name=product_name,
+        product_tagline=product_tagline,
+        target_audience=target_audience,
         announcement_post=announcement_post or "",
         user_prompt=body.prompt if body else None
     )
@@ -1665,24 +1773,18 @@ def generate_project_campaign_image(
             prompt,
             api_key=api_key,
             openai_api_key=openai_key,
-            creator_name=proj.creator_name,
-            creator_handle=proj.creator_handle,
-            creator_id=proj.creator_id,
-            niche=proj.niche,
-            product_name=proj.product_name,
-            project_id=proj.id,
+            creator_name=creator_name,
+            creator_handle=creator_handle,
+            creator_id=creator_id,
+            niche=niche,
+            product_name=product_name,
+            project_id=effective_proj_id,
             generated_by=caller
         )
     except Exception as e:
         logger.error(f"Image generation error: {e}")
         raise HTTPException(500, detail=f"Image generation failed: {str(e)}")
 
-    campaign = proj.validation_campaign
-    if not campaign:
-        campaign = ValidationCampaign(project_id=proj.id)
-        db.add(campaign)
-
-    kit = dict(campaign.campaign_kit or {})
     kit["postImageUrl"] = media_result["url"]
     kit["postImageDataUrl"] = media_result.get("data_url")
     kit["postImagePrompt"] = prompt
@@ -1718,17 +1820,8 @@ def generate_project_campaign_image(
             t["imageGeneratedAt"] = datetime.utcnow().isoformat()
     kit["postingSchedule"] = schedule
 
-    campaign.campaign_kit = kit
-    flag_modified(campaign, "campaign_kit")
-
-    meta = dict(proj.metadata_info or {})
-    meta["campaign_kit"] = kit
-
-    # Synchronize asset into project_files list partitioned by creator profile
-    cur_files = list(meta.get("project_files") or [])
     file_id = f"cld-{media_result.get('cloudinary_public_id') or media_result.get('filename')}"
-    cur_files = [f for f in cur_files if f.get("name") != "Campaign Announcement Graphic" and f.get("id") != file_id]
-    cur_files.append({
+    new_file_item = {
         "id": file_id,
         "public_id": media_result.get("cloudinary_public_id"),
         "name": "Campaign Announcement Graphic",
@@ -1742,18 +1835,58 @@ def generate_project_campaign_image(
         "folder": media_result.get("creator_folder"),
         "generatedBy": caller,
         "updatedAt": "Cloudinary CDN" if media_result.get("cloudinary_url") else "Local Storage"
-    })
-    meta["project_files"] = cur_files
-    proj.metadata_info = meta
-    flag_modified(proj, "metadata_info")
+    }
 
-    db.commit()
-    db.refresh(proj)
+    if mongo_doc:
+        mongo_doc["campaignKit"] = kit
+        mongo_doc["campaign_kit"] = kit
+        if "validationCampaign" in mongo_doc and isinstance(mongo_doc["validationCampaign"], dict):
+            mongo_doc["validationCampaign"]["campaignKit"] = kit
+            mongo_doc["validationCampaign"]["campaign_kit"] = kit
+        meta = dict(mongo_doc.get("metadataInfo") or mongo_doc.get("metadata_info") or {})
+        meta["campaign_kit"] = kit
+        cur_files = list(meta.get("project_files") or [])
+        cur_files = [f for f in cur_files if f.get("name") != "Campaign Announcement Graphic" and f.get("id") != file_id]
+        cur_files.append(new_file_item)
+        meta["project_files"] = cur_files
+        mongo_doc["metadataInfo"] = meta
+        mongo_doc["metadata_info"] = meta
+        _save_mongo_project(mongo_doc)
+
+        try:
+            from app.mongodb import get_collection
+            vc_coll = get_collection("validation_campaigns")
+            if vc_coll is not None:
+                vc_coll.update_one(
+                    {"$or": [{"project_id": effective_proj_id}, {"id": f"vc_{effective_proj_id}"}, {"id": effective_proj_id}, {"_id": effective_proj_id}]},
+                    {"$set": {"campaign_kit": kit, "campaignKit": kit, "updated_at": datetime.utcnow().isoformat()}},
+                    upsert=True
+                )
+        except Exception as err:
+            logger.debug(f"[MongoDB] validation_campaigns sync note: {err}")
+
+    if proj:
+        campaign = proj.validation_campaign
+        if not campaign:
+            campaign = ValidationCampaign(project_id=proj.id)
+            db.add(campaign)
+        campaign.campaign_kit = kit
+        flag_modified(campaign, "campaign_kit")
+        meta_sql = dict(proj.metadata_info or {})
+        meta_sql["campaign_kit"] = kit
+        cur_files_sql = list(meta_sql.get("project_files") or [])
+        cur_files_sql = [f for f in cur_files_sql if f.get("name") != "Campaign Announcement Graphic" and f.get("id") != file_id]
+        cur_files_sql.append(new_file_item)
+        meta_sql["project_files"] = cur_files_sql
+        proj.metadata_info = meta_sql
+        flag_modified(proj, "metadata_info")
+        db.commit()
+        db.refresh(proj)
 
     return {
         "success": True,
         "media": media_result,
-        "project": _format_project_response(proj)
+        "project": _format_any_project(mongo_doc=mongo_doc, db_proj=proj)
     }
 
 
@@ -1767,21 +1900,67 @@ def generate_project_campaign_video(
     db: Session = Depends(get_db)
 ):
     """Generate 60s campaign video teaser and store in Cloudinary under creator's profile folder."""
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    mongo_doc = _find_mongo_project(project_id)
+    proj = db.get(CoLaunchProject, project_id) if db else None
+    if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    kit = proj.validation_campaign.campaign_kit if proj.validation_campaign else {}
+    creator_name = (mongo_doc.get("creatorName") or mongo_doc.get("creator_name")) if mongo_doc else None
+    if not creator_name and proj:
+        creator_name = proj.creator_name
+    creator_name = creator_name or "Creator"
+
+    creator_handle = (mongo_doc.get("creatorHandle") or mongo_doc.get("creator_handle")) if mongo_doc else None
+    if not creator_handle and proj:
+        creator_handle = proj.creator_handle
+    creator_handle = creator_handle or ""
+
+    creator_id = (mongo_doc.get("creatorId") or mongo_doc.get("creator_id")) if mongo_doc else None
+    if not creator_id and proj:
+        creator_id = proj.creator_id
+    creator_id = creator_id or ""
+
+    niche = mongo_doc.get("niche") if mongo_doc else (proj.niche if proj else None)
+    niche = niche or "Tech"
+
+    product_name = (mongo_doc.get("productName") or mongo_doc.get("product_name")) if mongo_doc else None
+    if not product_name and proj:
+        product_name = proj.product_name
+    product_name = product_name or "Software Venture"
+
+    product_tagline = (mongo_doc.get("productTagline") or mongo_doc.get("product_tagline")) if mongo_doc else None
+    if not product_tagline and proj:
+        product_tagline = proj.product_tagline
+    product_tagline = product_tagline or ""
+
+    effective_proj_id = (mongo_doc.get("id") or mongo_doc.get("_id")) if mongo_doc else (proj.id if proj else project_id)
+
+    kit = None
+    if mongo_doc:
+        kit = (
+            mongo_doc.get("campaignKit")
+            or mongo_doc.get("campaign_kit")
+            or (mongo_doc.get("validationCampaign") or {}).get("campaignKit")
+            or (mongo_doc.get("validationCampaign") or {}).get("campaign_kit")
+            or (mongo_doc.get("metadataInfo") or {}).get("campaign_kit")
+            or (mongo_doc.get("metadata_info") or {}).get("campaign_kit")
+        )
+    if not kit and proj and proj.validation_campaign:
+        kit = proj.validation_campaign.campaign_kit
+    if not kit and proj and proj.metadata_info:
+        kit = proj.metadata_info.get("campaign_kit")
+    kit = dict(kit or {})
+
     video_script = kit.get("videoScript") if isinstance(kit, dict) else ""
     post_image_url = (body.postImageUrl if body and body.postImageUrl else None) or (kit.get("postImageUrl") if isinstance(kit, dict) else None)
 
     from app.services.campaign_media import build_creator_channel_video_prompt, generate_campaign_video
     prompt = build_creator_channel_video_prompt(
-        creator_name=proj.creator_name or "Creator",
-        creator_handle=proj.creator_handle or "",
-        niche=proj.niche or "Tech",
-        product_name=proj.product_name or "Software Venture",
-        product_tagline=proj.product_tagline or "",
+        creator_name=creator_name,
+        creator_handle=creator_handle,
+        niche=niche,
+        product_name=product_name,
+        product_tagline=product_tagline,
         video_script=video_script or "",
         user_prompt=body.prompt if body else None
     )
@@ -1795,32 +1974,26 @@ def generate_project_campaign_video(
             prompt,
             api_key=api_key,
             openai_api_key=openai_key,
-            creator_name=proj.creator_name,
-            creator_handle=proj.creator_handle,
-            creator_id=proj.creator_id,
-            product_name=proj.product_name,
-            niche=proj.niche,
+            creator_name=creator_name,
+            creator_handle=creator_handle,
+            creator_id=creator_id,
+            product_name=product_name,
+            niche=niche,
             post_image_url=post_image_url,
             video_script=video_script,
-            project_id=proj.id,
+            project_id=effective_proj_id,
             generated_by=caller
         )
     except Exception as e:
         logger.error(f"Video generation error: {e}")
         raise HTTPException(500, detail=f"Video generation failed: {str(e)}")
 
-    campaign = proj.validation_campaign
-    if not campaign:
-        campaign = ValidationCampaign(project_id=proj.id)
-        db.add(campaign)
-
-    kit = dict(campaign.campaign_kit or {})
     kit["videoUrl"] = media_result["url"]
     kit["videoPrompt"] = prompt
     kit["videoModel"] = media_result.get("model")
     kit["videoProvider"] = media_result.get("provider")
-    kit["cloudinaryVideoPublicId"] = media_result.get("cloudinary_public_id")
-    kit["cloudinaryVideoUrl"] = media_result.get("cloudinary_url")
+    kit["cloudinaryVideoPublicId"] = media_result.get("cloudinary_video_public_id") or media_result.get("cloudinary_public_id")
+    kit["cloudinaryVideoUrl"] = media_result.get("cloudinary_video_url") or media_result.get("cloudinary_url")
     kit["videoThumbnailUrl"] = media_result.get("thumbnail_url")
     kit["videoOptimizeUrl"] = media_result.get("optimize_url")
     kit["creatorFolder"] = media_result.get("creator_folder")
@@ -1855,17 +2028,8 @@ def generate_project_campaign_video(
             t.pop("videoGeneratedAt", None)
     kit["postingSchedule"] = schedule
 
-    campaign.campaign_kit = kit
-    flag_modified(campaign, "campaign_kit")
-
-    meta = dict(proj.metadata_info or {})
-    meta["campaign_kit"] = kit
-
-    # Synchronize video into project_files list partitioned by creator profile
-    cur_files = list(meta.get("project_files") or [])
     file_id = f"cld-{media_result.get('cloudinary_public_id') or media_result.get('filename')}"
-    cur_files = [f for f in cur_files if f.get("name") != "Campaign Launch Teaser Video" and f.get("id") != file_id]
-    cur_files.append({
+    new_video_file = {
         "id": file_id,
         "public_id": media_result.get("cloudinary_public_id"),
         "name": "Campaign Launch Teaser Video",
@@ -1879,18 +2043,58 @@ def generate_project_campaign_video(
         "folder": media_result.get("creator_folder"),
         "generatedBy": caller,
         "updatedAt": "Cloudinary CDN" if media_result.get("cloudinary_url") else "Local Storage"
-    })
-    meta["project_files"] = cur_files
-    proj.metadata_info = meta
-    flag_modified(proj, "metadata_info")
+    }
 
-    db.commit()
-    db.refresh(proj)
+    if mongo_doc:
+        mongo_doc["campaignKit"] = kit
+        mongo_doc["campaign_kit"] = kit
+        if "validationCampaign" in mongo_doc and isinstance(mongo_doc["validationCampaign"], dict):
+            mongo_doc["validationCampaign"]["campaignKit"] = kit
+            mongo_doc["validationCampaign"]["campaign_kit"] = kit
+        meta = dict(mongo_doc.get("metadataInfo") or mongo_doc.get("metadata_info") or {})
+        meta["campaign_kit"] = kit
+        cur_files = list(meta.get("project_files") or [])
+        cur_files = [f for f in cur_files if f.get("name") != "Campaign Launch Teaser Video" and f.get("id") != file_id]
+        cur_files.append(new_video_file)
+        meta["project_files"] = cur_files
+        mongo_doc["metadataInfo"] = meta
+        mongo_doc["metadata_info"] = meta
+        _save_mongo_project(mongo_doc)
+
+        try:
+            from app.mongodb import get_collection
+            vc_coll = get_collection("validation_campaigns")
+            if vc_coll is not None:
+                vc_coll.update_one(
+                    {"$or": [{"project_id": effective_proj_id}, {"id": f"vc_{effective_proj_id}"}, {"id": effective_proj_id}, {"_id": effective_proj_id}]},
+                    {"$set": {"campaign_kit": kit, "campaignKit": kit, "updated_at": datetime.utcnow().isoformat()}},
+                    upsert=True
+                )
+        except Exception as err:
+            logger.debug(f"[MongoDB] validation_campaigns sync note: {err}")
+
+    if proj:
+        campaign = proj.validation_campaign
+        if not campaign:
+            campaign = ValidationCampaign(project_id=proj.id)
+            db.add(campaign)
+        campaign.campaign_kit = kit
+        flag_modified(campaign, "campaign_kit")
+        meta_sql = dict(proj.metadata_info or {})
+        meta_sql["campaign_kit"] = kit
+        cur_files_sql = list(meta_sql.get("project_files") or [])
+        cur_files_sql = [f for f in cur_files_sql if f.get("name") != "Campaign Launch Teaser Video" and f.get("id") != file_id]
+        cur_files_sql.append(new_video_file)
+        meta_sql["project_files"] = cur_files_sql
+        proj.metadata_info = meta_sql
+        flag_modified(proj, "metadata_info")
+        db.commit()
+        db.refresh(proj)
 
     return {
         "success": True,
         "media": media_result,
-        "project": _format_project_response(proj)
+        "project": _format_any_project(mongo_doc=mongo_doc, db_proj=proj)
     }
 
 
@@ -2046,24 +2250,28 @@ async def start_campaign_simulation_endpoint(
     Sends Post 1, Post 2, Post 3, etc. spaced across the requested interval.
     """
     from app.services.autonomous_campaign_dispatcher import run_autonomous_campaign_simulation, get_simulation_status
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    mongo_doc = _find_mongo_project(project_id)
+    proj = db.get(CoLaunchProject, project_id) if db else None
+    if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
     raw_kit = (
-        (proj.validation_campaign.campaign_kit if proj.validation_campaign else None)
-        or (proj.metadata_info or {}).get("campaign_kit")
+        (mongo_doc.get("campaign_kit") or mongo_doc.get("campaignKit") or (mongo_doc.get("metadataInfo") or {}).get("campaign_kit") if mongo_doc else None)
+        or (proj.validation_campaign.campaign_kit if proj and proj.validation_campaign else None)
+        or (proj.metadata_info or {}).get("campaign_kit") if proj else {}
         or {}
     )
     auto_config = raw_kit.get("autonomousEmailDelivery") or {}
     recipient = (
         (body.recipientEmail if body and body.recipientEmail else None)
         or auto_config.get("recipientEmail")
+        or (mongo_doc.get("creatorEmail") or mongo_doc.get("creator_email") or mongo_doc.get("email") if mongo_doc else None)
         or getattr(proj, "creator_email", None)
         or getattr(proj, "email", None)
     )
     interval = (body.intervalSeconds if body and body.intervalSeconds else 42)
     total_posts = (body.totalPosts if body and body.totalPosts else None)
+    prod_name = (mongo_doc.get("productName") or mongo_doc.get("product_name") if mongo_doc else None) or getattr(proj, "product_name", "Venture")
 
     # Launch in background asyncio task
     asyncio.create_task(run_autonomous_campaign_simulation(
@@ -2075,7 +2283,7 @@ async def start_campaign_simulation_endpoint(
 
     return {
         "success": True,
-        "message": f"Autonomous campaign simulation started for {proj.product_name}. Delivering posts every {interval}s to {recipient}.",
+        "message": f"Autonomous campaign simulation started for {prod_name}. Delivering posts every {interval}s to {recipient}.",
         "status": get_simulation_status(project_id)
     }
 
@@ -2087,8 +2295,9 @@ def get_campaign_simulation_status_endpoint(
 ):
     """Fetches real-time status and delivery logs for active autonomous simulation."""
     from app.services.autonomous_campaign_dispatcher import get_simulation_status
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    mongo_doc = _find_mongo_project(project_id)
+    proj = db.get(CoLaunchProject, project_id) if db else None
+    if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
     return {
         "success": True,
@@ -2445,36 +2654,43 @@ def record_survey_response_universal(
 ):
     """
     Universal public survey response recorder called by /survey/:slug form or simulation.
-    Persists respondent answers, increments question response counts, updates telemetry, and logs activity in DB.
+    Persists respondent answers, increments question response counts, updates telemetry, and logs activity exclusively in MongoDB Atlas.
     """
-    proj = None
-    target_id = project_id or body.projectId
-    if target_id:
-        proj = db.get(CoLaunchProject, target_id)
-    
-    if not proj and body.slug:
-        clean_slug = body.slug.lower().strip()
-        projects = db.query(CoLaunchProject).all()
-        for p in projects:
-            p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
-            c_slug = (p.creator_handle or "").lower().replace("@", "")
-            if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
-                proj = p
-                break
-    
-    if not proj:
-        # Fallback to the latest active project
-        proj = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).first()
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    vc_coll = get_collection("validation_campaigns")
 
-    if not proj:
+    target_id = project_id or body.projectId
+    doc = None
+    if coll is not None:
+        if target_id:
+            clean_target = target_id.replace("@", "").lower().strip()
+            doc = coll.find_one({"$or": [
+                {"_id": target_id}, {"id": target_id},
+                {"creator_id": target_id}, {"creatorId": target_id},
+                {"creator_handle": clean_target}, {"creatorHandle": clean_target},
+            ]})
+        if not doc and body.slug:
+            clean_slug = body.slug.lower().strip()
+            slug_regex = clean_slug.replace("-", "[- ]")
+            doc = coll.find_one({"$or": [
+                {"id": body.slug}, {"slug": clean_slug},
+                {"creator_handle": clean_slug}, {"creatorHandle": clean_slug},
+                {"product_name": {"$regex": slug_regex, "$options": "i"}},
+                {"productName": {"$regex": slug_regex, "$options": "i"}},
+            ]})
+        if not doc:
+            doc = coll.find_one()
+
+    if not doc:
         raise HTTPException(404, "No active co-launch project found to record survey response")
 
-    campaign = proj.validation_campaign
-    if not campaign:
-        campaign = ValidationCampaign(project_id=proj.id)
-        db.add(campaign)
+    pid = str(doc.get("_id") or doc.get("id"))
+    vc_doc = vc_coll.find_one({"$or": [{"_id": pid}, {"project_id": pid}]}) if vc_coll is not None else None
 
-    res_survey = dict(campaign.research_survey or {})
+    campaign_kit = dict(doc.get("campaignKit") or doc.get("campaign_kit") or (vc_doc.get("campaign_kit") if vc_doc else None) or {})
+    res_survey = dict((vc_doc.get("research_survey") if vc_doc else None) or campaign_kit.get("research_survey") or (doc.get("metadataInfo") or {}).get("research_survey") or {})
+
     res_id = f"sr_{int(datetime.utcnow().timestamp()*1000)}"
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -2507,17 +2723,16 @@ def record_survey_response_universal(
                 q["responseCount"] = int(q.get("responseCount") or 0) + 1
         res_survey["questions"] = cur_questions
 
-    campaign.research_survey = res_survey
-    flag_modified(campaign, "research_survey")
+    campaign_kit["research_survey"] = res_survey
+    doc["campaignKit"] = campaign_kit
+    doc["campaign_kit"] = campaign_kit
 
-    # Also keep in proj.metadata_info
-    meta = dict(proj.metadata_info or {})
+    meta = dict(doc.get("metadataInfo") or doc.get("metadata_info") or {})
     meta["survey_responses"] = cur_responses
-    
-    # Telemetry signups
-    telemetry = proj.telemetry
-    if telemetry:
-        telemetry.signups = max(int(telemetry.signups or 0), len(cur_responses))
+
+    telemetry = dict(doc.get("telemetry") or {})
+    telemetry["signups"] = max(int(telemetry.get("signups") or 0), len(cur_responses))
+    doc["telemetry"] = telemetry
 
     # Activity Log
     act_logs = list(meta.get("activity_logs") or [])
@@ -2530,32 +2745,45 @@ def record_survey_response_universal(
     }
     act_logs.insert(0, act_item)
     meta["activity_logs"] = act_logs[:50]
-    proj.metadata_info = meta
-    flag_modified(proj, "metadata_info")
+    doc["metadataInfo"] = meta
+    doc["metadata_info"] = meta
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    if coll is not None:
+        coll.replace_one({"_id": doc.get("_id", pid)}, doc, upsert=True)
+
+    if vc_coll is not None:
+        vc_payload = {
+            "_id": pid,
+            "project_id": pid,
+            "research_survey": res_survey,
+            "campaign_kit": campaign_kit,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        vc_coll.replace_one({"_id": pid}, vc_payload, upsert=True)
+
+    return _normalize_mongo_project_dict(doc)
 
 
 @router.delete("/{project_id}/survey-response/{response_id}")
 def delete_survey_response(project_id: str, response_id: str, db: Session = Depends(get_db)):
-    """Delete a single survey response and recalculate question response counts."""
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    """Delete a single survey response and recalculate question response counts in MongoDB Atlas."""
+    doc = _find_mongo_project(project_id)
+    if not doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
-    
-    campaign = proj.validation_campaign
-    if not campaign:
-        raise HTTPException(404, "No validation campaign found")
 
-    res_survey = dict(campaign.research_survey or {})
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    vc_coll = get_collection("validation_campaigns")
+    pid = str(doc.get("_id") or doc.get("id"))
+
+    vc_doc = vc_coll.find_one({"$or": [{"_id": pid}, {"project_id": pid}]}) if vc_coll is not None else None
+    campaign_kit = dict(doc.get("campaignKit") or doc.get("campaign_kit") or (vc_doc.get("campaign_kit") if vc_doc else None) or {})
+    res_survey = dict((vc_doc.get("research_survey") if vc_doc else None) or campaign_kit.get("research_survey") or (doc.get("metadataInfo") or {}).get("research_survey") or {})
+
     cur_responses = list(res_survey.get("responses") or [])
-    
     new_responses = [r for r in cur_responses if r.get("id") != response_id]
     res_survey["responses"] = new_responses
 
-    # Recalculate question response counts based on remaining responses
     cur_questions = list(res_survey.get("questions") or [])
     if cur_questions:
         for q in cur_questions:
@@ -2570,35 +2798,50 @@ def delete_survey_response(project_id: str, response_id: str, db: Session = Depe
             q["responseCount"] = count
         res_survey["questions"] = cur_questions
 
-    campaign.research_survey = res_survey
-    flag_modified(campaign, "research_survey")
+    campaign_kit["research_survey"] = res_survey
+    doc["campaignKit"] = campaign_kit
+    doc["campaign_kit"] = campaign_kit
 
-    meta = dict(proj.metadata_info or {})
+    meta = dict(doc.get("metadataInfo") or doc.get("metadata_info") or {})
     meta["survey_responses"] = new_responses
-    proj.metadata_info = meta
-    flag_modified(proj, "metadata_info")
 
-    telemetry = proj.telemetry
-    if telemetry:
-        telemetry.signups = len(new_responses)
+    telemetry = dict(doc.get("telemetry") or {})
+    telemetry["signups"] = len(new_responses)
+    doc["telemetry"] = telemetry
+    doc["metadataInfo"] = meta
+    doc["metadata_info"] = meta
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    if coll is not None:
+        coll.replace_one({"_id": doc.get("_id", pid)}, doc, upsert=True)
+
+    if vc_coll is not None:
+        vc_coll.replace_one({"_id": pid}, {
+            "_id": pid,
+            "project_id": pid,
+            "research_survey": res_survey,
+            "campaign_kit": campaign_kit,
+            "updated_at": datetime.utcnow().isoformat()
+        }, upsert=True)
+
+    return _normalize_mongo_project_dict(doc)
 
 
 @router.delete("/{project_id}/survey-responses")
 def clear_all_survey_responses(project_id: str, db: Session = Depends(get_db)):
-    """Clear all survey responses and reset question response counts to 0."""
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    """Clear all survey responses and reset question response counts to 0 in MongoDB Atlas."""
+    doc = _find_mongo_project(project_id)
+    if not doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
-    
-    campaign = proj.validation_campaign
-    if not campaign:
-        raise HTTPException(404, "No validation campaign found")
 
-    res_survey = dict(campaign.research_survey or {})
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    vc_coll = get_collection("validation_campaigns")
+    pid = str(doc.get("_id") or doc.get("id"))
+
+    vc_doc = vc_coll.find_one({"$or": [{"_id": pid}, {"project_id": pid}]}) if vc_coll is not None else None
+    campaign_kit = dict(doc.get("campaignKit") or doc.get("campaign_kit") or (vc_doc.get("campaign_kit") if vc_doc else None) or {})
+    res_survey = dict((vc_doc.get("research_survey") if vc_doc else None) or campaign_kit.get("research_survey") or (doc.get("metadataInfo") or {}).get("research_survey") or {})
+
     res_survey["responses"] = []
     res_survey["analysis"] = None
 
@@ -2608,35 +2851,44 @@ def clear_all_survey_responses(project_id: str, db: Session = Depends(get_db)):
             q["responseCount"] = 0
         res_survey["questions"] = cur_questions
 
-    campaign.research_survey = res_survey
-    flag_modified(campaign, "research_survey")
+    campaign_kit["research_survey"] = res_survey
+    doc["campaignKit"] = campaign_kit
+    doc["campaign_kit"] = campaign_kit
 
-    meta = dict(proj.metadata_info or {})
+    meta = dict(doc.get("metadataInfo") or doc.get("metadata_info") or {})
     meta["survey_responses"] = []
     meta["survey_analysis"] = None
-    proj.metadata_info = meta
-    flag_modified(proj, "metadata_info")
 
-    telemetry = proj.telemetry
-    if telemetry:
-        telemetry.signups = 0
+    telemetry = dict(doc.get("telemetry") or {})
+    telemetry["signups"] = 0
+    doc["telemetry"] = telemetry
+    doc["metadataInfo"] = meta
+    doc["metadata_info"] = meta
 
-    db.commit()
-    db.refresh(proj)
-    return _format_project_response(proj)
+    if coll is not None:
+        coll.replace_one({"_id": doc.get("_id", pid)}, doc, upsert=True)
+
+    if vc_coll is not None:
+        vc_coll.replace_one({"_id": pid}, {
+            "_id": pid,
+            "project_id": pid,
+            "research_survey": res_survey,
+            "campaign_kit": campaign_kit,
+            "updated_at": datetime.utcnow().isoformat()
+        }, upsert=True)
+
+    return _normalize_mongo_project_dict(doc)
 
 
 @router.post("/{project_id}/log-activity")
 def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = Depends(get_db)):
     """Record an audit trail action conducted by the admin or AI agent."""
-    proj = db.get(CoLaunchProject, project_id)
-    if not proj:
+    mongo_doc = _find_mongo_project(project_id)
+    proj = db.get(CoLaunchProject, project_id) if db else None
+    if not proj and not mongo_doc:
         raise HTTPException(404, f"Project '{project_id}' not found")
 
-    meta = dict(proj.metadata_info or {})
-    act_logs = list(meta.get("activity_logs") or [])
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
     act_item = {
         "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
         "action": body.action,
@@ -2646,13 +2898,30 @@ def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = 
         "phase": body.phase or 1,
         "timestamp": timestamp_str
     }
-    act_logs.insert(0, act_item)
-    meta["activity_logs"] = act_logs[:50]
-    proj.metadata_info = meta
 
-    db.commit()
-    db.refresh(proj)
-    return {"status": "success", "activity": act_item, "activityLogs": meta["activity_logs"]}
+    act_logs = []
+    if mongo_doc:
+        meta_m = dict(mongo_doc.get("metadataInfo") or mongo_doc.get("metadata_info") or {})
+        act_logs = list(meta_m.get("activity_logs") or [])
+        act_logs.insert(0, act_item)
+        meta_m["activity_logs"] = act_logs[:50]
+        mongo_doc["metadataInfo"] = meta_m
+        mongo_doc["metadata_info"] = meta_m
+        _save_mongo_project(mongo_doc)
+
+    if proj:
+        meta_sql = dict(proj.metadata_info or {})
+        act_logs_sql = list(meta_sql.get("activity_logs") or [])
+        act_logs_sql.insert(0, act_item)
+        meta_sql["activity_logs"] = act_logs_sql[:50]
+        proj.metadata_info = meta_sql
+        flag_modified(proj, "metadata_info")
+        db.commit()
+        db.refresh(proj)
+        if not act_logs:
+            act_logs = act_logs_sql
+
+    return {"status": "success", "activity": act_item, "activityLogs": act_logs}
 
 
 @router.get("/by-slug/{slug}")
@@ -2691,18 +2960,7 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.debug(f"[MongoDB] get_project_by_slug notice: {e}")
 
-    # 2. In-memory scratchpad lookup
-    projects = db.query(CoLaunchProject).order_by(CoLaunchProject.created_at.desc()).all()
-    for p in projects:
-        p_slug = (p.product_name or "").lower().replace(" ", "-").replace("'", "")
-        c_slug = (p.creator_handle or "").lower().replace("@", "")
-        if clean_slug in p_slug or p_slug in clean_slug or clean_slug == c_slug or clean_slug == p.id:
-            return _format_project_response(p)
-    
-    if projects:
-        return _format_project_response(projects[0])
-
-    raise HTTPException(404, f"No project found matching slug '{slug}'")
+    raise HTTPException(404, f"No project found matching slug '{slug}' in MongoDB Atlas")
 
 
 @router.delete("")

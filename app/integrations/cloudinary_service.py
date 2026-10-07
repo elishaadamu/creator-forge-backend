@@ -92,6 +92,10 @@ def upload_media_to_cloudinary(
         if kwargs:
             upload_params.update(kwargs)
 
+        if isinstance(file_data, (bytes, bytearray)):
+            import io
+            file_data = io.BytesIO(file_data)
+
         result = cloudinary.uploader.upload(file_data, **upload_params)
         
         secure_url = result.get("secure_url")

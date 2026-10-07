@@ -529,13 +529,30 @@ async def run_autonomous_campaign_simulation(
 
         db = SessionLocal()
         try:
+            mongo_proj = None
+            try:
+                from app.mongodb import get_collection
+                p_coll = get_collection("co_launch_projects")
+                if p_coll is not None:
+                    mongo_proj = p_coll.find_one({"$or": [
+                        {"_id": project_id},
+                        {"id": project_id},
+                        {"creator_id": project_id},
+                        {"creatorId": project_id},
+                        {"creator_handle": project_id.replace("@", "").lower().strip()},
+                        {"creatorHandle": project_id.replace("@", "").lower().strip()}
+                    ]})
+            except Exception:
+                pass
+
             proj = db.get(CoLaunchProject, project_id)
-            if not proj:
+            if not proj and not mongo_proj:
                 raise ValueError(f"Project '{project_id}' not found in database")
 
             raw_kit = (
-                (proj.validation_campaign.campaign_kit if proj.validation_campaign else None)
-                or (proj.metadata_info or {}).get("campaign_kit")
+                (mongo_proj.get("campaign_kit") or mongo_proj.get("campaignKit") or (mongo_proj.get("metadataInfo") or {}).get("campaign_kit") if mongo_proj else None)
+                or (proj.validation_campaign.campaign_kit if proj and proj.validation_campaign else None)
+                or (proj.metadata_info or {}).get("campaign_kit") if proj else {}
                 or {}
             )
             schedule = list(raw_kit.get("postingSchedule") or [])
@@ -772,20 +789,6 @@ async def start_campaign_schedule_loop(check_interval_seconds: int = 60):
                             logger.debug(f"[Autonomous Scheduler] Mongo project {pid} eval notice: {m_err}")
             except Exception as mongo_err:
                 logger.debug(f"[Autonomous Scheduler] Mongo loop notice: {mongo_err}")
-
-            # 2. Secondary fallback: Evaluate projects in SQLite if not already evaluated in Mongo
-            from app.database import SessionLocal
-            db = SessionLocal()
-            try:
-                projects = db.query(CoLaunchProject).all()
-                for proj in projects:
-                    if proj.id not in mongo_evaluated_ids:
-                        try:
-                            _evaluate_project_autonomous_delivery(db, proj)
-                        except Exception as pe:
-                            logger.debug(f"[Autonomous Scheduler] SQLite project {proj.id} eval notice: {pe}")
-            finally:
-                db.close()
         except Exception as e:
             logger.error(f"[Autonomous Scheduler] Loop tick error: {e}")
 
