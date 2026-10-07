@@ -667,15 +667,42 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         d["product_name"] = p_name
     d["slug"] = (d.get("slug") or p_name or "product").lower().replace(" ", "-").replace("'", "")
 
-    # 4. Synchronize & format pricing string
-    sel_c = d.get("selectedConcept") or d.get("selected_concept")
+    # 4. Synchronize & format pricing string from creator's selected concept
+    sel_c = (
+        d.get("selectedConcept") or
+        d.get("selected_concept") or
+        (d.get("metadataInfo") or {}).get("selectedConcept") or
+        (d.get("metadata_info") or {}).get("selected_concept")
+    )
+    if not sel_c and isinstance(d.get("concepts"), list):
+        sel_c = next((c for c in d["concepts"] if isinstance(c, dict) and c.get("selected")), None)
+        if not sel_c and len(d["concepts"]) > 0 and isinstance(d["concepts"][0], dict):
+            sel_c = d["concepts"][0]
+
     raw_p = str(d.get("pricing") or "").strip()
     if isinstance(sel_c, dict):
         c_pricing = str(sel_c.get("pricing") or "").strip()
-        if c_pricing and (not raw_p or raw_p == "$29/mo Starter • $79/mo Pro"):
+        if c_pricing:
             raw_p = c_pricing
-        elif not c_pricing and raw_p:
+        elif raw_p:
             sel_c["pricing"] = raw_p
+        
+        # Synchronize concept details into top-level project fields
+        if sel_c.get("name") and not d.get("productName"):
+            d["productName"] = sel_c["name"]
+            d["product_name"] = sel_c["name"]
+        if sel_c.get("tagline") and not d.get("productTagline"):
+            d["productTagline"] = sel_c["tagline"]
+            d["product_tagline"] = sel_c["tagline"]
+        if sel_c.get("customer") and not d.get("targetAudience"):
+            d["targetAudience"] = sel_c["customer"]
+            d["target_audience"] = sel_c["customer"]
+            d["customer"] = sel_c["customer"]
+        if sel_c.get("problem") and not d.get("problem"):
+            d["problem"] = sel_c["problem"]
+        if sel_c.get("keyFeatures") and not d.get("keyFeatures"):
+            d["keyFeatures"] = sel_c["keyFeatures"]
+
         d["selectedConcept"] = sel_c
         d["selected_concept"] = sel_c
 
@@ -2926,8 +2953,10 @@ def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = 
 
 @router.get("/by-slug/{slug}")
 def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
-    """Lookup active co-launch project by slug or creator handle from MongoDB."""
+    """Lookup active co-launch project by slug, product name, or creator handle from MongoDB Atlas."""
+    import re
     clean_slug = slug.lower().strip()
+    alpha_slug = re.sub(r"[^a-zA-Z0-9]", "", clean_slug)
 
     # 1. Prioritize MongoDB co_launch_projects
     try:
@@ -2935,21 +2964,46 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
         coll = get_collection("co_launch_projects")
         if coll is not None:
             slug_regex = clean_slug.replace("-", "[- ]")
-            doc = coll.find_one({"$or": [
+            query_conditions = [
                 {"id": slug},
+                {"id": clean_slug},
                 {"slug": clean_slug},
                 {"creator_handle": clean_slug},
                 {"creator_handle": f"@{clean_slug}"},
                 {"creatorHandle": clean_slug},
                 {"creatorHandle": f"@{clean_slug}"},
-                {"creator_handle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
-                {"creatorHandle": {"$regex": f"^{clean_slug}$", "$options": "i"}},
+                {"creator_handle": {"$regex": f"^{re.escape(clean_slug)}$", "$options": "i"}},
+                {"creatorHandle": {"$regex": f"^{re.escape(clean_slug)}$", "$options": "i"}},
                 {"product_name": {"$regex": slug_regex, "$options": "i"}},
                 {"productName": {"$regex": slug_regex, "$options": "i"}},
-                {"title": {"$regex": slug_regex, "$options": "i"}}
-            ]})
+                {"title": {"$regex": slug_regex, "$options": "i"}},
+            ]
+            if alpha_slug:
+                query_conditions.extend([
+                    {"product_name": {"$regex": alpha_slug, "$options": "i"}},
+                    {"productName": {"$regex": alpha_slug, "$options": "i"}},
+                    {"title": {"$regex": alpha_slug, "$options": "i"}},
+                    {"slug": {"$regex": alpha_slug, "$options": "i"}},
+                ])
+
+            doc = coll.find_one({"$or": query_conditions})
+
+            # If still not found by direct query, perform in-memory normalized comparison across all documents
+            if not doc and alpha_slug:
+                all_docs = list(coll.find({}))
+                for cand in all_docs:
+                    c_slug = re.sub(r"[^a-zA-Z0-9]", "", str(cand.get("slug") or "")).lower()
+                    c_name = re.sub(r"[^a-zA-Z0-9]", "", str(cand.get("productName") or cand.get("product_name") or cand.get("title") or "")).lower()
+                    c_handle = re.sub(r"[^a-zA-Z0-9]", "", str(cand.get("creatorHandle") or cand.get("creator_handle") or "")).lower()
+                    c_id = str(cand.get("id") or "").lower()
+                    if alpha_slug in (c_slug, c_name, c_handle, c_id) or (c_name and alpha_slug in c_name) or (c_slug and alpha_slug in c_slug):
+                        doc = cand
+                        break
+
+            # Fallback to first project if available
             if not doc:
                 doc = coll.find_one()
+
             if doc:
                 ws_coll = get_collection("workflow_states")
                 ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
@@ -2959,6 +3013,20 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
                 return _normalize_mongo_project_dict(doc, def_fee)
     except Exception as e:
         logger.debug(f"[MongoDB] get_project_by_slug notice: {e}")
+
+    # 2. Secondary fallback: SQLite session
+    try:
+        sql_proj = db.query(CoLaunchProject).filter(
+            (CoLaunchProject.id == slug) |
+            (CoLaunchProject.creator_handle.ilike(f"%{clean_slug}%")) |
+            (CoLaunchProject.product_name.ilike(f"%{clean_slug}%"))
+        ).first()
+        if not sql_proj:
+            sql_proj = db.query(CoLaunchProject).first()
+        if sql_proj:
+            return _format_project_response(sql_proj)
+    except Exception as e:
+        logger.debug(f"[SQLite] get_project_by_slug notice: {e}")
 
     raise HTTPException(404, f"No project found matching slug '{slug}' in MongoDB Atlas")
 
