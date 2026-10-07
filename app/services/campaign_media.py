@@ -61,7 +61,7 @@ def _get_live_env_gemini_key() -> str:
     key = os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")
     if key and len(key.strip()) > 10:
         return key.strip().strip('"\'')
-    env_file = BASE_STATIC_DIR.parent / ".env"
+    env_file = BASE_DIR / ".env"
     if env_file.exists():
         try:
             for line in env_file.read_text(encoding="utf-8-sig").splitlines():
@@ -305,11 +305,17 @@ def _create_cinematic_mp4_teaser(
     base_img = None
     if base_image_url:
         try:
-            rel = base_image_url.replace("/static/", "").lstrip("/")
-            local_path = BASE_STATIC_DIR / rel
-            if local_path.exists():
-                loaded = Image.open(local_path).convert("RGB")
+            if base_image_url.startswith("data:image"):
+                b64_part = base_image_url.split(",", 1)[1] if "," in base_image_url else base_image_url
+                import io
+                loaded = Image.open(io.BytesIO(base64.b64decode(b64_part))).convert("RGB")
                 base_img = loaded.resize((w, h), Image.Resampling.BILINEAR)
+            elif base_image_url.startswith("http://") or base_image_url.startswith("https://"):
+                import httpx, io
+                resp = httpx.get(base_image_url, timeout=10.0)
+                if resp.status_code == 200:
+                    loaded = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                    base_img = loaded.resize((w, h), Image.Resampling.BILINEAR)
         except Exception as e_img:
             logger.warning(f"Could not load base image for teaser video: {e_img}")
 
@@ -619,7 +625,7 @@ def generate_campaign_video(
                     dest_temp = Path(temp_f.name)
                     temp_f.close()
                     try:
-                        genai_client.files.download(file=generated_video.video, destination=str(dest_temp))
+                        genai_client.files.download(file=gen_videos[0].video, destination=str(dest_temp))
                         if dest_temp.exists() and dest_temp.stat().st_size > 0:
                             video_bytes = dest_temp.read_bytes()
                             model_used = "veo-3.1-generate-preview"
@@ -655,6 +661,7 @@ def generate_campaign_video(
     clean_product = re.sub(r'[^a-zA-Z0-9_-]', '_', (product_name or "launch")).strip('_').lower() or "launch"
     cld_folder = f"creator_forge/creators/{creator_slug}/campaigns"
     cld_video_id = f"{creator_slug}_{clean_product}_video_{int(time.time())}"
+    filename = f"{cld_video_id}.mp4"
 
     tags = [
         f"creator:{creator_slug}",
@@ -693,6 +700,7 @@ def generate_campaign_video(
     cld_public_id_saved = cld_res.get("public_id")
     optimize_url = cld_res.get("optimize_url")
     thumbnail_url = cld_res.get("thumbnail_url")
+    is_cloudinary = True
     logger.info(f"☁️ Successfully uploaded campaign video to Cloudinary under creator folder '{cld_folder}': {final_video_url}")
 
     import gc
@@ -701,15 +709,17 @@ def generate_campaign_video(
     return {
         "url": final_video_url,
         "secure_url": final_video_url,
-        "cloudinary_url": final_video_url if is_cloudinary else None,
+        "cloudinary_url": final_video_url,
+        "cloudinary_video_url": final_video_url,
         "cloudinary_public_id": cld_public_id_saved,
+        "cloudinary_video_public_id": cld_public_id_saved,
         "optimize_url": optimize_url or final_video_url,
-        "thumbnail_url": thumbnail_url,
+        "thumbnail_url": thumbnail_url or final_video_url,
         "creator_folder": cld_folder,
         "creator_slug": creator_slug,
         "is_cloudinary": is_cloudinary,
         "filename": filename,
         "prompt": prompt,
         "model": model_used,
-        "provider": "ai"
+        "provider": provider_used
     }
