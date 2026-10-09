@@ -181,3 +181,37 @@ async def instagram_callback(
     
     return RedirectResponse(f"{frontend_url}?tab=accounts&ig_connected=true")
 
+
+from pydantic import BaseModel
+
+class LaunchLoginRequest(BaseModel):
+    email: str
+    password: str
+
+@router.post("/launch-login")
+def launch_login(payload: LaunchLoginRequest):
+    """
+    Validate operator credentials for /launch and internal administration routes.
+    Restricted to authorized operator email with 1-hour session duration.
+    """
+    email_clean = (payload.email or "").strip().lower()
+    password_clean = payload.password or ""
+
+    if email_clean == "creatorforgeweb@gmail.com" and password_clean == "Upworkproject":
+        import time, uuid
+        token = f"forge_op_{uuid.uuid4().hex}"
+        return {
+            "status": "success",
+            "message": "Operator authenticated successfully",
+            "token": token,
+            "user": {
+                "email": "creatorforgeweb@gmail.com",
+                "name": "Operator Admin",
+                "role": "operator_admin"
+            },
+            "authenticated_at": int(time.time() * 1000),
+            "expires_in_seconds": 3600
+        }
+
+    raise HTTPException(status_code=401, detail="Invalid operator credentials. Access restricted.")
+
