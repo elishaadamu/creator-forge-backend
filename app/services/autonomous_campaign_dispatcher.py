@@ -41,7 +41,8 @@ def format_daily_post_kit_email_html(
 ) -> str:
     """
     Renders an executive, ready-to-publish Daily Post Kit HTML email.
-    Designed for 1-tap mobile/desktop copying and direct asset downloading.
+    Crafted with luxury modern aesthetics, responsive layout, clear CTAs,
+    and 100% email client deliverability (Gmail, Apple Mail, Outlook).
     """
     c_name = creator_name or "Creator"
     handle = f"@{creator_handle.lstrip('@')}" if creator_handle else ""
@@ -64,14 +65,17 @@ def format_daily_post_kit_email_html(
             full_img_url = f"{base_domain.rstrip('/')}/{image_url.lstrip('/')}"
 
         asset_preview_html += f"""
-        <div style="margin: 20px 0; text-align: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; overflow: hidden;">
-          <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #64748b; margin: 0 0 12px 0; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">📸 Visual Post Graphic Preview</p>
-          <img src="{full_img_url}" alt="Campaign Post Graphic" style="max-width: 100%; height: auto; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06); display: inline-block;" />
+        <div style="margin: 22px 0 16px 0; background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 16px; text-align: center; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 4px;">
+            <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">High-Res Campaign Visual</span>
+            <span style="font-size: 10px; background: #1e293b; color: #38bdf8; padding: 2px 8px; border-radius: 6px; font-weight: 700; font-family: ui-monospace, monospace;">PNG • Ready to Post</span>
+          </div>
+          <img src="{full_img_url}" alt="Campaign Post Graphic" style="max-width: 100%; height: auto; border-radius: 10px; border: 1px solid rgba(255,255,255,0.08); display: inline-block;" />
         </div>
         """
         asset_buttons_html += f"""
-        <a href="{full_img_url}" download="post_graphic_{day_num}.png" target="_blank" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: 700; font-size: 13px; border-radius: 10px; margin: 6px 4px; box-shadow: 0 2px 6px rgba(37,99,235,0.25);">
-          📥 Download Image (PNG)
+        <a href="{full_img_url}" download="post_graphic_{day_num}.png" target="_blank" style="display: inline-block; background: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 22px; font-weight: 700; font-size: 13px; border-radius: 10px; margin: 4px 4px; box-shadow: 0 2px 8px rgba(2,132,199,0.25); text-align: center; letter-spacing: 0.2px;">
+          Download High-Res Graphic (PNG)
         </a>
         """
 
@@ -82,8 +86,8 @@ def format_daily_post_kit_email_html(
             full_vid_url = f"{base_domain.rstrip('/')}/{video_url.lstrip('/')}"
 
         asset_buttons_html += f"""
-        <a href="{full_vid_url}" download="campaign_video_day_{day_num}.mp4" target="_blank" style="display: inline-block; background: #059669; color: #ffffff; text-decoration: none; padding: 12px 24px; font-weight: 700; font-size: 13px; border-radius: 10px; margin: 6px 4px; box-shadow: 0 2px 6px rgba(5,150,105,0.25);">
-          🎬 Download Video Teaser (MP4)
+        <a href="{full_vid_url}" download="campaign_video_day_{day_num}.mp4" target="_blank" style="display: inline-block; background: #059669; color: #ffffff; text-decoration: none; padding: 12px 22px; font-weight: 700; font-size: 13px; border-radius: 10px; margin: 4px 4px; box-shadow: 0 2px 8px rgba(5,150,105,0.25); text-align: center; letter-spacing: 0.2px;">
+          Download Video Teaser (MP4)
         </a>
         """
 
@@ -92,30 +96,36 @@ def format_daily_post_kit_email_html(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Day {day_num} Post Kit: {title}</title>
+  <title>Day {day_num} Campaign Post Kit: {title}</title>
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 28px 12px;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); overflow: hidden;">
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #0f172a; margin: 0; padding: 32px 12px;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 620px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.04), 0 0 1px 1px rgba(0, 0, 0, 0.02); overflow: hidden;">
     
-    <!-- Top Accent Bar -->
+    <!-- Top Accent Bar (Obsidian with Emerald Gradient Accent) -->
     <tr>
-      <td height="4" style="background: linear-gradient(90deg, #2563eb 0%, #10b981 100%); line-height: 4px; font-size: 4px;">&nbsp;</td>
+      <td height="4" style="background: linear-gradient(90deg, #0284c7 0%, #10b981 50%, #6366f1 100%); line-height: 4px; font-size: 4px;">&nbsp;</td>
     </tr>
 
-    <!-- Top Header Banner -->
+    <!-- Header Block -->
     <tr>
-      <td style="padding: 26px 30px 20px 30px; background-color: #ffffff; border-bottom: 1px solid #f1f5f9;">
+      <td style="padding: 28px 32px 20px 32px; background-color: #ffffff; border-bottom: 1px solid #f1f5f9;">
         <table width="100%" border="0" cellspacing="0" cellpadding="0">
           <tr>
             <td>
-              <span style="display: inline-block; background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; padding: 4px 12px; border-radius: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-                🚀 DAY {day_num} POST KIT • POST {day_num}
-              </span>
-              <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 12px 0 6px 0; line-height: 1.3;">
+              <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;">
+                <span style="display: inline-block; background-color: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.9px; padding: 4px 12px; border-radius: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                  DAY {day_num} CO-LAUNCH ASSET • {ch}
+                </span>
+                <span style="font-size: 11px; color: #64748b; font-weight: 600; font-family: ui-monospace, monospace;">
+                  Milestone {milestone_num}
+                </span>
+              </div>
+              
+              <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 8px 0; line-height: 1.35; letter-spacing: -0.3px;">
                 {title}
               </h1>
-              <p style="color: #64748b; font-size: 13px; margin: 0;">
-                Co-Launch Venture: <strong style="color: #2563eb;">{p_name}</strong> with {c_name} <span style="color: #94a3b8;">{handle}</span>
+              <p style="color: #64748b; font-size: 13px; margin: 0; line-height: 1.5;">
+                Co-Launch Venture: <strong style="color: #0f172a;">{p_name}</strong> with {c_name} <span style="color: #0284c7; font-weight: 600;">{handle}</span>
               </p>
             </td>
           </tr>
@@ -123,55 +133,58 @@ def format_daily_post_kit_email_html(
       </td>
     </tr>
 
-    <!-- Main Content -->
+    <!-- Main Body Area -->
     <tr>
-      <td style="padding: 24px 30px;">
+      <td style="padding: 24px 32px;">
         
-        <!-- Quick Guidance Box -->
-        <div style="background-color: #f8fafc; border-radius: 12px; padding: 16px 20px; margin-bottom: 22px; border: 1px solid #e2e8f0; border-left: 4px solid #2563eb;">
+        <!-- Quick Guidance Pill Box -->
+        <div style="background-color: #f8fafc; border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; border: 1px solid #e2e8f0; border-left: 4px solid #0284c7;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
-              <td style="font-size: 13px; color: #475569; line-height: 1.6;">
-                <strong style="color: #0f172a;">Target Platform:</strong> {ch}<br>
-                <strong style="color: #0f172a;">Recommended Post Time:</strong> {rec_time}<br>
-                <strong style="color: #0f172a;">Action:</strong> Copy caption below, download attached visual asset, and publish!
+              <td style="font-size: 13px; color: #334155; line-height: 1.65;">
+                <div style="margin-bottom: 4px;"><strong style="color: #0f172a;">Target Channel:</strong> <span style="color: #0284c7; font-weight: 700;">{ch}</span></div>
+                <div style="margin-bottom: 4px;"><strong style="color: #0f172a;">Recommended Timing:</strong> {rec_time}</div>
+                <div><strong style="color: #0f172a;">Objective:</strong> Copy the prepared caption, download the media asset below, and publish to activate audience pre-orders.</div>
               </td>
             </tr>
           </table>
         </div>
 
-        <!-- Visual Asset Preview & Downloads -->
+        <!-- Visual Media Showcase & Action Buttons -->
         {asset_preview_html}
 
-        {f'<div style="text-align: center; margin: 18px 0 24px 0;">{asset_buttons_html}</div>' if asset_buttons_html else ''}
+        {f'<div style="text-align: center; margin: 16px 0 24px 0;">{asset_buttons_html}</div>' if asset_buttons_html else ''}
 
-        <!-- Ready to Copy Caption Block -->
+        <!-- Ready to Copy Caption Container -->
         <div style="margin-top: 24px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-size: 12px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">
-              📋 READY-TO-PUBLISH CAPTION
+            <span style="font-size: 11px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.8px;">
+              READY-TO-PUBLISH CAPTION
             </span>
-            <span style="font-size: 11px; color: #64748b; font-weight: 500;">(Tap & select all to copy)</span>
+            <span style="font-size: 11px; color: #64748b; font-weight: 500;">(Select all & copy)</span>
           </div>
-          <div style="background-color: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 12px; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.65; color: #0f172a; white-space: pre-wrap; word-break: break-word; user-select: all;">
-{clean_caption}
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13.5px; line-height: 1.7; color: #0f172a; white-space: pre-wrap; word-break: break-word; user-select: all;">{clean_caption}</div>
+        </div>
+
+        <!-- Pre-Order Live URL Banner -->
+        <div style="margin-top: 22px; padding: 16px 20px; background-color: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px;">
+          <div style="font-size: 11px; font-weight: 800; color: #0369a1; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px;">
+            Pre-Order & Validation Page
+          </div>
+          <div style="font-size: 13px; color: #0c4a6e; line-height: 1.5;">
+            Direct backer tracking link: <a href="{target_link}" style="color: #0284c7; font-weight: 700; text-decoration: underline;" target="_blank">{target_link}</a>
           </div>
         </div>
 
-        <!-- Launch Link Reminder -->
-        <div style="margin-top: 20px; padding: 14px 18px; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; font-size: 13px; color: #1e40af;">
-          🔗 <strong style="color: #1e3a8a;">Your Pre-Order Page:</strong> <a href="{target_link}" style="color: #2563eb; font-weight: 700; text-decoration: underline;" target="_blank">{target_link}</a>
-        </div>
-
-        <!-- 3-Step Simple Publishing Flow -->
-        <div style="margin-top: 26px; padding-top: 20px; border-top: 1px solid #f1f5f9;">
+        <!-- 30-Second Publishing Flow -->
+        <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid #f1f5f9;">
           <p style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 0 0 10px 0; letter-spacing: 0.6px;">
             HOW TO POST IN 30 SECONDS:
           </p>
           <ol style="margin: 0; padding-left: 20px; font-size: 13px; color: #475569; line-height: 1.8;">
-            <li>Copy the caption block above.</li>
+            <li>Select and copy the caption block above.</li>
             <li>Click download for the image or video on this email.</li>
-            <li>Open {ch} on your phone or computer, paste the caption, attach the asset, and tap Post!</li>
+            <li>Open {ch} on your phone or computer, paste the caption, attach the downloaded asset, and publish!</li>
           </ol>
         </div>
 
@@ -180,11 +193,11 @@ def format_daily_post_kit_email_html(
 
     <!-- Footer -->
     <tr>
-      <td style="padding: 22px 28px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
-        <p style="font-size: 12px; color: #475569; margin: 0 0 6px 0;">
-          Sent by <strong>Creator Forge Co-Launch Studio</strong> for {c_name} {handle}.
+      <td style="padding: 24px 32px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
+        <p style="font-size: 12px; color: #475569; margin: 0 0 6px 0; font-weight: 600;">
+          Sent by Creator Forge Co-Launch Studio for {c_name} {handle}.
         </p>
-        <p style="font-size: 11px; color: #94a3b8; margin: 0;">
+        <p style="font-size: 11px; color: #94a3b8; margin: 0; line-height: 1.5;">
           Zero app logins required. Post kits are delivered on your scheduled milestone days.
         </p>
       </td>
@@ -372,7 +385,7 @@ def dispatch_campaign_post_email(
     )
 
     # Format HTML
-    subject = f"🚀 [Day {day_num} Post Kit] {task_title} • {p_name}"
+    subject = f"[Day {day_num} Post Kit] {task_title} • {p_name}"
     tz_label = kit.get("creatorTimezone") or auto_config.get("timezone") or "local timezone"
     preorder_slug = (p_name or "launch").lower().replace(" ", "-")
     preorder_link = f"https://creator-forge-frontend.vercel.app/preorder/{preorder_slug}?ref=post_kit"
@@ -713,12 +726,17 @@ def _evaluate_autonomous_delivery_for_project_data(
 ) -> Optional[Dict[str, Any]]:
     """
     Evaluates a project for autonomous 24-hour post kit email dispatch.
-    Enforces a strict 24-hour (86,400 seconds) interval from the last emailed post.
+    Enforces a strict opt-in check (auto_config['enabled'] == True) and
+    a 24-hour (86,400 seconds) interval between dispatches.
     """
-    auto_config = raw_kit.get("autonomousEmailDelivery") or {}
-    if auto_config.get("enabled") is False:
+    if not isinstance(raw_kit, dict):
         return None
 
+    auto_config = raw_kit.get("autonomousEmailDelivery")
+    if not isinstance(auto_config, dict) or not auto_config.get("enabled"):
+        return None
+
+    # Must have a valid recipient email
     recipient = (
         auto_config.get("recipientEmail")
         or creator_email
@@ -753,7 +771,7 @@ def _evaluate_autonomous_delivery_for_project_data(
         if elapsed_seconds < REQUIRED_INTERVAL_SECONDS:
             remaining_hours = (REQUIRED_INTERVAL_SECONDS - elapsed_seconds) / 3600.0
             logger.info(
-                f"⏳ [Autonomous 24H Dispatcher] Project '{project_id}': Post was emailed {elapsed_seconds/3600:.1f}h ago. "
+                f"[Autonomous 24H Dispatcher] Project '{project_id}': Post was emailed {elapsed_seconds/3600:.1f}h ago. "
                 f"Next post kit due in {remaining_hours:.1f}h (24-hour cadence enforced)."
             )
             return None
@@ -770,7 +788,7 @@ def _evaluate_autonomous_delivery_for_project_data(
         task_day = next_task.get("day") or next_task.get("dayNumber") or 1
         task_title = next_task.get("title") or f"Post {task_day}"
         logger.info(
-            f"⏰ [Autonomous 24H Dispatcher] 24-hour cadence reached! Auto-dispatching Day {task_day} "
+            f"[Autonomous 24H Dispatcher] 24-hour cadence reached: Auto-dispatching Day {task_day} "
             f"Post Kit ('{task_title}') for '{product_name}' to {recipient}"
         )
         return dispatch_campaign_post_email(
