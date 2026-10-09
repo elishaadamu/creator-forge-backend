@@ -56,6 +56,10 @@ class CreateProjectRequest(BaseModel):
     channelUrl: Optional[str] = None
     channelDescription: Optional[str] = None
     creatorBio: Optional[str] = None
+    brandColor: Optional[str] = None
+    brand_color: Optional[str] = None
+    colorTheme: Optional[str] = None
+    color_theme: Optional[str] = None
     portalLinkSent: Optional[bool] = False
     skipCreatorEmail: Optional[bool] = False
 
@@ -626,6 +630,14 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         d["metadataInfo"]["diyFee"] = fee_to_use
         d["metadataInfo"]["diyPassPrice"] = fee_to_use
 
+    # 1b. Normalize brand color & theme
+    brand_col = d.get("brandColor") or d.get("brand_color") or (d.get("selectedConcept") or {}).get("brandColor") or "#16A34A"
+    color_thm = d.get("colorTheme") or d.get("color_theme") or (d.get("selectedConcept") or {}).get("colorTheme") or "emerald"
+    d["brandColor"] = brand_col
+    d["brand_color"] = brand_col
+    d["colorTheme"] = color_thm
+    d["color_theme"] = color_thm
+
     # 2. Extract & link campaign kit if missing or incomplete
     meta = d.get("metadata_info") or d.get("metadataInfo") or {}
     kit = d.get("campaignKit") or d.get("campaign_kit") or meta.get("campaign_kit") or meta.get("campaignKit")
@@ -666,11 +678,13 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         if target_recip:
             auto_del["recipientEmail"] = target_recip
         if "enabled" not in auto_del:
-            auto_del["enabled"] = True
+            auto_del["enabled"] = False
             auto_del["intervalHours"] = 24
             auto_del["intervalSeconds"] = 86400
             auto_del["cadence"] = "24_hours"
             auto_del["dispatchTime"] = "Every 24 Hours"
+        else:
+            auto_del["enabled"] = bool(auto_del.get("enabled"))
         kit["autonomousEmailDelivery"] = auto_del
 
         d["campaignKit"] = kit
@@ -1080,6 +1094,25 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         if concept_data:
             existing_doc["selectedConcept"] = concept_data
             existing_doc["selected_concept"] = concept_data
+        # Synchronize problem & target audience from chosen concept
+        c_problem = concept_data.get("problem") or body.problem
+        if c_problem:
+            existing_doc["problem"] = c_problem
+        c_customer = concept_data.get("customer") or concept_data.get("demographicAlignment") or body.customer or body.targetAudience
+        if c_customer:
+            existing_doc["targetAudience"] = c_customer
+            existing_doc["target_audience"] = c_customer
+            existing_doc["customer"] = c_customer
+
+        # Synchronize validationPlan with chosen concept
+        if "validationPlan" in existing_doc and isinstance(existing_doc["validationPlan"], dict):
+            if c_problem:
+                existing_doc["validationPlan"]["problem"] = c_problem
+            if c_customer:
+                existing_doc["validationPlan"]["customer"] = c_customer
+            if product_name and product_tagline:
+                existing_doc["validationPlan"]["offer"] = f"{product_name} Founding Co-Launch Access: {product_tagline}"
+
         if cand_fee is not None:
             existing_doc["diyFee"] = def_fee
             existing_doc["diyPassPrice"] = def_fee
@@ -1207,6 +1240,10 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         "hasCustomFee": has_custom_fee_init,
         "selectedConcept": concept_data,
         "selected_concept": concept_data,
+        "brandColor": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#16A34A",
+        "brand_color": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#16A34A",
+        "colorTheme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "emerald",
+        "color_theme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "emerald",
         "validationPlan": {
             "id": f"plan_{proj_id}",
             "customer": customer_desc,

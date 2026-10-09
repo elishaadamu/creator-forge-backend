@@ -384,25 +384,21 @@ def _build_project_map(db: Any = None) -> dict:
         from app.mongodb import get_collection
         coll = get_collection("co_launch_projects")
         if coll is None:
-            return {"by_id": {}, "by_handle": {}, "by_email": {}}
+            return {"by_id": {}, "by_handle": {}}
         all_projs = list(coll.find({}))
         by_id = {}
         by_handle = {}
-        by_email = {}
         for p in all_projs:
             p_id = p.get("id") or str(p.get("_id", ""))
             c_id = p.get("creator_id") or p.get("creatorId")
             c_h = p.get("creator_handle") or p.get("creatorHandle")
-            c_e = p.get("creator_email") or p.get("creatorEmail")
             if c_id:
                 by_id[c_id] = p
             if c_h:
                 by_handle[c_h.lstrip("@").strip().lower()] = p
-            if c_e:
-                by_email[c_e.strip().lower()] = p
-        return {"by_id": by_id, "by_handle": by_handle, "by_email": by_email}
+        return {"by_id": by_id, "by_handle": by_handle}
     except Exception:
-        return {"by_id": {}, "by_handle": {}, "by_email": {}}
+        return {"by_id": {}, "by_handle": {}}
 
 
 @router.get("")
@@ -1462,15 +1458,15 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
     if project_map:
         matched_proj = (
             project_map.get("by_id", {}).get(c_id) or
-            project_map.get("by_handle", {}).get(clean_h) or
-            (project_map.get("by_email", {}).get(clean_email) if clean_email else None)
+            project_map.get("by_handle", {}).get(clean_h)
         )
 
     project_id = None
     if matched_proj:
         project_id = matched_proj.get("id") if isinstance(matched_proj, dict) else getattr(matched_proj, "id", None)
 
-    effective_status = "launched" if matched_proj else status
+    # Only mark as launched if the creator is actually partnered/promoted, not during candidate scouting/review
+    effective_status = "launched" if (matched_proj and status not in ("discovered", "in_review", "qualified", "contacted", "pitched", "interested", "replied")) else status
     recent_posts = []
     if content_samples:
         for s in content_samples[:6]:

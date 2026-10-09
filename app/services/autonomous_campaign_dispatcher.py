@@ -822,6 +822,13 @@ def _evaluate_project_autonomous_delivery(db: Session, proj: CoLaunchProject):
 def _evaluate_mongo_project_autonomous_delivery(m_doc: Dict[str, Any]):
     """Evaluates a MongoDB project document."""
     project_id = str(m_doc.get("_id") or m_doc.get("id"))
+    
+    # Guard: If project is still in Phase 1 planning/assets, never dispatch campaign posts
+    current_phase = int(m_doc.get("current_phase") or m_doc.get("currentPhase") or 1)
+    current_step = str(m_doc.get("current_step") or m_doc.get("currentStep") or "").lower()
+    if current_phase == 1 and current_step in ("plan", "assets", "spec", ""):
+        return None
+
     raw_kit = (
         m_doc.get("campaign_kit")
         or m_doc.get("campaignKit")
