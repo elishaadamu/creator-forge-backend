@@ -29,10 +29,39 @@ class NicheActiveBulkSchema(BaseModel):
 def list_niches(db: Session = Depends(get_db)):
     """List all available niches and active selected target niches from DB."""
     niches = db.query(TargetNiche).order_by(TargetNiche.name.asc()).all()
-    active_niches = [n.name for n in niches if n.is_active]
-    # Default fallback if DB was just created or empty
+    # Default fallback ONLY if DB was just created or completely empty
     if not niches:
-        active_niches = ["Tech", "Software", "SaaS", "Fintech", "Productivity"]
+        DEFAULT_NICHES = [
+            ("Tech", "tech", True, "14.2k"),
+            ("Software", "tech", True, "9.8k"),
+            ("SaaS", "tech", True, "6.4k"),
+            ("Fintech", "business", True, "5.1k"),
+            ("Productivity", "business", True, "11.3k"),
+            ("AI Tools", "tech", False, "8.7k"),
+            ("Creator Economy", "creative", False, "7.5k"),
+            ("Gaming", "creative", False, "22.1k"),
+            ("Fitness & Health", "lifestyle", False, "13.9k"),
+            ("E-Commerce", "business", False, "8.2k"),
+            ("Finance", "business", False, "6.9k"),
+            ("Crypto & Web3", "business", False, "4.8k"),
+            ("Design & Creative", "creative", False, "9.1k"),
+            ("Education", "lifestyle", False, "10.5k"),
+            ("Beauty & Lifestyle", "lifestyle", False, "16.7k"),
+            ("Marketing", "business", False, "8.4k"),
+        ]
+        for name, cat, active, cnt in DEFAULT_NICHES:
+            slug_id = name.lower().replace(" & ", "-").replace(" ", "-")
+            db.add(TargetNiche(
+                id=slug_id,
+                name=name,
+                category=cat,
+                is_active=active,
+                count=cnt,
+            ))
+        db.commit()
+        niches = db.query(TargetNiche).order_by(TargetNiche.name.asc()).all()
+
+    active_niches = [n.name for n in niches if n.is_active]
     return {
         "active_niches": active_niches,
         "all_niches": [

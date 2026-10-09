@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 HUNTER_API_BASE = "https://api.hunter.io/v2"
 
+_HUNTER_HTTP_CLIENT = httpx.Client(
+    limits=httpx.Limits(max_keepalive_connections=10, max_connections=20, keepalive_expiry=30.0),
+    timeout=httpx.Timeout(2.0, connect=1.0),
+    follow_redirects=True,
+)
+
 # Social platforms, stores, and link aggregators that should NOT be used as corporate domain
 IGNORED_DOMAINS = {
     "youtube.com", "youtu.be", "instagram.com", "tiktok.com",
@@ -156,8 +162,7 @@ class HunterClient:
 
         url = f"{HUNTER_API_BASE}/email-finder"
         try:
-            with httpx.Client(timeout=25.0) as client:
-                res = client.get(url, params=params)
+            res = _HUNTER_HTTP_CLIENT.get(url, params=params)
 
             if res.status_code == 200:
                 body = res.json()
@@ -202,7 +207,7 @@ class HunterClient:
             }
 
         except Exception as exc:
-            logger.error(f"[Hunter.io Email Finder] Exception: {exc}", exc_info=True)
+            logger.error(f"[Hunter.io Email Finder] Exception: {exc}")
             return {
                 "success": False,
                 "error": f"Failed to connect to Hunter.io: {str(exc)}",
@@ -229,7 +234,7 @@ class HunterClient:
         url = f"{HUNTER_API_BASE}/domain-search"
         params = {"domain": sanitized_domain, "limit": max(1, min(15, limit)), "api_key": key}
         try:
-            res = httpx.get(url, params=params, timeout=10)
+            res = _HUNTER_HTTP_CLIENT.get(url, params=params)
             if res.status_code == 200:
                 payload = res.json().get("data", {})
                 emails = payload.get("emails", [])
@@ -277,8 +282,7 @@ class HunterClient:
 
         for attempt in range(max_retries + 1):
             try:
-                with httpx.Client(timeout=25.0) as client:
-                    res = client.get(url, params=params)
+                res = _HUNTER_HTTP_CLIENT.get(url, params=params)
 
                 # HTTP 202: Verification still in progress, poll if attempts remain
                 if res.status_code == 202 and attempt < max_retries:
@@ -417,8 +421,8 @@ class HunterClient:
             if clean_h not in candidate_companies:
                 candidate_companies.append(clean_h)
 
-        # Attempt A: Search via Candidate Domains
-        for dom in candidate_domains:
+        # Attempt A: Search via Candidate Domains (top 1)
+        for dom in candidate_domains[:1]:
             res = self.find_email(
                 domain=dom,
                 first_name=first_name,
@@ -430,50 +434,19 @@ class HunterClient:
                 res["searched_domain"] = dom
                 return res
 
-            # Fallback A2: Domain Search on candidate domain
-            ds_res = self.domain_search(domain=dom, limit=5, api_key=api_key)
-            if ds_res.get("success") and ds_res.get("emails"):
-                emails_list = ds_res["emails"]
-                chosen = None
-                if first_name:
-                    fn_lower = first_name.lower()
-                    for em_obj in emails_list:
-                        val = em_obj.get("value", "")
-                        if fn_lower in val.lower() or (em_obj.get("first_name") and fn_lower in em_obj["first_name"].lower()):
-                            chosen = em_obj
-                            break
-                if not chosen and emails_list:
-                    chosen = max(emails_list, key=lambda x: x.get("confidence", 0))
-
-                if chosen and chosen.get("value"):
-                    return {
-                        "success": True,
-                        "email": chosen["value"],
-                        "score": chosen.get("confidence", 80),
-                        "verification_status": "valid",
-                        "position": chosen.get("position"),
-                        "company": ds_res.get("organization") or dom,
-                        "domain": dom,
-                        "first_name": chosen.get("first_name") or first_name,
-                        "last_name": chosen.get("last_name") or last_name,
-                        "sources_count": len(chosen.get("sources", [])),
-                        "sources": chosen.get("sources", []),
-                        "source_type": "domain_search",
-                        "searched_domain": dom,
-                    }
-
-        # Attempt B: Search via Candidate Companies (e.g. Datalumina)
-        for comp in candidate_companies:
-            res = self.find_email(
-                company=comp,
-                first_name=first_name,
-                last_name=last_name,
-                full_name=full_name,
-                api_key=api_key,
-            )
-            if res.get("success") and res.get("email"):
-                res["searched_company"] = comp
-                return res
+        # Attempt B: Search via Candidate Companies (top 1 if no domain succeeded)
+        if not candidate_domains:
+            for comp in candidate_companies[:1]:
+                res = self.find_email(
+                    company=comp,
+                    first_name=first_name,
+                    last_name=last_name,
+                    full_name=full_name,
+                    api_key=api_key,
+                )
+                if res.get("success") and res.get("email"):
+                    res["searched_company"] = comp
+                    return res
 
         return {
             "success": False,

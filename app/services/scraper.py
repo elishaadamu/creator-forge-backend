@@ -17,6 +17,24 @@ HEADERS = {
     "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+433;",
 }
 
+# Module-level connection pool for fast, lightweight I/O without socket exhaustion
+_HTTP_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(connect=3.0, read=4.0, write=3.0, pool=5.0),
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=40, keepalive_expiry=30.0),
+    headers=HEADERS,
+    follow_redirects=True,
+)
+
+
+def _http_get(url: str, headers: dict = None, timeout: float = 4.0, **kwargs):
+    h = headers or HEADERS
+    return _HTTP_CLIENT.get(url, headers=h, timeout=timeout, **kwargs)
+
+
+def _http_post(url: str, json: dict = None, headers: dict = None, timeout: float = 4.0, **kwargs):
+    h = headers or HEADERS
+    return _HTTP_CLIENT.post(url, json=json, headers=h, timeout=timeout, **kwargs)
+
 
 def _num(s: str) -> int:
     """Parse '2.4M', '890K', '1,234' → int."""
@@ -53,7 +71,7 @@ def _first_value(data: dict, *keys):
     return 0
 
 
-def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int = 150) -> list:
+def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int = 25) -> list:
     """
     Run an Apify actor and return dataset items.
     Uses POST /runs with waitForFinish and dataset items extraction,
@@ -69,7 +87,7 @@ def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int =
     # 1. Start run with waitForFinish parameter (official Apify pattern)
     try:
         run_url = f"https://api.apify.com/v2/acts/{urllib.parse.quote(safe_actor)}/runs?token={token_str}&waitForFinish={int(timeout_secs)}"
-        r = httpx.post(run_url, json=run_input, timeout=float(timeout_secs + 20))
+        r = _http_post(run_url, json=run_input, timeout=float(timeout_secs + 5))
         if r.status_code in (200, 201):
             run_data = r.json().get("data", {})
             status = run_data.get("status")
@@ -78,7 +96,7 @@ def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int =
 
             if status == "SUCCEEDED" and dataset_id:
                 items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={token_str}"
-                ir = httpx.get(items_url, timeout=30.0)
+                ir = _http_get(items_url, timeout=10.0)
                 if ir.status_code == 200:
                     items = ir.json()
                     if isinstance(items, list) and len(items) > 0:
@@ -88,14 +106,14 @@ def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int =
             if run_id and dataset_id and status not in ("FAILED", "ABORTED", "TIMED-OUT"):
                 start_t = time.time()
                 while time.time() - start_t < timeout_secs:
-                    time.sleep(3.0)
+                    time.sleep(2.0)
                     poll_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={token_str}"
-                    pr = httpx.get(poll_url, timeout=15.0)
+                    pr = _http_get(poll_url, timeout=6.0)
                     if pr.status_code == 200:
                         p_status = pr.json().get("data", {}).get("status")
                         if p_status == "SUCCEEDED":
                             items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={token_str}"
-                            ir = httpx.get(items_url, timeout=30.0)
+                            ir = _http_get(items_url, timeout=10.0)
                             if ir.status_code == 200:
                                 items = ir.json()
                                 if isinstance(items, list) and len(items) > 0:
@@ -108,7 +126,7 @@ def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int =
     # 2. Fallback: Direct run-sync-get-dataset-items
     try:
         sync_url = f"https://api.apify.com/v2/acts/{urllib.parse.quote(safe_actor)}/run-sync-get-dataset-items?token={token_str}&timeout={int(timeout_secs)}"
-        r = httpx.post(sync_url, json=run_input, timeout=float(timeout_secs + 20))
+        r = _http_post(sync_url, json=run_input, timeout=float(timeout_secs + 5))
         if r.status_code in (200, 201):
             data = r.json()
             if isinstance(data, list) and len(data) > 0:
@@ -348,7 +366,7 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, timeo
     return results
 
 
-def innertube_fetch_channel(handle_or_query: str) -> dict:
+def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
     """Fetch live YouTube channel profile data directly using YouTube's Innertube Search and Browse APIs."""
     import urllib.parse
     clean = handle_or_query.lstrip("@").strip()
@@ -378,7 +396,7 @@ def innertube_fetch_channel(handle_or_query: str) -> dict:
             "params": "EgIQAg%3D%3D",
         }
         try:
-            r = httpx.post(search_url, json=payload, headers=HEADERS, timeout=15)
+            r = _http_post(search_url, json=payload, timeout=4.0)
             if r.status_code == 200:
                 data = r.json()
                 items = (
@@ -432,7 +450,7 @@ def innertube_fetch_channel(handle_or_query: str) -> dict:
             "browseId": channel_id,
         }
         try:
-            r2 = httpx.post(browse_url, json=b_payload, headers=HEADERS, timeout=15)
+            r2 = _http_post(browse_url, json=b_payload, timeout=4.0)
             if r2.status_code == 200:
                 b_data = r2.json()
                 meta = b_data.get("metadata", {}).get("channelMetadataRenderer", {})
@@ -482,8 +500,8 @@ def innertube_fetch_channel(handle_or_query: str) -> dict:
             email_public = clean_em
             break
 
-    # If no email in channel bio, check the 2-3 most recent video descriptions
-    if not email_public and channel_id:
+    # If deep=True and no email in channel bio, check recent video description sequentially (max 2)
+    if deep and not email_public and channel_id:
         try:
             b_vids_payload = {
                 "context": {
@@ -497,41 +515,29 @@ def innertube_fetch_channel(handle_or_query: str) -> dict:
                 "browseId": channel_id,
                 "params": "EgZ2aWRlb3PyBgQKAjoA",
             }
-            rv = httpx.post("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", json=b_vids_payload, headers=HEADERS, timeout=8)
+            rv = _http_post("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", json=b_vids_payload, timeout=3.5)
             if rv.status_code == 200:
-                vids = list(dict.fromkeys(re.findall(r'"videoId":\s*"([a-zA-Z0-9_\-]{11})"', rv.text)))[:3]
-                if vids:
-                    from concurrent.futures import ThreadPoolExecutor
-
-                    def _fetch_vid_desc(vid):
-                        try:
-                            p_res = httpx.post(
-                                "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
-                                json={"context": {"client": {"hl": "en", "gl": "US", "clientName": "WEB", "clientVersion": "2.20240401.01.00"}}, "videoId": vid},
-                                headers=HEADERS,
-                                timeout=5,
-                            )
-                            if p_res.status_code == 200:
-                                return p_res.json().get("videoDetails", {}).get("shortDescription", "")
-                        except Exception:
-                            pass
-                        return ""
-
-                    with ThreadPoolExecutor(max_workers=3) as executor:
-                        descs = list(executor.map(_fetch_vid_desc, vids))
-
-                    for d in descs:
-                        if not d:
-                            continue
-                        v_emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", d)
-                        for em in v_emails:
-                            clean_em = em.strip().lower()
-                            dom = clean_em.split("@")[-1] if "@" in clean_em else ""
-                            if dom not in skip_domains:
-                                email_public = clean_em
+                vids = list(dict.fromkeys(re.findall(r'"videoId":\s*"([a-zA-Z0-9_\-]{11})"', rv.text)))[:2]
+                for vid in vids:
+                    try:
+                        p_res = _http_post(
+                            "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+                            json={"context": {"client": {"hl": "en", "gl": "US", "clientName": "WEB", "clientVersion": "2.20240401.01.00"}}, "videoId": vid},
+                            timeout=2.5,
+                        )
+                        if p_res.status_code == 200:
+                            desc = p_res.json().get("videoDetails", {}).get("shortDescription", "")
+                            v_emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", desc)
+                            for em in v_emails:
+                                clean_em = em.strip().lower()
+                                dom = clean_em.split("@")[-1] if "@" in clean_em else ""
+                                if dom not in skip_domains:
+                                    email_public = clean_em
+                                    break
+                            if email_public:
                                 break
-                        if email_public:
-                            break
+                    except Exception:
+                        pass
         except Exception as vid_err:
             logger.debug(f"[YouTube Video Email Check] Error: {vid_err}")
 
@@ -555,7 +561,7 @@ def innertube_fetch_channel(handle_or_query: str) -> dict:
     }
 
 
-def scrape_youtube(handle: str) -> dict:
+def scrape_youtube(handle: str, deep: bool = False) -> dict:
     """
     Scrape a YouTube channel by @handle or URL.
     Uses robust Innertube Search + Browse APIs for complete metadata, full bio, and links.
@@ -585,10 +591,9 @@ def scrape_youtube(handle: str) -> dict:
     }
 
     # Step 1: Live Profile & Full Metadata via Innertube Search + Browse
-    tube_res = innertube_fetch_channel(clean_h)
+    tube_res = innertube_fetch_channel(clean_h, deep=deep)
     if tube_res:
         result.update(tube_res)
-
 
     # Guess niche from bio keywords
     bio_lower = (result.get("bio") or "").lower()
@@ -608,12 +613,17 @@ def scrape_youtube(handle: str) -> dict:
         if any(k in bio_lower for k in keywords) and tag not in result["niche"]:
             result["niche"].append(tag)
 
-    # Step 2: Fetch real video uploads via YouTube RSS feed & Innertube
-    cid = result.get("channel_id") or ""
-    vids = fetch_youtube_channel_videos(cid or clean_h, limit=6)
-    result["recent_posts"] = vids
-    result["recentPosts"] = vids
-    result["videos"] = vids
+    # Step 2: Fetch real video uploads via YouTube RSS feed & Innertube only if deep=True
+    if deep:
+        cid = result.get("channel_id") or ""
+        vids = fetch_youtube_channel_videos(cid or clean_h, limit=6)
+        result["recent_posts"] = vids
+        result["recentPosts"] = vids
+        result["videos"] = vids
+    else:
+        result["recent_posts"] = []
+        result["recentPosts"] = []
+        result["videos"] = []
 
     return result
 
@@ -648,7 +658,7 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
     # Step 1: If channel_id is not already known, resolve it via YouTube channel page or search
     if not channel_id:
         try:
-            r_page = httpx.get(f"https://www.youtube.com/@{clean_h}", headers=HEADERS, timeout=8, follow_redirects=True)
+            r_page = _http_get(f"https://www.youtube.com/@{clean_h}", timeout=4.0)
             if r_page.status_code == 200:
                 m_cid = re.search(r'itemprop="channelId"\s+content="(UC[a-zA-Z0-9_\-]{22})"', r_page.text)
                 if not m_cid:
@@ -663,7 +673,7 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
     # Fallback to innertube search to resolve channel_id
     if not channel_id:
         try:
-            info = innertube_fetch_channel(clean_h)
+            info = innertube_fetch_channel(clean_h, deep=False)
             if info and info.get("channel_id"):
                 channel_id = info["channel_id"]
         except Exception as e:
@@ -675,7 +685,7 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
     if channel_id:
         try:
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            r_rss = httpx.get(rss_url, headers=HEADERS, timeout=8)
+            r_rss = _http_get(rss_url, timeout=4.0)
             if r_rss.status_code == 200 and "<entry>" in r_rss.text:
                 import xml.etree.ElementTree as ET
                 root = ET.fromstring(r_rss.text)
@@ -741,7 +751,7 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
                 "browseId": channel_id,
                 "params": "EgZ2aWRlb3PyBgQKAjoA",
             }
-            rv = httpx.post("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", json=b_payload, headers=HEADERS, timeout=10)
+            rv = _http_post("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", json=b_payload, timeout=4.0)
             if rv.status_code == 200:
                 d = rv.json()
                 tabs = d.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
@@ -805,7 +815,7 @@ def fetch_youtube_video_comments(video_id_or_url: str, limit: int = 10) -> list[
     comments = []
     seen_texts = set()
     try:
-        r1 = httpx.post(url, headers=HEADERS, json=payload, timeout=8)
+        r1 = _http_post(url, json=payload, timeout=4.0)
         if r1.status_code == 200:
             d1 = r1.json()
             # 1. Microformat check for featured comment
@@ -846,7 +856,7 @@ def fetch_youtube_video_comments(video_id_or_url: str, limit: int = 10) -> list[
                     'context': {'client': {'clientName': 'WEB', 'clientVersion': '2.20240101.01.00'}},
                     'continuation': token
                 }
-                r2 = httpx.post(url, headers=HEADERS, json=payload2, timeout=8)
+                r2 = _http_post(url, json=payload2, timeout=4.0)
                 if r2.status_code == 200:
                     d2 = r2.json()
                     mutations = d2.get('frameworkUpdates', {}).get('entityBatchUpdate', {}).get('mutations', [])
@@ -1000,7 +1010,7 @@ def scrape_instagram(handle: str) -> dict:
 
     # Direct fallback (limited — Instagram blocks most requests)
     try:
-        r = httpx.get(url, headers=HEADERS, timeout=12, follow_redirects=True)
+        r = _http_get(url, timeout=5.0)
         html = r.text
         for pat, key in [
             (r'"edge_followed_by":\{"count":(\d+)\}', "follower_count"),
@@ -1062,7 +1072,7 @@ def scrape_tiktok(handle: str) -> dict:
 
     # Direct fallback
     try:
-        r = httpx.get(url, headers=HEADERS, timeout=12, follow_redirects=True)
+        r = _http_get(url, timeout=5.0)
         html = r.text
         for pat, key in [
             (r'"followerCount":(\d+)', "follower_count"),
@@ -1158,12 +1168,11 @@ def _extract_contacts_from_text(text: str) -> dict:
     return contacts
 
 
-def _direct_youtube_search(query: str, limit: int = 5) -> list[dict]:
+def _direct_youtube_search(query: str, limit: int = 15) -> list[dict]:
     """
-    Search YouTube directly via Innertube API or HTML scraping (no API key needed).
-    Returns real channel titles, handles, actual subscriber counts, avatars, and bios.
+    Search YouTube directly via Innertube Search API with fallback (no API key needed).
+    Returns real channel titles, handles, actual subscriber counts, avatars, bios, and public emails.
     """
-    # ── Try Innertube search first (fast, structured, 100% accurate subscriber counts) ──
     try:
         url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
         headers = {
@@ -1182,7 +1191,7 @@ def _direct_youtube_search(query: str, limit: int = 5) -> list[dict]:
             "query": query,
             "params": "EgIQAg%3D%3D",
         }
-        r = httpx.post(url, json=payload, headers=headers, timeout=15)
+        r = _http_post(url, json=payload, headers=headers, timeout=3.5)
         if r.status_code == 200:
             data = r.json()
             items = (
@@ -1198,394 +1207,188 @@ def _direct_youtube_search(query: str, limit: int = 5) -> list[dict]:
                 renderers = section.get("itemSectionRenderer", {}).get("contents", [])
                 for item in renderers:
                     ch = item.get("channelRenderer")
-                    if ch:
-                        title = ch.get("title", {}).get("simpleText") or "".join(r.get("text", "") for r in ch.get("title", {}).get("runs", []))
-                        canonical = ch.get("canonicalBaseUrl", "").lstrip("/").lstrip("@")
-                        handle_tag = ch.get("subscriberCountText", {}).get("simpleText") or ""
-                        
-                        sub_text = ch.get("videoCountText", {}).get("simpleText") or ""
-                        if "subscriber" not in sub_text.lower():
-                            sub_text = ch.get("subscriberCountText", {}).get("simpleText") or ""
-                            
-                        clean_handle = canonical
-                        if not clean_handle and handle_tag.startswith("@"):
-                            clean_handle = handle_tag.lstrip("@")
-                        if not clean_handle:
-                            clean_handle = title.replace(" ", "").lower()
-                            
-                        if clean_handle in seen:
-                            continue
-                        seen.add(clean_handle)
-                        
-                        thumbs = ch.get("thumbnail", {}).get("thumbnails", [])
-                        avatar = thumbs[-1].get("url") if thumbs else ""
-                        if avatar.startswith("//"):
-                            avatar = "https:" + avatar
-                            
-                        desc = "".join(r.get("text", "") for r in ch.get("descriptionSnippet", {}).get("runs", []))
-                        contacts = _extract_contacts_from_text(desc)
-                        
-                        tube_results.append({
-                            "handle": clean_handle,
-                            "platform": "youtube",
-                            "display_name": title or clean_handle,
-                            "bio": desc,
-                            "follower_count": _num(sub_text),
-                            "avatar_url": avatar,
-                            "email_public": contacts["emails"][0] if contacts["emails"] else "",
-                            "instagram": contacts["instagram"] or "",
-                            "profile_url": f"https://www.youtube.com/@{clean_handle}",
-                        })
-                        if len(tube_results) >= limit:
-                            break
+                    if not ch:
+                        continue
+                    channel_id = ch.get("channelId", "")
+                    title = ch.get("title", {}).get("simpleText") or "".join(r_item.get("text", "") for r_item in ch.get("title", {}).get("runs", []))
+                    canonical = ch.get("canonicalBaseUrl", "").lstrip("/").lstrip("@")
+                    handle_tag = ch.get("subscriberCountText", {}).get("simpleText") or ""
+
+                    sub_text = ch.get("videoCountText", {}).get("simpleText") or ""
+                    if "subscriber" not in sub_text.lower():
+                        sub_text = ch.get("subscriberCountText", {}).get("simpleText") or ""
+                    sub_count = _num(sub_text)
+
+                    clean_handle = canonical
+                    if not clean_handle and handle_tag.startswith("@"):
+                        clean_handle = handle_tag.lstrip("@")
+                    if not clean_handle and title:
+                        clean_handle = re.sub(r"[^a-zA-Z0-9_]", "", title.lower())
+                    if not clean_handle:
+                        clean_handle = channel_id
+
+                    if not clean_handle or clean_handle.lower() in seen:
+                        continue
+                    seen.add(clean_handle.lower())
+
+                    thumbs = ch.get("thumbnail", {}).get("thumbnails", [])
+                    avatar = thumbs[-1].get("url") if thumbs else ""
+                    if avatar.startswith("//"):
+                        avatar = "https:" + avatar
+
+                    desc = "".join(r_item.get("text", "") for r_item in ch.get("descriptionSnippet", {}).get("runs", []))
+                    contacts = _extract_contacts_from_text(desc)
+
+                    tube_results.append({
+                        "handle": clean_handle,
+                        "channel_id": channel_id,
+                        "platform": "youtube",
+                        "display_name": title or clean_handle,
+                        "bio": desc,
+                        "follower_count": sub_count,
+                        "avatar_url": avatar,
+                        "email_public": contacts["emails"][0] if contacts["emails"] else "",
+                        "instagram": contacts["instagram"] or "",
+                        "profile_url": f"https://www.youtube.com/@{clean_handle}",
+                    })
+                    if len(tube_results) >= limit:
+                        break
                 if len(tube_results) >= limit:
                     break
             if tube_results:
                 return tube_results
     except Exception as e:
-        print(f"[YouTube Search] Innertube search error: {e}")
+        logger.debug(f"[YouTube Search] Innertube search error: {e}")
 
+    # Fallback to direct HTML search if Innertube didn't return
     import urllib.parse
     search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}&sp=EgIQAg%3D%3D"
-    # sp=EgIQAg%3D%3D filters for "Channel" type results
-
     try:
-        r = httpx.get(search_url, headers=HEADERS, timeout=15, follow_redirects=True)
-        html = r.text
+        r = _http_get(search_url, timeout=3.5)
+        if r.status_code == 200:
+            m = re.search(r"var ytInitialData\s*=\s*(\{.+?\});\s*(?:var|</script)", r.text, re.DOTALL)
+            if m:
+                data = json.loads(m.group(1))
+                contents = (
+                    data.get("contents", {})
+                    .get("twoColumnSearchResultsRenderer", {})
+                    .get("primaryContents", {})
+                    .get("sectionListRenderer", {})
+                    .get("contents", [])
+                )
+                html_results = []
+                seen_html = set()
+                for section in contents:
+                    items = section.get("itemSectionRenderer", {}).get("contents", [])
+                    for item in items:
+                        renderer = item.get("channelRenderer")
+                        if not renderer:
+                            continue
+                        channel_id = renderer.get("channelId", "")
+                        canonical = renderer.get("canonicalBaseUrl", "").lstrip("/").lstrip("@")
+                        handle = canonical or channel_id
+                        if not handle or handle.lower() in seen_html:
+                            continue
+                        seen_html.add(handle.lower())
+
+                        title_obj = renderer.get("title", {})
+                        display_name = title_obj.get("simpleText", "") or "".join(r_item.get("text", "") for r_item in title_obj.get("runs", [])) or handle
+
+                        sub_obj = renderer.get("subscriberCountText", {})
+                        sub_text = sub_obj.get("simpleText", "") or "".join(r_item.get("text", "") for r_item in sub_obj.get("runs", []))
+                        subs = _num(sub_text)
+
+                        desc_obj = renderer.get("descriptionSnippet", {})
+                        desc_text = "".join(r_item.get("text", "") for r_item in desc_obj.get("runs", []))
+                        contacts = _extract_contacts_from_text(desc_text)
+
+                        thumbs = renderer.get("thumbnail", {}).get("thumbnails", [])
+                        avatar_url = thumbs[-1].get("url", "") if thumbs else ""
+                        if avatar_url.startswith("//"):
+                            avatar_url = "https:" + avatar_url
+
+                        html_results.append({
+                            "handle": handle,
+                            "channel_id": channel_id,
+                            "platform": "youtube",
+                            "display_name": display_name,
+                            "bio": desc_text,
+                            "follower_count": subs,
+                            "avatar_url": avatar_url,
+                            "email_public": contacts["emails"][0] if contacts["emails"] else "",
+                            "instagram": contacts["instagram"] or "",
+                            "profile_url": f"https://www.youtube.com/@{handle}",
+                        })
+                        if len(html_results) >= limit:
+                            break
+                    if len(html_results) >= limit:
+                        break
+                return html_results
     except Exception as e:
-        print(f"[YouTube Search] HTTP error: {e}")
-        return []
+        logger.debug(f"[YouTube Search] HTML fallback error: {e}")
 
-    # Extract ytInitialData JSON blob
-    m = re.search(r"var ytInitialData\s*=\s*(\{.+?\});\s*(?:var|</script)", html, re.DOTALL)
-    if not m:
-        print("[YouTube Search] Could not find ytInitialData in HTML")
-        return []
-
-    try:
-        data = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        print("[YouTube Search] Failed to parse ytInitialData JSON")
-        return []
-
-    results = []
-    seen_handles = set()
-
-    # Navigate the nested YouTube data structure to find channel renderers
-    try:
-        contents = (
-            data.get("contents", {})
-            .get("twoColumnSearchResultsRenderer", {})
-            .get("primaryContents", {})
-            .get("sectionListRenderer", {})
-            .get("contents", [])
-        )
-        for section in contents:
-            items = (
-                section.get("itemSectionRenderer", {})
-                .get("contents", [])
-            )
-            for item in items:
-                renderer = item.get("channelRenderer")
-                if not renderer:
-                    continue
-
-                channel_id = renderer.get("channelId", "")
-                # Extract handle from navigationEndpoint or canonicalBaseUrl
-                handle = ""
-                canonical = renderer.get("canonicalBaseUrl", "")
-                if canonical:
-                    handle = canonical.lstrip("/").lstrip("@")
-                # Also try navigationEndpoint for custom URL
-                if not handle:
-                    try:
-                        nav_url = renderer.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", "")
-                        if nav_url:
-                            handle = nav_url.lstrip("/").lstrip("@")
-                    except Exception:
-                        pass
-                if not handle:
-                    handle = channel_id
-
-                if not handle or handle in seen_handles:
-                    continue
-                seen_handles.add(handle)
-
-                display_name = ""
-                title_obj = renderer.get("title", {})
-                if isinstance(title_obj, dict):
-                    display_name = title_obj.get("simpleText", "")
-                    if not display_name:
-                        runs = title_obj.get("runs", [])
-                        display_name = "".join(r.get("text", "") for r in runs)
-                display_name = display_name or handle
-
-                # Subscriber count
-                sub_text = ""
-                sub_obj = renderer.get("subscriberCountText", {})
-                if isinstance(sub_obj, dict):
-                    sub_text = sub_obj.get("simpleText", "")
-                    if not sub_text:
-                        runs = sub_obj.get("runs", [])
-                        sub_text = "".join(r.get("text", "") for r in runs)
-                subs = _num(sub_text)
-
-                # Description snippet
-                desc_text = ""
-                desc_obj = renderer.get("descriptionSnippet", {})
-                if isinstance(desc_obj, dict):
-                    runs = desc_obj.get("runs", [])
-                    desc_text = "".join(r.get("text", "") for r in runs)
-
-                # Avatar
-                avatar_url = ""
-                thumbs = renderer.get("thumbnail", {}).get("thumbnails", [])
-                if thumbs:
-                    avatar_url = thumbs[-1].get("url", "")
-                    if avatar_url.startswith("//"):
-                        avatar_url = "https:" + avatar_url
-
-                # Video count text (for recency heuristic)
-                video_count_text = ""
-                vc_obj = renderer.get("videoCountText", {})
-                if isinstance(vc_obj, dict):
-                    video_count_text = vc_obj.get("simpleText", "")
-                    if not video_count_text:
-                        runs = vc_obj.get("runs", [])
-                        video_count_text = "".join(r.get("text", "") for r in runs)
-
-                # Extract contacts from description
-                contacts = _extract_contacts_from_text(desc_text)
-                email = contacts["emails"][0] if contacts["emails"] else ""
-
-                results.append({
-                    "handle": handle,
-                    "channel_id": channel_id,
-                    "platform": "youtube",
-                    "display_name": display_name,
-                    "bio": desc_text,
-                    "follower_count": subs,
-                    "avatar_url": avatar_url,
-                    "email_public": email,
-                    "instagram": contacts["instagram"] or "",
-                    "profile_url": f"https://www.youtube.com/channel/{channel_id}" if handle.startswith("UC") else f"https://www.youtube.com/@{handle}",
-                    "video_count_text": video_count_text,
-                })
-
-                if len(results) >= limit:
-                    break
-            if len(results) >= limit:
-                break
-    except Exception as e:
-        print(f"[YouTube Search] Parse error: {e}")
-
-    return results
+    return []
 
 
 NICHE_SEARCH_EXPANSIONS = {
-    "tech": [
-        "Software Engineering", "Full Stack Developer", "Python AI Apps", "SaaS Founder Build", 
-        "Web Development Nextjs", "Indie Hacker Software", "DevOps Cloud", "Coding Tutorial", 
-        "Tech Reviews Setup", "AI Tools Workflow", "Productivity Software", "Frontend React", 
-        "Data Science Machine Learning", "Mobile App Flutter", "Cybersecurity Tools", "Linux System Architecture"
-    ],
-    "fitness": [
-        "Fitness Coach Workout", "Bodybuilding Science", "Nutrition Diet Meal Prep", 
-        "Calisthenics Training", "Home Gym Routines", "Strength Conditioning", "Mobility Rehab", "Hypertrophy Training"
-    ],
-    "finance": [
-        "Personal Finance Investing", "SaaS Business Revenue", "Stock Market Trading", 
-        "Real Estate Investing", "Crypto Blockchain", "E-commerce Amazon FBA", "Financial Independence FIRE", "Dividend Investing"
-    ],
-    "business": [
-        "Startup Founder Journey", "Solo Founder SaaS", "Marketing Growth Hacks", 
-        "Sales Funnels B2B", "Digital Agency Scaling", "NoCode Automation", "Product Management", "Micro SaaS"
-    ],
-    "creator": [
-        "Content Creation Workflow", "Video Editing Premiere DaVinci", "Podcast Production", 
-        "YouTube Growth Strategy", "Camera Gear Studio", "Graphic Design Brand", "Storytelling Filmmaking"
-    ],
-    "gaming": [
-        "Game Development Unity Unreal", "Indie Game Studio", "Gaming Hardware Setup", 
-        "Game Design Mechanics", "Pixel Art Animation", "Esports Analytics", "Godot Engine Devlog"
-    ],
-    "design": [
-        "UI UX Design Figma", "Webflow Website Design", "Product Design Systems", 
-        "3D Motion Blender", "Brand Identity Typography", "Design Freelancing", "Motion Graphics After Effects"
-    ],
+    "tech": ["Software Engineering", "Full Stack Developer", "Python AI Apps", "Web Development", "Tech Setup"],
+    "fitness": ["Fitness Coach Workout", "Bodybuilding Science", "Nutrition Diet", "Strength Training"],
+    "finance": ["Personal Finance Investing", "SaaS Business", "Stock Market Trading", "Financial Freedom"],
+    "business": ["Startup Founder Journey", "Solo Founder SaaS", "Marketing Growth Hacks", "Digital Agency"],
+    "creator": ["Content Creation Workflow", "Video Editing", "Podcast Production", "YouTube Strategy"],
+    "gaming": ["Game Development", "Indie Game Studio", "Gaming Hardware Setup"],
+    "design": ["UI UX Design Figma", "Webflow Website Design", "Product Design Systems"],
 }
 
 
 def search_youtube_channels(query: str, limit: int = 5, min_followers: int = 0, max_followers: int = 0, exclude_handles: set = None) -> list[dict]:
     """
-    Search YouTube for creators matching niche keywords with dynamic query expansion & randomized sampling.
+    Search YouTube for creators matching niche keywords.
+    Ultra-fast, lightweight single-hop query without nested scraping or CPU load.
     Filters out any creators in exclude_handles so previously discovered creators are not scouted again.
     """
-    import random
-    from app.config import settings
-
-    raw_channels = []
-    q_lower = query.lower().strip()
     exclude_set = {str(h).lstrip("@").strip().lower() for h in (exclude_handles or []) if h}
-
-    # Identify matching niche categories
-    matched_expansions = []
-    for cat, terms in NICHE_SEARCH_EXPANSIONS.items():
-        if cat in q_lower:
-            matched_expansions.extend(terms)
-    
-    if not matched_expansions:
-        # Default to splitting query or fallback to tech/business
-        matched_expansions = [kw.strip() for kw in query.replace(",", " ").split() if kw.strip()] or NICHE_SEARCH_EXPANSIONS["tech"]
-
-    # Expand search terms pool
-    all_terms = list(matched_expansions)
-    random.shuffle(all_terms)
-    # Add variations to ensure deep candidate pool
-    if len(all_terms) < 12:
-        all_terms.extend([f"{t} expert" for t in matched_expansions[:4]])
-        all_terms.extend([f"{t} pro" for t in matched_expansions[:4]])
-        all_terms.extend([f"{t} setup" for t in matched_expansions[:4]])
-
-    modifiers = ["channel", "creator", "tutorials", "review", "build", "vlog", "guide", "software"]
-
-    # ── Step 1: Fast direct YouTube search with dynamic query loops ───────────
+    results = []
     seen = set()
-    filtered = []
 
-    for term in all_terms:
-        mod = random.choice(modifiers)
-        search_query = f"{term} {mod}"
-        found = _direct_youtube_search(search_query, limit=30)
-        
+    clean_q = query.strip()
+    search_queries = [f"{clean_q} channel", clean_q]
+
+    for sq in search_queries:
+        found = _direct_youtube_search(sq, limit=max(limit * 2, 12))
         for ch in found:
-            key = ch["handle"].lower().lstrip("@")
-            if key in seen or key in exclude_set:
+            h = str(ch.get("handle", "")).lstrip("@").strip()
+            h_lower = h.lower()
+            if not h or h_lower in seen or h_lower in exclude_set:
                 continue
-            seen.add(key)
-            
-            subs = ch.get("follower_count", 0)
-            # Strict follower tier filtering (100k - 1M)
-            if min_followers and subs < min_followers:
+            seen.add(h_lower)
+
+            subs = int(ch.get("follower_count", 0) or 0)
+            if min_followers and subs > 0 and subs < min_followers:
                 continue
             if max_followers and subs > max_followers:
                 continue
-            
-            ch["niche"] = [term]
-            filtered.append(ch)
-            
-        if len(filtered) >= limit * 3:
-            break
 
-    # If still need more candidates and strict filter returned few, run broader search queries
-    if len(filtered) < limit:
-        for extra_q in [f"{query} creator channel", f"{query} full tutorial", f"{query} podcast", f"{query} guide", f"{query} review"]:
-            found = _direct_youtube_search(extra_q, limit=30)
-            for ch in found:
-                key = ch["handle"].lower().lstrip("@")
-                if key in seen or key in exclude_set:
-                    continue
-                seen.add(key)
-                subs = ch.get("follower_count", 0)
-                if min_followers and subs < min_followers:
-                    continue
-                if max_followers and subs > max_followers:
-                    continue
-                ch["niche"] = [query]
-                filtered.append(ch)
-            if len(filtered) >= limit * 2:
+            results.append({
+                "handle": h,
+                "platform": "youtube",
+                "display_name": str(ch.get("display_name") or h).lstrip("@").strip(),
+                "bio": ch.get("bio", ""),
+                "follower_count": subs,
+                "avatar_url": ch.get("avatar_url", ""),
+                "email_public": ch.get("email_public", ""),
+                "instagram": str(ch.get("instagram", "")).lstrip("@").strip(),
+                "website": ch.get("website", ""),
+                "website_url": ch.get("website_url", "") or ch.get("website", ""),
+                "profile_url": ch.get("profile_url") or f"https://www.youtube.com/@{h}",
+                "niche": [clean_q],
+            })
+            if len(results) >= limit:
                 break
-
-    if not filtered:
-        return []
-
-    # ── Step 2: Randomize candidate order for variety ────────────────────────
-    random.shuffle(filtered)
-
-    # ── Step 4: Enrich channels via individual channel page scrape in parallel ───
-    from concurrent.futures import ThreadPoolExecutor
-
-    def _enrich_single_channel(ch):
-        needs_enrichment = (
-            not ch.get("email_public")
-            or not ch.get("follower_count")
-            or ch.get("handle", "").startswith("UC")
-        )
-        if needs_enrichment and ch.get("handle"):
-            try:
-                lookup = ch.get("channel_id") or ch["handle"] if ch["handle"].startswith("UC") else ch["handle"]
-                profile = scrape_youtube(lookup)
-                if profile and "error" not in profile:
-                    if profile.get("bio"):
-                        contacts = _extract_contacts_from_text(profile["bio"])
-                        if contacts["emails"] and not ch.get("email_public"):
-                            ch["email_public"] = contacts["emails"][0]
-                        if contacts["instagram"] and not ch.get("instagram"):
-                            ch["instagram"] = contacts["instagram"]
-                        if not ch.get("bio"):
-                            ch["bio"] = profile["bio"]
-                    if profile.get("email_public") and not ch.get("email_public"):
-                        ch["email_public"] = profile["email_public"]
-                    if profile.get("website"):
-                        ch["website"] = profile["website"]
-                    if not ch.get("avatar_url") and profile.get("avatar_url"):
-                        ch["avatar_url"] = profile["avatar_url"]
-                    if profile.get("follower_count") and (not ch.get("follower_count") or ch["follower_count"] == 0):
-                        ch["follower_count"] = profile["follower_count"]
-                    if ch["handle"].startswith("UC") and profile.get("display_name"):
-                        clean = profile["display_name"].strip().replace(" ", "").lower()
-                        clean = re.sub(r"[^a-z0-9_]", "", clean)
-                        if clean and len(clean) >= 3:
-                            ch["handle"] = clean
-                            ch["profile_url"] = f"https://www.youtube.com/@{clean}"
-            except Exception:
-                pass
-        return ch
-
-    to_enrich = filtered[:max(limit * 2, 6)]
-    if to_enrich:
-        with ThreadPoolExecutor(max_workers=min(len(to_enrich), 5)) as pool:
-            list(pool.map(_enrich_single_channel, to_enrich))
-
-    # ── Step 5: Build final results with strict post-enrichment validation ───
-    results = []
-    niche_label = matched_expansions[0] if matched_expansions else query
-    for ch in filtered:
-        clean_handle = str(ch.get("handle", "")).lstrip("@").strip()
-        if not clean_handle:
-            continue
-        subs = int(ch.get("follower_count", 0) or 0)
-        # Strict follower tier filtering (e.g. 100K - 1M)
-        if min_followers and subs < min_followers:
-            continue
-        if max_followers and subs > max_followers:
-            continue
-
-        results.append({
-            "handle": clean_handle,
-            "platform": "youtube",
-            "display_name": str(ch.get("display_name") or clean_handle).lstrip("@").strip(),
-            "bio": ch.get("bio", ""),
-            "follower_count": subs,
-            "avatar_url": ch.get("avatar_url", ""),
-            "email_public": ch.get("email_public", ""),
-            "instagram": str(ch.get("instagram", "")).lstrip("@").strip(),
-            "website": ch.get("website", ""),
-            "website_url": ch.get("website_url", "") or ch.get("website", ""),
-            "profile_url": ch.get("profile_url") or f"https://www.youtube.com/@{clean_handle}",
-            "niche": ch.get("niche", [niche_label]),
-        })
         if len(results) >= limit:
             break
 
-    print(f"[YouTube Search] Final qualified creators ({len(results)}):")
-    for r in results:
-        subs = r["follower_count"]
-        subs_str = f"{subs/1_000_000:.1f}M" if subs >= 1_000_000 else f"{subs/1_000:.0f}K" if subs >= 1_000 else str(subs)
-        safe_name = r["display_name"].encode("ascii", "ignore").decode("ascii")
-        print(f"  - @{r['handle']} ({safe_name}) | {subs_str} subs | email: {r['email_public'] or 'none'}")
-
-    return results
+    return results[:limit]
 
 
 def scrape_profile(platform: str, handle: str, api_key: str = None, apify_token: str = None) -> dict:

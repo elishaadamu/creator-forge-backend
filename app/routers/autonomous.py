@@ -364,8 +364,8 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     if "youtube" in platforms and not _DISCOVERY_ABORT_EVENT.is_set():
         try:
             yt_found = []
-            search_limit = max(target_count * 2, 8)
-            for n in niches[:3]:
+            search_limit = min(max(target_count, 6), 15)
+            for n in niches[:2]:
                 if _DISCOVERY_ABORT_EVENT.is_set():
                     break
                 found = search_youtube_channels(
@@ -376,7 +376,7 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
                     exclude_handles=all_excluded_handles,
                 )
                 yt_found.extend(found)
-                if len(yt_found) >= target_count * 2 or _DISCOVERY_ABORT_EVENT.is_set():
+                if len(yt_found) >= target_count or _DISCOVERY_ABORT_EVENT.is_set():
                     break
             for ch in yt_found:
                 h = str(ch.get("handle", "")).lstrip("@").strip()
@@ -740,7 +740,11 @@ STRICT REQUIREMENTS:
     from app.integrations.hunter import hunter
     from concurrent.futures import ThreadPoolExecutor
 
-    needs_hunter = [c for c in selected_cohort if not (c.get("email_public") and "@" in c.get("email_public"))]
+    needs_hunter = [
+        c for c in selected_cohort
+        if not (c.get("email_public") and "@" in c.get("email_public"))
+        and (c.get("website") or c.get("website_url") or ("." in (c.get("bio") or "")))
+    ]
     if needs_hunter and hunter.is_configured():
         def _hunter_lookup_for_creator(cand):
             if _DISCOVERY_ABORT_EVENT.is_set():
@@ -765,7 +769,7 @@ STRICT REQUIREMENTS:
                 logger.warning(f"[Discovery] Hunter lookup for @{cand.get('handle')}: {h_err}")
             return cand
 
-        with ThreadPoolExecutor(max_workers=min(len(needs_hunter), 4)) as h_pool:
+        with ThreadPoolExecutor(max_workers=min(len(needs_hunter), 2)) as h_pool:
             list(h_pool.map(_hunter_lookup_for_creator, needs_hunter))
 
     # ── Step 6: Analytical Telemetry & Scoring for Selected Cohort ───────────
@@ -789,14 +793,24 @@ STRICT REQUIREMENTS:
             bg_color = "ef4444" if platform == "youtube" else "ec4899" if platform == "instagram" else "06b6d4"
             avatar_url = f"https://ui-avatars.com/api/?name={handle}&background={bg_color}&color=fff"
 
-        # 1. Dynamic Engagement Rate from views vs subscriber ratio
-        views_per_video = int(total_views / max(1, video_count)) if video_count > 0 else 0
-        if follower_count > 0 and views_per_video > 0:
-            view_sub_ratio = min(30.0, (views_per_video / follower_count) * 100)
-            engagement = round(max(2.1, min(9.2, 2.2 + (view_sub_ratio * 0.32))), 1)
+        # 1. Dynamic Engagement Rate from candidate data, views vs sub ratio, or distinct profile hash
+        cand_eng = cand.get("engagement") or cand.get("engagement_score") or cand.get("engagementRate")
+        if cand_eng:
+            try:
+                engagement = round(float(str(cand_eng).replace("%", "").strip()), 1)
+            except Exception:
+                engagement = 0.0
         else:
-            h_val = abs(hash(handle))
-            engagement = round(max(2.4, min(7.8, 3.8 + ((h_val % 26) * 0.14))), 1)
+            engagement = 0.0
+
+        if engagement <= 0.0:
+            views_per_video = int(total_views / max(1, video_count)) if video_count > 0 else 0
+            if follower_count > 0 and views_per_video > 0:
+                view_sub_ratio = min(30.0, (views_per_video / follower_count) * 100)
+                engagement = round(max(2.1, min(9.2, 2.2 + (view_sub_ratio * 0.32))), 1)
+            else:
+                h_val = sum(ord(ch) for ch in (handle or "creator"))
+                engagement = round(max(2.4, min(7.8, 3.2 + ((h_val % 31) * 0.14))), 1)
 
         # 2. Dynamic Posting Consistency
         if video_count >= 300:
@@ -1033,6 +1047,9 @@ STRICT REQUIREMENTS:
             "follower_count": follower_count,
             "followerStr": follower_str,
             "engagement": round(engagement, 1),
+            "engagement_score": round(engagement, 1),
+            "engagement_rate": f"{round(engagement, 1)}%",
+            "engagementRate": f"{round(engagement, 1)}%",
             "niche": niche_str,
             "bio": bio,
             "avatar": avatar_url or f"https://ui-avatars.com/api/?name={clean_h}&background=6366f1&color=fff",

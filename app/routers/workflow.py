@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/workflow-state", tags=["workflow-state"])
 
 _workflow_cache: Optional[dict] = None
 _workflow_cache_time: float = 0.0
-_CACHE_TTL: float = 60.0  # In-memory cache valid for 60 seconds, updated immediately on writes
+_CACHE_TTL: float = 2.0  # Ultra-short cache so MongoDB reads are always fresh on page refresh
 
 
 class WorkflowStateUpdate(BaseModel):
@@ -79,8 +79,8 @@ def _get_mongo_workflow_state(force_refresh: bool = False) -> dict:
             "persuasion_sent_map": {},
             "creator_stage_map": {},
             "extra_state": {},
-            "default_pass_price": 50.0,
-            "cobuilder_pass_price": 50.0,
+            "default_pass_price": 0.0,
+            "cobuilder_pass_price": 0.0,
             "updated_at": datetime.utcnow().isoformat(),
         }
         try:
@@ -101,7 +101,7 @@ def _get_mongo_workflow_state(force_refresh: bool = False) -> dict:
     extra = _safe_dict(res.get("extra_state"))
     res["extra_state"] = extra
 
-    # Resolve pass price without reverting to 199.0
+    # Resolve pass price: if not in DB, return 0.0
     fee = None
     if res.get("default_pass_price") is not None:
         fee = res["default_pass_price"]
@@ -116,8 +116,8 @@ def _get_mongo_workflow_state(force_refresh: bool = False) -> dict:
         res["default_pass_price"] = float(fee)
         res["cobuilder_pass_price"] = float(fee)
     else:
-        res["default_pass_price"] = 50.0
-        res["cobuilder_pass_price"] = 50.0
+        res["default_pass_price"] = 0.0
+        res["cobuilder_pass_price"] = 0.0
 
     _workflow_cache = copy.deepcopy(res)
     _workflow_cache_time = now
@@ -138,9 +138,11 @@ def get_workflow_state():
 
 @router.delete("")
 def reset_workflow_state():
-    """Reset global workflow state back to pristine empty baseline in MongoDB Atlas."""
+    """Reset global workflow state back to pristine empty baseline in MongoDB Atlas, preserving any user-configured pass fee."""
     try:
         coll = get_collection("workflow_states")
+        cur_wf = coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) or {} if coll is not None else {}
+        saved_fee = cur_wf.get("default_pass_price") or cur_wf.get("cobuilder_pass_price") or cur_wf.get("extra_state", {}).get("default_pass_price") or cur_wf.get("extra_state", {}).get("cobuilder_pass_price") or 0.0
         clean_doc = {
             "_id": "default",
             "id": "default",
@@ -153,12 +155,13 @@ def reset_workflow_state():
             "answer_sent_map": {},
             "persuasion_sent_map": {},
             "creator_stage_map": {},
-            "extra_state": {},
-            "default_pass_price": 50.0,
-            "cobuilder_pass_price": 50.0,
+            "extra_state": {"default_pass_price": saved_fee, "cobuilder_pass_price": saved_fee} if saved_fee > 0 else {},
+            "default_pass_price": saved_fee,
+            "cobuilder_pass_price": saved_fee,
             "updated_at": datetime.utcnow().isoformat(),
         }
-        coll.replace_one({"_id": "default"}, clean_doc, upsert=True)
+        if coll is not None:
+            coll.replace_one({"_id": "default"}, clean_doc, upsert=True)
         res = copy.deepcopy(clean_doc)
         res.pop("_id", None)
         global _workflow_cache, _workflow_cache_time
