@@ -70,7 +70,7 @@ def _format_admin_escalation_email(
     bp_name = blueprint.get("name", "Custom Platform") if isinstance(blueprint, dict) else str(blueprint)
     pricing = creator_context.get("pricing", "Standard tier")
     base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
-    dashboard_url = f"{base_url}/dashboard"
+    dashboard_url = f"{base_url}/dashboard/{creator_id}" if creator_id else f"{base_url}/dashboard"
     hub_url = f"{base_url}/{clean_h.lower()}/{creator_id}" if clean_h and creator_id else dashboard_url
 
     history_html = ""
@@ -121,15 +121,15 @@ Admin Inbox: {settings.ADMIN_EMAIL}
 
     body_html = f"""<!DOCTYPE html>
 <html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0e14; color: #f1f5f9; padding: 24px; margin: 0;">
-  <div style="max-width: 620px; margin: 0 auto; background: #121722; border: 1px solid #232b3e; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
-    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; border-bottom: 1px solid #232b3e; padding-bottom: 16px;">
-      <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 700;">CoLaunch Support Ticket</h2>
-      <span style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 4px 10px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase;">Urgent Escalation</span>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #080a0f; color: #f1f5f9; padding: 24px; margin: 0;">
+  <div style="max-width: 620px; margin: 0 auto; background: #0d1117; border: 1px solid #1e2638; border-radius: 0; padding: 24px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #1e2638; padding-bottom: 16px;">
+      <h2 style="margin: 0; color: #ffffff; font-size: 18px; font-weight: 700; letter-spacing: -0.01em;">CoLaunch Support Ticket</h2>
+      <span style="background: transparent; color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 3px 8px; border-radius: 0; font-size: 10px; font-weight: 700; text-transform: uppercase;">Urgent Escalation</span>
     </div>
 
-    <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
-      <h3 style="margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em;">Creator Workspace Context</h3>
+    <div style="background: #111622; border: 1px solid #1e2638; border-radius: 0; padding: 16px; margin-bottom: 20px;">
+      <h3 style="margin: 0 0 12px 0; font-size: 12px; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em; font-weight: 700;">Creator Workspace Context</h3>
       <table style="width: 100%; font-size: 13px; color: #cbd5e1; border-collapse: collapse;">
         <tr><td style="padding: 4px 0; color: #94a3b8; width: 140px;">Creator Name:</td><td style="padding: 4px 0; font-weight: 600; color: #ffffff;">{name} (<span style="color: #38bdf8;">{handle}</span>)</td></tr>
         <tr><td style="padding: 4px 0; color: #94a3b8;">Contact Email:</td><td style="padding: 4px 0; font-weight: 600; color: #38bdf8;">{creator_email or 'Not provided'}</td></tr>
@@ -142,19 +142,28 @@ Admin Inbox: {settings.ADMIN_EMAIL}
       </table>
     </div>
 
-    <div style="background: #171d2b; border-left: 4px solid #38bdf8; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+    <div style="background: #111622; border: 1px solid #1e2638; border-left: 3px solid #38bdf8; border-radius: 0; padding: 14px 16px; margin-bottom: 20px;">
       <p style="margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: #38bdf8; font-weight: 700;">Latest Creator Inquiry</p>
       <p style="margin: 0; font-size: 14px; color: #ffffff; line-height: 1.5; font-weight: 500;">{user_query}</p>
     </div>
 
-    {f'''<div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
-      <h4 style="margin: 0 0 10px 0; font-size: 12px; text-transform: uppercase; color: #94a3b8;">Conversation Transcript</h4>
+    {f'''<div style="background: #111622; border: 1px solid #1e2638; border-radius: 0; padding: 16px; margin-bottom: 20px;">
+      <h4 style="margin: 0 0 10px 0; font-size: 12px; text-transform: uppercase; color: #94a3b8; font-weight: 700;">Conversation Transcript</h4>
       <div style="font-size: 12.5px; color: #94a3b8; max-height: 220px; overflow-y: auto;">
         {history_html}
       </div>
     </div>''' if history_html else ''}
 
-    <div style="border-top: 1px solid #232b3e; padding-top: 16px; font-size: 12px; color: #64748b; display: flex; justify-content: space-between;">
+    <div style="text-align: center; margin: 24px 0 16px 0;">
+      <a href="{dashboard_url}" style="display: inline-block; background: #0f172a; color: #ffffff; border: 1px solid #334155; text-decoration: none; font-size: 13px; font-weight: 700; letter-spacing: 0.02em; padding: 11px 24px; border-radius: 0;">
+        Open Creator Dashboard &rarr;
+      </a>
+      <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;">
+        Direct URL: <a href="{dashboard_url}" style="color: #38bdf8; text-decoration: underline;">{dashboard_url}</a>
+      </p>
+    </div>
+
+    <div style="border-top: 1px solid #1e2638; padding-top: 16px; font-size: 11.5px; color: #64748b; display: flex; justify-content: space-between;">
       <span>Sent by CoLaunch Autonomous Support Relay</span>
       <span>Admin Target: {settings.ADMIN_EMAIL}</span>
     </div>
@@ -180,7 +189,7 @@ def _format_creator_confirmation_email(
     bp_name = blueprint.get("name", "Custom Platform") if isinstance(blueprint, dict) else str(blueprint)
     
     base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
-    dashboard_url = f"{base_url}/dashboard"
+    dashboard_url = f"{base_url}/dashboard/{creator_id}" if creator_id else f"{base_url}/dashboard"
     hub_url = f"{base_url}/{clean_h.lower()}/{creator_id}" if clean_h and creator_id else dashboard_url
 
     subject = f"[CoLaunch Support Ticket] Support Request Received · #{session_id}#{creator_id}#"
@@ -192,8 +201,8 @@ We have received your support inquiry and escalated it directly to our human ope
 An administrator is reviewing your workspace for {handle} and will follow up with you promptly.
 
 ==================================================
-💬 TWO-WAY EMAIL COMMUNICATION:
-You don't need to stay on the CoLaunch app! 
+TWO-WAY EMAIL COMMUNICATION:
+You don't need to stay on the CoLaunch app.
 You can simply reply directly to this email from your inbox at any time to continue this conversation with our administration team. Every message you send will be routed directly to our operations desk and synced in your chat.
 ==================================================
 
@@ -213,45 +222,44 @@ CoLaunch Operations Team
 
     body_html = f"""<!DOCTYPE html>
 <html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0e14; color: #f1f5f9; padding: 24px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background: #121722; border: 1px solid #232b3e; border-radius: 16px; padding: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #080a0f; color: #f1f5f9; padding: 24px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background: #0d1117; border: 1px solid #1e2638; border-radius: 0; padding: 28px;">
     
-    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #232b3e; padding-bottom: 18px; margin-bottom: 24px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1e2638; padding-bottom: 18px; margin-bottom: 24px;">
       <div>
-        <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">CoLaunch Support</h2>
-        <span style="font-size: 12px; color: #94a3b8;">Creator Priority Operations Desk</span>
+        <h2 style="margin: 0; color: #ffffff; font-size: 18px; font-weight: 800; letter-spacing: -0.01em;">CoLaunch Support</h2>
+        <span style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">Creator Priority Operations Desk</span>
       </div>
-      <span style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase;">Team Assigned</span>
+      <span style="background: transparent; color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 3px 8px; border-radius: 0; font-size: 10px; font-weight: 700; text-transform: uppercase;">Team Assigned</span>
     </div>
 
-    <p style="font-size: 15px; color: #e2e8f0; line-height: 1.6; margin: 0 0 16px 0;">
+    <p style="font-size: 14px; color: #e2e8f0; line-height: 1.6; margin: 0 0 14px 0;">
       Hi <strong style="color: #ffffff;">{name}</strong>,
     </p>
 
-    <p style="font-size: 14px; color: #cbd5e1; line-height: 1.6; margin: 0 0 20px 0;">
+    <p style="font-size: 13.5px; color: #cbd5e1; line-height: 1.6; margin: 0 0 20px 0;">
       We've received your inquiry regarding your <strong style="color: #38bdf8;">{bp_name}</strong> platform (<span style="color: #94a3b8;">{handle}</span>). Your ticket has been escalated directly to our senior human operations team, and an administrator will follow up with you promptly.
     </p>
 
     <!-- 2-Way Email Callout Card -->
-    <div style="background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), rgba(99, 102, 241, 0.1)); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-        <span style="font-size: 16px;">💬</span>
-        <strong style="color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">2-Way Email Sync Active</strong>
+    <div style="background: #111622; border: 1px solid #1e2638; border-left: 3px solid #38bdf8; border-radius: 0; padding: 16px; margin-bottom: 24px;">
+      <div style="margin-bottom: 6px;">
+        <strong style="color: #38bdf8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">2-Way Email Sync Active</strong>
       </div>
-      <p style="margin: 0; font-size: 13px; color: #e2e8f0; line-height: 1.5;">
-        You don't need to keep the app open! You can <strong>reply directly to this email from your phone or desktop inbox</strong> at any time. Your reply will be synced seamlessly to our operations team and your dashboard chat.
+      <p style="margin: 0; font-size: 12.5px; color: #e2e8f0; line-height: 1.5;">
+        You don't need to keep the app open. You can <strong>reply directly to this email from your phone or desktop inbox</strong> at any time. Your reply will be synced seamlessly to our operations team and your dashboard chat.
       </p>
     </div>
 
     <!-- Submitted Inquiry Box -->
-    <div style="background: #171d2b; border-left: 4px solid #10b981; border-radius: 8px; padding: 14px 16px; margin-bottom: 24px;">
+    <div style="background: #111622; border: 1px solid #1e2638; border-left: 3px solid #10b981; border-radius: 0; padding: 14px 16px; margin-bottom: 24px;">
       <p style="margin: 0 0 4px 0; font-size: 11px; text-transform: uppercase; color: #10b981; font-weight: 700;">Your Message</p>
-      <p style="margin: 0; font-size: 13.5px; color: #f1f5f9; line-height: 1.5;">"{user_query}"</p>
+      <p style="margin: 0; font-size: 13px; color: #f1f5f9; line-height: 1.5;">"{user_query}"</p>
     </div>
 
     <!-- Creator Dashboard CTA Button -->
     <div style="text-align: center; margin: 28px 0;">
-      <a href="{dashboard_url}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 10px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);">
+      <a href="{dashboard_url}" style="display: inline-block; background: #0f172a; color: #ffffff; border: 1px solid #334155; text-decoration: none; font-size: 13px; font-weight: 700; letter-spacing: 0.02em; padding: 12px 28px; border-radius: 0;">
         Access Your Creator Dashboard &rarr;
       </a>
       <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;">
@@ -259,7 +267,7 @@ CoLaunch Operations Team
       </p>
     </div>
 
-    <div style="border-top: 1px solid #232b3e; padding-top: 16px; font-size: 11.5px; color: #64748b; display: flex; justify-content: space-between;">
+    <div style="border-top: 1px solid #1e2638; padding-top: 16px; font-size: 11px; color: #64748b; display: flex; justify-content: space-between;">
       <span>CoLaunch Autonomous Operations</span>
       <span>Ticket #{session_id}</span>
     </div>
