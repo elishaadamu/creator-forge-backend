@@ -323,19 +323,27 @@ def _is_clean_message(msg: dict) -> bool:
     return True
 
 
-def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 50, sql_db: Session = None) -> List[dict]:
+def _fetch_history(session_id: str = None, creator_id: str = None, creator_handle: str = None, limit: int = 50, sql_db: Session = None) -> List[dict]:
     results = []
+    clean_target_handle = (creator_handle or "").lstrip("@").lower().strip()
     # 1. Try MongoDB
     try:
         coll = get_collection("support_messages")
         if coll is not None:
             query = {}
-            if session_id and creator_id:
-                query = {"$or": [{"session_id": session_id}, {"creator_id": creator_id}]}
+            if creator_id:
+                # With creator_id, strictly match messages for this creator, or anonymous onboarding session messages without a creator_id
+                if session_id:
+                    query = {
+                        "$or": [
+                            {"creator_id": creator_id},
+                            {"session_id": session_id, "creator_id": {"$in": [None, "", creator_id]}}
+                        ]
+                    }
+                else:
+                    query = {"creator_id": creator_id}
             elif session_id:
                 query = {"session_id": session_id}
-            elif creator_id:
-                query = {"creator_id": creator_id}
 
             cursor = coll.find(query).sort("created_at", 1).limit(limit * 2)
             seen_admin_texts = set()
@@ -343,6 +351,13 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
                 doc["_id"] = str(doc.get("_id", ""))
                 if not _is_clean_message(doc):
                     continue
+
+                # Filter out messages from other creators by handle if specified
+                if clean_target_handle and doc.get("creator_handle"):
+                    doc_h = doc["creator_handle"].lstrip("@").lower().strip()
+                    if doc_h and doc_h != clean_target_handle and doc.get("creator_id") != creator_id:
+                        continue
+
                 # Normalize handle to avoid @@
                 if doc.get("creator_handle"):
                     doc["creator_handle"] = "@" + doc["creator_handle"].lstrip("@")
@@ -364,12 +379,16 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
     if sql_db:
         try:
             q = sql_db.query(SupportMessage)
-            if session_id and creator_id:
-                q = q.filter((SupportMessage.session_id == session_id) | (SupportMessage.creator_id == creator_id))
+            if creator_id:
+                if session_id:
+                    q = q.filter(
+                        (SupportMessage.creator_id == creator_id) |
+                        ((SupportMessage.session_id == session_id) & ((SupportMessage.creator_id == None) | (SupportMessage.creator_id == "") | (SupportMessage.creator_id == creator_id)))
+                    )
+                else:
+                    q = q.filter(SupportMessage.creator_id == creator_id)
             elif session_id:
                 q = q.filter(SupportMessage.session_id == session_id)
-            elif creator_id:
-                q = q.filter(SupportMessage.creator_id == creator_id)
 
             items = q.order_by(SupportMessage.created_at.asc()).limit(limit * 2).all()
             seen_admin_texts = set()
@@ -412,6 +431,7 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
 def get_support_history(
     session_id: Optional[str] = Query(None),
     creator_id: Optional[str] = Query(None),
+    creator_handle: Optional[str] = Query(None),
     limit: int = Query(50),
     db: Session = Depends(get_db)
 ):
@@ -425,7 +445,7 @@ def get_support_history(
     except Exception as e:
         logger.debug(f"[Support] Instant poller check: {e}")
 
-    history = _fetch_history(session_id=session_id, creator_id=creator_id, limit=limit, sql_db=db)
+    history = _fetch_history(session_id=session_id, creator_id=creator_id, creator_handle=creator_handle, limit=limit, sql_db=db)
     return {"status": "ok", "count": len(history), "messages": history}
 
 
@@ -449,12 +469,18 @@ def reset_support_history(
                 res = coll.delete_many({})
             else:
                 q = {}
-                if session_id and creator_id:
-                    q = {"$or": [{"session_id": session_id}, {"creator_id": creator_id}]}
+                if creator_id:
+                    if session_id:
+                        q = {
+                            "$or": [
+                                {"creator_id": creator_id},
+                                {"session_id": session_id, "creator_id": {"$in": [None, "", creator_id]}}
+                            ]
+                        }
+                    else:
+                        q = {"creator_id": creator_id}
                 elif session_id:
                     q = {"session_id": session_id}
-                elif creator_id:
-                    q = {"creator_id": creator_id}
                 res = coll.delete_many(q)
             deleted_mongo = res.deleted_count
             logger.info(f"[Support] Purged {deleted_mongo} messages from MongoDB support_messages")
@@ -466,12 +492,16 @@ def reset_support_history(
         try:
             q = db.query(SupportMessage)
             if not all_chats and (session_id or creator_id):
-                if session_id and creator_id:
-                    q = q.filter((SupportMessage.session_id == session_id) | (SupportMessage.creator_id == creator_id))
+                if creator_id:
+                    if session_id:
+                        q = q.filter(
+                            (SupportMessage.creator_id == creator_id) |
+                            ((SupportMessage.session_id == session_id) & ((SupportMessage.creator_id == None) | (SupportMessage.creator_id == "") | (SupportMessage.creator_id == creator_id)))
+                        )
+                    else:
+                        q = q.filter(SupportMessage.creator_id == creator_id)
                 elif session_id:
                     q = q.filter(SupportMessage.session_id == session_id)
-                elif creator_id:
-                    q = q.filter(SupportMessage.creator_id == creator_id)
             deleted_sql = q.delete(synchronize_session=False)
             db.commit()
             logger.info(f"[Support] Purged {deleted_sql} messages from SQL SupportMessage")
