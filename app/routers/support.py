@@ -299,6 +299,7 @@ def _save_message_to_db(msg_dict: dict, sql_db: Session = None):
                     creator_context=json.dumps(msg_dict.get("creator_context") or {}),
                     status=msg_dict.get("status", "active"),
                     escalated=bool(msg_dict.get("escalated", False)),
+                    created_at=datetime.utcnow()
                 )
                 sql_db.add(db_item)
                 sql_db.commit()
@@ -345,9 +346,12 @@ def _fetch_history(session_id: str = None, creator_id: str = None, creator_handl
             elif session_id:
                 query = {"session_id": session_id}
 
-            cursor = coll.find(query).sort("created_at", 1).limit(limit * 2)
+            # Fetch newest messages first by sorting created_at descending (-1)
+            cursor = coll.find(query).sort("created_at", -1).limit(limit)
+            docs = list(cursor)
+            docs.reverse()
             seen_admin_texts = set()
-            for doc in cursor:
+            for doc in docs:
                 doc["_id"] = str(doc.get("_id", ""))
                 if not _is_clean_message(doc):
                     continue
@@ -371,7 +375,7 @@ def _fetch_history(session_id: str = None, creator_id: str = None, creator_handl
                     seen_admin_texts.add(cleaned_txt)
                 results.append(doc)
             if results:
-                return results[-limit:]
+                return results
     except Exception as e:
         logger.warning(f"[Support] MongoDB history fetch error: {e}")
 
@@ -390,7 +394,8 @@ def _fetch_history(session_id: str = None, creator_id: str = None, creator_handl
             elif session_id:
                 q = q.filter(SupportMessage.session_id == session_id)
 
-            items = q.order_by(SupportMessage.created_at.asc()).limit(limit * 2).all()
+            items = q.order_by(SupportMessage.created_at.desc()).limit(limit).all()
+            items.reverse()
             seen_admin_texts = set()
             for it in items:
                 msg_txt = it.message or ""
@@ -424,7 +429,7 @@ def _fetch_history(session_id: str = None, creator_id: str = None, creator_handl
         except Exception as e:
             logger.warning(f"[Support] SQL history fetch error: {e}")
 
-    return results[-limit:]
+    return results
 
 
 @router.get("/history")
@@ -762,6 +767,8 @@ Guidelines:
     }
     _save_message_to_db(assistant_record, db)
 
+    recent_history = _fetch_history(session_id=session_id, creator_id=creator_id, creator_handle=display_handle, limit=50, sql_db=db)
+
     return {
         "status": "ok",
         "reply": assistant_reply,
@@ -769,6 +776,7 @@ Guidelines:
         "message_id": assistant_msg_id,
         "session_id": session_id,
         "creator_id": creator_id,
+        "messages": recent_history,
     }
 
 
